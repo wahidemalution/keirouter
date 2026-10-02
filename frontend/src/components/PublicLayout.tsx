@@ -17,7 +17,7 @@ function storedTheme(): Theme {
 }
 
 const TABS = [
-  { id: "overview", label: "Home", href: "#overview", d: "M3 11l9-8 9 8M5 10v10h14V10" },
+  { id: "overview", label: "Home", href: "/", d: "M3 11l9-8 9 8M5 10v10h14V10" },
   { id: "models", label: "Model", href: "/model", d: "M3 3h7v7H3V3Zm11 0h7v7h-7V3ZM3 14h7v7H3v-7Zm11 0h7v7h-7v-7" },
   { id: "bansos", label: "Bansos", href: "/bansos", d: "M4 8h16a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1zM12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5" },
   { id: "purchase", label: "Beli", href: "#purchase", d: "M3 7V5h16v3M3 8h18v12H3V8Zm18 4h-6v4h6" },
@@ -64,7 +64,7 @@ function BrandMark({ className = "h-[31px] w-[31px] md:h-[38px] md:w-[38px]" }: 
 
 function Brand() {
   return (
-    <a href="#overview" className="flex items-center gap-2.5 no-underline">
+    <a href="/" className="flex items-center gap-2.5 no-underline">
       <BrandMark />
       <span className="leading-none">
         <strong className="block text-[17px] font-[650] tracking-[-0.7px] text-[var(--ink)]">Tokenizer</strong>
