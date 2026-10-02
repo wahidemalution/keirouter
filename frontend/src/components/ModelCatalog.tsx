@@ -11,7 +11,7 @@ import type { PublicModel } from "../lib/publicApi";
 // (e.g. relay/custom providers). Each family slug maps to an existing PNG in
 // frontend/public/providers/.
 const FAMILY_RULES: [RegExp, string][] = [
-  [/claude/, "anthropic"],
+  [/claude|opus|sonnet|haiku/, "anthropic"],
   [/gpt|dall-e|whisper|text-embedding|(^|[^a-z])o[134](-|$)/, "openai"],
   [/gemini|gemma|palm|learnlm/, "gemini"],
   [/deepseek/, "deepseek"],
@@ -28,11 +28,51 @@ const FAMILY_RULES: [RegExp, string][] = [
   [/command-[ra]/, "cohere"],
 ];
 
+// Display names for the detected model family. Routing chains often expose
+// models from several vendors under one provider (e.g. a "combo" chain), so the
+// card and the provider filter follow the model family instead of the chain.
+const FAMILY_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Google",
+  deepseek: "DeepSeek",
+  kimi: "Kimi",
+  qwen: "Qwen",
+  minimax: "MiniMax",
+  glm: "GLM",
+  xai: "xAI",
+  mistral: "Mistral",
+  nvidia: "NVIDIA",
+  perplexity: "Perplexity",
+  qoder: "Qoder",
+  "xiaomi-mimo": "Xiaomi",
+  cohere: "Cohere",
+};
+
 export const familySlug = (modelId: string): string | null => {
   const m = modelId.toLowerCase();
   for (const [re, slug] of FAMILY_RULES) if (re.test(m)) return slug;
   return null;
 };
+
+// The provider shown on a card / used to group the filter: the model family
+// when it can be detected from the model id, otherwise the chain's provider.
+export function resolveProvider(model: PublicModel): { id: string; label: string } {
+  const family = familySlug(model.model_id);
+  if (family) return { id: family, label: FAMILY_LABELS[family] ?? family };
+  return { id: model.provider_id, label: model.provider || model.provider_id };
+}
+
+// Provider facets in the order models arrive (already sorted by popularity), so
+// the busiest vendor leads. Deduplicated by resolved id.
+export function buildProviders(models: PublicModel[]): { id: string; label: string }[] {
+  const seen = new Map<string, string>();
+  for (const m of models) {
+    const { id, label } = resolveProvider(m);
+    if (!seen.has(id)) seen.set(id, label);
+  }
+  return [...seen.entries()].map(([id, label]) => ({ id, label }));
+}
 
 // Tries the provider's own brand PNG first, then the detected model family.
 // Falls back to a generic icon so a missing logo never leaves an empty box.
@@ -77,7 +117,7 @@ export function ModelCard({ model }: { model: PublicModel }) {
         <ProviderLogo providerId={model.provider_id} modelId={model.model_id} />
         <div className="min-w-0">
           <p className="truncate text-[15px] font-[650] text-[var(--ink)]">{model.name}</p>
-          <p className="text-[11px] text-[var(--muted)]">{model.provider}</p>
+          <p className="text-[11px] text-[var(--muted)]">{resolveProvider(model).label}</p>
         </div>
       </div>
       <ModelCapabilityIcons capabilities={model.capabilities} className="my-2" bare />

@@ -13,7 +13,7 @@ import { Activity, Boxes, Coins, Cpu } from "lucide-react";
 import { fetchPublicOverview, fetchPublicModels } from "../lib/publicApi";
 import { PublicLayout } from "../components/PublicLayout";
 import {
-  ModelCard, ProviderFilterButton, MODEL_PAGE, fmtCount, fmtShort,
+  ModelCard, ProviderFilterButton, MODEL_PAGE, fmtCount, fmtShort, buildProviders, resolveProvider,
 } from "../components/ModelCatalog";
 
 const WA_URL = "https://wa.me/84826240052";
@@ -74,16 +74,10 @@ export default function PublicLanding() {
 
   // Providers in the order models arrive (already sorted by popularity), so the
   // busiest provider leads. Keyed by provider_id; label falls back to the id.
-  const providers = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const m of modelList) {
-      if (!seen.has(m.provider_id)) seen.set(m.provider_id, m.provider || m.provider_id);
-    }
-    return [...seen.entries()].map(([id, label]) => ({ id, label }));
-  }, [modelList]);
+  const providers = useMemo(() => buildProviders(modelList), [modelList]);
 
   const filteredModels = useMemo(
-    () => (providerFilter ? modelList.filter((m) => m.provider_id === providerFilter) : modelList),
+    () => (providerFilter ? modelList.filter((m) => resolveProvider(m).id === providerFilter) : modelList),
     [modelList, providerFilter],
   );
 

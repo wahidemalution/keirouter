@@ -9,7 +9,7 @@ import { Cpu } from "lucide-react";
 import { fetchPublicModels } from "../lib/publicApi";
 import { PublicLayout } from "../components/PublicLayout";
 import {
-  ModelCard, ProviderFilterButton, MODEL_PAGE, fmtCount,
+  ModelCard, ProviderFilterButton, MODEL_PAGE, fmtCount, buildProviders, resolveProvider,
 } from "../components/ModelCatalog";
 
 export default function PublicModels() {
@@ -24,18 +24,12 @@ export default function PublicModels() {
   const [modelVisible, setModelVisible] = useState(MODEL_PAGE);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
 
-  // Providers in the order models arrive (already sorted by popularity), so the
-  // busiest provider leads. Keyed by provider_id; label falls back to the id.
-  const providers = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const m of modelList) {
-      if (!seen.has(m.provider_id)) seen.set(m.provider_id, m.provider || m.provider_id);
-    }
-    return [...seen.entries()].map(([id, label]) => ({ id, label }));
-  }, [modelList]);
+  // Provider facets derived from the model family (see ModelCatalog), so a
+  // multi-vendor chain shows up as Google/Anthropic/DeepSeek, not "combo".
+  const providers = useMemo(() => buildProviders(modelList), [modelList]);
 
   const filteredModels = useMemo(
-    () => (providerFilter ? modelList.filter((m) => m.provider_id === providerFilter) : modelList),
+    () => (providerFilter ? modelList.filter((m) => resolveProvider(m).id === providerFilter) : modelList),
     [modelList, providerFilter],
   );
 
