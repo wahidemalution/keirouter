@@ -37,6 +37,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/limits"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
@@ -843,4 +844,21 @@ func buildModelPrices(ctx context.Context, db *store.DB, log *slog.Logger) map[s
 		}
 	}
 	return out
+}
+
+// applyMarketBindings overlays market-derived prices for bound models, keeping
+// the existing price when a slug is absent from the snapshot (fail-safe).
+func applyMarketBindings(ctx context.Context, out map[string]meter.Price, bindings []store.MarketBinding, snapshot []market.Model, settings market.Settings, readMult, writeMult float64) {
+	for _, b := range bindings {
+		rate, ok := market.ComputeRate(b.MarketSlug, snapshot, settings.MarkupPercent, readMult, writeMult)
+		if !ok {
+			continue
+		}
+		out[b.ProviderID+"/"+b.ModelID] = meter.Price{
+			InputPerM: rate.InputPerM, OutputPerM: rate.OutputPerM,
+			CachedInputPerM: rate.CachedInputPerM, CacheWritePerM: rate.CacheWritePerM,
+			ReasoningPerM: rate.OutputPerM,
+			Source:        "market", SourceURL: market.StreamURL,
+		}
+	}
 }
