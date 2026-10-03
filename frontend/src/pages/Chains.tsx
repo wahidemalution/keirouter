@@ -9,6 +9,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, Card, EmptyState, ErrorCard, Input, Modal, Skeleton } from "../components/ui";
 import { ChainRoutePreview } from "../components/chains/ChainRoutePreview";
 import { strategyLabel } from "../components/chains/chainUtils";
+import { fmtRate } from "../components/ModelCatalog";
 
 type StrategyFilter = "all" | "priority" | "round_robin" | "latency" | "cost";
 type HealthFilter = "all" | "healthy" | "degraded" | "unhealthy" | "unknown";
@@ -31,6 +32,18 @@ function ChainHealth({ health }: { health?: HealthChainRow }) {
   return <div className="flex min-w-0 items-center gap-2"><Badge tone={healthTone(health.status)} title={health.main_issue || undefined}>{health.status}</Badge><span className="hidden text-xs tabular-nums text-[var(--text-muted)] lg:inline">{health.requests.toLocaleString()} requests · {(health.fallback_rate * 100).toFixed(1)}% fallback</span></div>;
 }
 
+function ChainPricing({ chain }: { chain: Chain }) {
+  const hasPricing = chain.input_per_m > 0 || chain.output_per_m > 0 || chain.cache_write_per_m > 0 || chain.cache_read_per_m > 0;
+  if (!hasPricing) return null;
+  return <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums text-[var(--text-muted)]">
+    <span>In <span className="font-semibold text-[var(--text)]">{fmtRate(chain.input_per_m)}</span></span>
+    <span>Out <span className="font-semibold text-[var(--text)]">{fmtRate(chain.output_per_m)}</span></span>
+    <span>Cache W <span className="font-semibold text-[var(--text)]">{fmtRate(chain.cache_write_per_m)}</span></span>
+    <span>Cache R <span className="font-semibold text-[var(--text)]">{fmtRate(chain.cache_read_per_m)}</span></span>
+    <span className="text-[10px]">$/M</span>
+  </div>;
+}
+
 function ChainRow({ chain, providers, health, onDelete }: { chain: Chain; providers: Provider[]; health?: HealthChainRow; onDelete: () => void }) {
   const navigate = useNavigate();
   const toast = useToast();
@@ -47,7 +60,7 @@ function ChainRow({ chain, providers, health, onDelete }: { chain: Chain; provid
     }
   };
   return <article className="group grid gap-3 px-4 py-4 transition-colors hover:bg-[var(--bg-subtle)]/70 sm:grid-cols-[minmax(200px,0.8fr)_minmax(280px,1.55fr)_minmax(150px,0.55fr)_auto] sm:items-center sm:gap-5 sm:px-5">
-    <div className="min-w-0"><div className="flex min-w-0 items-center gap-2"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300"><Layers className="h-4.5 w-4.5" /></div><div className="min-w-0"><button type="button" onClick={() => navigate(dashboard(`/chains/${chain.id}/edit`))} className="block max-w-full truncate text-left text-sm font-semibold text-[var(--text)] hover:text-secondary-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50">{chain.name}</button><div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-muted)]"><span className="truncate font-mono">chain:{chain.name}</span><button type="button" onClick={copyTarget} className="rounded p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50" aria-label={`Copy chain:${chain.name}`}>{copied ? <Check className="h-3.5 w-3.5 text-[color:var(--color-success)]" /> : <Copy className="h-3.5 w-3.5" />}</button></div></div></div></div>
+    <div className="min-w-0"><div className="flex min-w-0 items-center gap-2"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300"><Layers className="h-4.5 w-4.5" /></div><div className="min-w-0"><button type="button" onClick={() => navigate(dashboard(`/chains/${chain.id}/edit`))} className="block max-w-full truncate text-left text-sm font-semibold text-[var(--text)] hover:text-secondary-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50">{chain.name}</button><div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-[var(--text-muted)]"><span className="truncate font-mono">chain:{chain.name}</span><button type="button" onClick={copyTarget} className="rounded p-0.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50" aria-label={`Copy chain:${chain.name}`}>{copied ? <Check className="h-3.5 w-3.5 text-[color:var(--color-success)]" /> : <Copy className="h-3.5 w-3.5" />}</button></div></div></div><ChainPricing chain={chain} /></div>
     <div className="min-w-0"><div className="mb-1.5 flex flex-wrap items-center gap-2"><Badge tone="accent">{strategyLabel(chain.strategy)}</Badge><span className="text-xs text-[var(--text-muted)]">{chain.steps.length} model{chain.steps.length === 1 ? "" : "s"}</span>{chain.fallback_provider && chain.fallback_model && <span className="inline-flex items-center gap-1 text-xs text-[color:var(--color-warning)]"><ShieldAlert className="h-3.5 w-3.5" />Final fallback</span>}</div><ChainRoutePreview chain={chain} providers={providers} compact /></div>
     <div className="min-w-0"><ChainHealth health={health} />{hasIssue && health?.main_issue && <p className="mt-1 truncate text-xs text-[color:var(--color-warning)]" title={health.main_issue}>{health.main_issue}</p>}</div>
     <div className="flex items-center justify-end gap-1 border-t border-[var(--border)] pt-3 sm:border-t-0 sm:pt-0"><button type="button" onClick={() => navigate(dashboard(`/chains/${chain.id}/edit`))} className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"><Pencil className="h-3.5 w-3.5" />Edit</button><button type="button" onClick={onDelete} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-danger)]/40" aria-label={`Delete ${chain.name}`}><Trash2 className="h-4 w-4" /></button><button type="button" onClick={() => navigate(dashboard(`/chains/${chain.id}/edit`))} className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-secondary-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50" aria-label={`Open details for ${chain.name}`} title="Open details"><ChevronRight className="h-4 w-4" aria-hidden="true" /></button></div>
