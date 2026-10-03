@@ -26,7 +26,7 @@ func TestCreatePayment(t *testing.T) {
 			"payment_id": "pay-1", "order_id": "INV-1", "amount": 50000,
 			"fee": 750, "net_amount": 49250,
 			"payment_link_url": "https://pay.example/pay/pay-1",
-			"status": "pending", "expires_at": "2026-01-01T12:00:00Z",
+			"status":           "pending", "expires_at": "2026-01-01T12:00:00Z",
 		})
 	}))
 	defer srv.Close()

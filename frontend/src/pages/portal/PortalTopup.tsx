@@ -80,10 +80,20 @@ export function PortalTopupPage() {
     mutationFn: (input: { amount_idr?: number; package_id?: string }) =>
       createTopupOrder({ ...input, idempotency_key: crypto.randomUUID() }),
     onSuccess: (order) => {
-      if (order.payment_link_url) {
-        window.location.href = order.payment_link_url;
+      const link = order.payment_link_url;
+      let safe = false;
+      if (link) {
+        try {
+          const proto = new URL(link).protocol;
+          safe = proto === "http:" || proto === "https:";
+        } catch {
+          safe = false;
+        }
+      }
+      if (safe && link) {
+        window.location.href = link;
       } else {
-        toast.error("No payment link returned");
+        toast.error("Invalid payment link");
       }
     },
     onError: (e: Error) => toast.error("Payment failed", e.message),

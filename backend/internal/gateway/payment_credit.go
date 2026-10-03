@@ -26,6 +26,9 @@ func (s *Server) creditPaymentOrder(ctx context.Context, order store.PaymentOrde
 	if order.Status != store.PaymentPending {
 		return order, store.Budget{}, false, nil
 	}
+	if order.CreditMicros <= 0 {
+		return store.PaymentOrder{}, store.Budget{}, false, fmt.Errorf("payment: order %s has non-positive credit %d", order.ID, order.CreditMicros)
+	}
 
 	key, err := s.identity.Get(ctx, order.KeyID)
 	if err != nil {
@@ -63,6 +66,16 @@ func (s *Server) creditPaymentOrder(ctx context.Context, order store.PaymentOrde
 		}
 	} else {
 		budget = budgets[0]
+	}
+
+	// Purchased credit must live on a non-resetting "total" budget. An
+	// existing periodic budget would re-grant the increment every period, so
+	// convert it within this transaction (LockKeyTopup is held).
+	if budget.Period != "total" {
+		if err := s.budgets.SetPeriodOnTx(ctx, tx, budget.ID, "total"); err != nil {
+			return store.PaymentOrder{}, store.Budget{}, false, err
+		}
+		budget.Period = "total"
 	}
 
 	paidAt := time.Now().UTC().Format(time.RFC3339)

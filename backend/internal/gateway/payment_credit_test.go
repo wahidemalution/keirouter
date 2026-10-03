@@ -89,3 +89,50 @@ func TestCreditPaymentOrder_DisabledKeyFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bs, 0)
 }
+
+// A pre-existing periodic budget must be converted to a non-resetting "total"
+// budget before credit is added, otherwise the budget engine would re-grant the
+// purchased credit on every period reset.
+func TestCreditPaymentOrder_ConvertsPeriodicBudgetToTotal(t *testing.T) {
+	s := newPaymentTestServer(t)
+	ctx := context.Background()
+	issued, err := s.identity.Create(ctx, store.DefaultTenantID, "", "payer")
+	require.NoError(t, err)
+	budgetID := "b-monthly-" + issued.Record.ID
+	require.NoError(t, s.budgets.Create(ctx, store.Budget{
+		ID: budgetID, TenantID: adminTenant, ScopeKind: store.ScopeAPIKey, ScopeID: issued.Record.ID,
+		LimitMicros: 2_000_000, Period: "monthly", AlertPct: 80, HardCutoff: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	o := makePaidOrder(t, s, issued.Record.ID, "o-period")
+
+	_, budget, applied, err := s.creditPaymentOrder(ctx, o, store.PaymentCompleted, "webhook", "")
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Equal(t, "total", budget.Period)
+
+	got, err := s.budgets.Get(ctx, budgetID)
+	require.NoError(t, err)
+	require.Equal(t, "total", got.Period, "periodic budget must be converted to total")
+	require.EqualValues(t, 3_000_000, got.LimitMicros, "limit must increase by the order credit")
+}
+
+// A non-positive order credit must fail closed before any write.
+func TestCreditPaymentOrder_NonPositiveCreditRejected(t *testing.T) {
+	s := newPaymentTestServer(t)
+	ctx := context.Background()
+	issued, err := s.identity.Create(ctx, store.DefaultTenantID, "", "payer")
+	require.NoError(t, err)
+	o := makePaidOrder(t, s, issued.Record.ID, "o-zero")
+	o.CreditMicros = 0
+
+	_, _, _, err = s.creditPaymentOrder(ctx, o, store.PaymentCompleted, "webhook", "")
+	require.Error(t, err)
+
+	bs, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, issued.Record.ID)
+	require.NoError(t, err)
+	require.Len(t, bs, 0, "no budget may be written for a zero-credit order")
+	orders, err := s.db.PaymentOrders().ListByStatus(ctx, store.PaymentPending)
+	require.NoError(t, err)
+	require.Len(t, orders, 1, "order must remain pending")
+}

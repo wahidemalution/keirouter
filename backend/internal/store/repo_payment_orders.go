@@ -100,7 +100,10 @@ func (r *PaymentOrderRepo) TransitionOnTx(ctx context.Context, tx *sql.Tx, id st
 	if err != nil {
 		return false, fmt.Errorf("store: transition payment order: %w", err)
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: transition payment order rows affected: %w", err)
+	}
 	return n == 1, nil
 }
 

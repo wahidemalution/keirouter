@@ -92,11 +92,16 @@ func (s *Server) handleSumopodWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		tx, terr := s.db.SQL().BeginTx(r.Context(), nil)
 		if terr != nil {
+			s.log.Error("webhook: begin tx failed", "order", order.ID, "err", terr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		_, _ = s.db.PaymentOrders().TransitionOnTx(r.Context(), tx, order.ID, store.PaymentPending, to, "webhook", "", "")
-		_ = tx.Commit()
+		if _, terr := s.db.PaymentOrders().TransitionOnTx(r.Context(), tx, order.ID, store.PaymentPending, to, "webhook", "", ""); terr != nil {
+			s.log.Error("webhook: transition failed", "order", order.ID, "to", to, "err", terr)
+		}
+		if cerr := tx.Commit(); cerr != nil {
+			s.log.Error("webhook: commit failed", "order", order.ID, "err", cerr)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
