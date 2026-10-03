@@ -99,7 +99,7 @@ function LoginScreen() {
           className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
-            if (password) login.mutate();
+            if (password && (!siteKey || turnstileToken)) login.mutate();
           }}
         >
           <Field label="Dashboard password">
