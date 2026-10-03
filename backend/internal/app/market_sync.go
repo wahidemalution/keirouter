@@ -8,6 +8,11 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
+const (
+	marketCacheReadMult  = 0.1
+	marketCacheWriteMult = 1.25
+)
+
 // syncChainMarketPrices recomputes every chain that has market slugs and
 // writes the derived rates onto the chain row. Chains whose slugs are all
 // absent from the snapshot keep their existing price. Returns the number of
