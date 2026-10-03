@@ -164,6 +164,23 @@ export interface CurrencyStatus {
   last_error: string;
 }
 
+export interface MarketPricingSettings {
+  auto_refresh: boolean;
+  refresh_interval_minutes: number;
+  markup_percent: number;
+  last_fetched_at: string;
+  last_fetch_error?: string;
+  last_synced_count: number;
+}
+
+export interface MarketBinding {
+  tenant_id: string;
+  provider_id: string;
+  model_id: string;
+  market_slug: string;
+  updated_at: string;
+}
+
 export interface ProviderRoutingSettings {
   routing_strategy: "inherit" | "fill-first" | "round-robin" | "smart-round-robin" | string;
   sticky_limit: number;
@@ -1724,6 +1741,17 @@ export const api = {
   updateCurrencySettings: (patch: Partial<Pick<CurrencyConfig, "auto_refresh_enabled" | "refresh_interval_h" | "override_enabled" | "override_rate" | "source_url">>) =>
     request<CurrencyStatus>("POST", "/settings/currency", patch),
   refreshCurrency: () => request<CurrencyStatus>("POST", "/settings/currency/refresh", {}),
+
+  marketPricingSettings: () => request<MarketPricingSettings>("GET", "/market-pricing/settings"),
+  updateMarketPricingSettings: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_minutes" | "markup_percent">>) =>
+    request<MarketPricingSettings>("PATCH", "/market-pricing/settings", patch),
+  refreshMarketPrices: () => request<{ synced: number; last_fetched_at: string }>("POST", "/market-pricing/refresh", {}),
+  listMarketBindings: () => request<{ bindings: MarketBinding[] }>("GET", "/market-pricing/bindings"),
+  setMarketBinding: (provider: string, model: string, market_slug: string) =>
+    request<MarketBinding>("PUT", `/market-pricing/bindings/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`, { market_slug }),
+  deleteMarketBinding: (provider: string, model: string) =>
+    request<{ deleted: boolean }>("DELETE", `/market-pricing/bindings/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`),
+
   testHeadroom: (body?: { url?: string; timeout_ms?: number }) =>
     request<HeadroomTestResult>("POST", "/settings/headroom-test", body ?? {}),
 
