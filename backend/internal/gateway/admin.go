@@ -83,6 +83,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/portal-settings", s.adminGetPortalSettings)
 	r.Post("/portal-settings", s.adminUpdatePortalSettings)
 
+	r.Get("/payments/orders", s.adminListPaymentOrders)
+	r.Get("/payments/summary", s.adminPaymentSummary)
+	r.Post("/payments/orders/{id}/approve", s.adminApprovePaymentOrder)
+
 	r.Get("/budgets", s.adminListBudgets)
 	r.Get("/budgets/status", s.adminBudgetStatus)
 	r.Post("/budgets", s.adminCreateBudget)
