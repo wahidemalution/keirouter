@@ -14,8 +14,12 @@ export function MarketPricingSection() {
   const toast = useToast();
   const settings = useQuery({ queryKey: ["market-pricing-settings"], queryFn: () => api.marketPricingSettings() });
   const [markup, setMarkup] = useState("");
+  const [intervalMin, setIntervalMin] = useState("");
   useEffect(() => {
-    if (settings.data) setMarkup(String(settings.data.markup_percent));
+    if (settings.data) {
+      setMarkup(String(settings.data.markup_percent));
+      setIntervalMin(String(settings.data.refresh_interval_minutes));
+    }
   }, [settings.data]);
 
   const save = useMutation({
@@ -31,10 +35,13 @@ export function MarketPricingSection() {
     mutationFn: () => api.refreshMarketPrices(),
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["market-pricing-settings"] });
-      qc.invalidateQueries({ queryKey: ["pricing"] });
+      qc.invalidateQueries({ queryKey: ["chains"] });
       toast.success("Synced", `${r.synced} chain price(s) updated.`);
     },
-    onError: (e) => toast.error("Sync failed", (e as Error).message),
+    onError: (e) => {
+      qc.invalidateQueries({ queryKey: ["market-pricing-settings"] });
+      toast.error("Sync failed", (e as Error).message);
+    },
   });
 
   if (settings.isLoading || !settings.data) return <Spinner />;
@@ -42,6 +49,9 @@ export function MarketPricingSection() {
   const markupTrim = markup.trim();
   const markupInvalid =
     markupTrim === "" || !Number.isFinite(Number(markup)) || Number(markup) < 0 || Number(markup) > 1000;
+  const intervalTrim = intervalMin.trim();
+  const intervalInvalid =
+    intervalTrim === "" || !Number.isInteger(Number(intervalMin)) || Number(intervalMin) < 1;
 
   return (
     <div className="space-y-4">
@@ -82,11 +92,8 @@ export function MarketPricingSection() {
                 <Input
                   type="number"
                   min={1}
-                  value={data.refresh_interval_minutes}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value) || 1;
-                    save.mutate({ refresh_interval_minutes: v });
-                  }}
+                  value={intervalMin}
+                  onChange={(e) => setIntervalMin(e.target.value)}
                   className="w-24"
                 />
               </Field>
@@ -94,7 +101,15 @@ export function MarketPricingSection() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3 px-6 py-4">
-            <Button onClick={() => save.mutate({ markup_percent: Number(markup) })} disabled={save.isPending || markupInvalid}>
+            <Button
+              onClick={() =>
+                save.mutate({
+                  markup_percent: Number(markup),
+                  refresh_interval_minutes: Number(intervalMin),
+                })
+              }
+              disabled={save.isPending || markupInvalid || intervalInvalid}
+            >
               {save.isPending ? "Saving…" : "Save"}
             </Button>
             <Button variant="ghost" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
