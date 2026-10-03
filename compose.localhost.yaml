@@ -56,6 +56,12 @@ services:
       KEIROUTER_PAYMENT__API_KEY: ${KEIROUTER_PAYMENT__API_KEY:-}
       KEIROUTER_PAYMENT__WEBHOOK_SECRET: ${KEIROUTER_PAYMENT__WEBHOOK_SECRET:-}
       KEIROUTER_PAYMENT__WEBHOOK_TOKEN: ${KEIROUTER_PAYMENT__WEBHOOK_TOKEN:-}
+      # Cloudflare Turnstile bot protection for login / portal SSO / top-up.
+      # Set ENABLED=true in .env only after both keys are filled; the server
+      # refuses to start if enabled without site_key + secret_key.
+      KEIROUTER_TURNSTILE__ENABLED: ${KEIROUTER_TURNSTILE__ENABLED:-false}
+      KEIROUTER_TURNSTILE__SITE_KEY: ${KEIROUTER_TURNSTILE__SITE_KEY:-}
+      KEIROUTER_TURNSTILE__SECRET_KEY: ${KEIROUTER_TURNSTILE__SECRET_KEY:-}
       KEIROUTER_LOG__FORMAT: ${KEIROUTER_LOG_FORMAT:-json}
       KEIROUTER_DATABASE__DRIVER: postgres
       KEIROUTER_DATABASE__DSN: "postgres://keirouter:${POSTGRES_PASSWORD:-keirouter}@postgres:5432/keirouter?sslmode=disable"
