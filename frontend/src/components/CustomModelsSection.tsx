@@ -22,6 +22,17 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
     enabled: !!providerId,
   });
 
+  const bindings = useQuery({
+    queryKey: ["market-bindings"],
+    queryFn: () => api.listMarketBindings(),
+    enabled: !!providerId,
+  });
+  const bindingByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const b of bindings.data?.bindings ?? []) map.set(`${b.provider_id}/${b.model_id}`, b.market_slug);
+    return map;
+  }, [bindings.data]);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CustomModel | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CustomModel | null>(null);
@@ -158,6 +169,7 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
                   key={m.db_id}
                   model={m}
                   provider={provider}
+                  marketSlug={bindingByKey.get(`${providerId}/${m.id}`) ?? ""}
                   onEdit={() => openEdit(m)}
                   onDelete={() => setDeleteTarget(m)}
                 />
@@ -257,16 +269,33 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
 function CustomModelCell({
   model: m,
   provider,
+  marketSlug,
   onEdit,
   onDelete,
 }: {
   model: CustomModel;
   provider: Provider;
+  marketSlug: string;
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const qc = useQueryClient();
+  const toast = useToast();
   const [copied, setCopied] = useState(false);
   const fullModel = `${provider.alias || provider.id}/${m.id}`;
+
+  const [slug, setSlug] = useState(marketSlug);
+  useEffect(() => { setSlug(marketSlug); }, [marketSlug]);
+  const saveSlug = useMutation<unknown, Error, string>({
+    mutationFn: (value: string) =>
+      value.trim() ? api.setMarketBinding(provider.id, m.id, value.trim()) : api.deleteMarketBinding(provider.id, m.id),
+    onSuccess: (_data, value) => {
+      qc.invalidateQueries({ queryKey: ["market-bindings"] });
+      toast.success(value.trim() ? "Market slug saved" : "Market slug cleared");
+    },
+    onError: (e) => toast.error("Market slug save failed", e.message),
+  });
+  const slugUnchanged = slug === marketSlug;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(fullModel);
@@ -313,6 +342,28 @@ function CustomModelCell({
         <code className="mt-1.5 block truncate font-mono text-xs text-[var(--text-muted)]" title={fullModel}>
           {fullModel}
         </code>
+      </div>
+
+      <div className="mt-3">
+        <Field label="Market slug">
+          <div className="flex items-center gap-2">
+            <Input
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              placeholder="ag/claude-opus-4-6-thinking"
+              aria-label={`Market slug for ${m.name || m.id}`}
+            />
+            <Button
+              variant="secondary"
+              className="shrink-0"
+              disabled={saveSlug.isPending || slugUnchanged}
+              onClick={() => saveSlug.mutate(slug)}
+            >
+              {saveSlug.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Save
+            </Button>
+          </div>
+        </Field>
       </div>
 
       <div className="mt-3 flex items-center gap-2 border-t border-[var(--border)] pt-2.5">
