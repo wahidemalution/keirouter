@@ -1,0 +1,2 @@
+ALTER TABLE chains ADD COLUMN IF NOT EXISTS market_slugs TEXT NOT NULL DEFAULT '[]';
+DROP TABLE IF EXISTS model_market_bindings;

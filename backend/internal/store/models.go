@@ -135,6 +135,7 @@ type Chain struct {
 	OutputPerM     float64
 	CacheWritePerM float64
 	CacheReadPerM  float64
+	MarketSlugs    []string
 	Steps          []ChainStep
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
