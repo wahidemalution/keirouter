@@ -31,7 +31,6 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/identity"
-	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
 	"github.com/mydisha/keirouter/backend/internal/payment"
@@ -82,7 +81,7 @@ type Server struct {
 	rateLimiter         interface{ SetEnabled(bool) }
 	refresher           dispatch.TokenRefresher
 	reloadPricing       func(context.Context) error
-	marketSnapshot      func() []market.Model
+	syncMarketPrices    func(context.Context) (int, error)
 	version             string
 	updates             *update.Checker
 	insightsCache       *ttlCache
@@ -137,7 +136,7 @@ type Deps struct {
 	RateLimiter          interface{ SetEnabled(bool) }
 	Refresher            dispatch.TokenRefresher
 	ReloadPricing        func(context.Context) error
-	MarketSnapshot       func() []market.Model
+	SyncMarketPrices     func(context.Context) (int, error)
 	Guardrails           *guardrails.Engine
 	GuardrailRepo        *store.GuardrailRepo
 	GuardrailLogs        *store.GuardrailLogRepo
@@ -202,7 +201,7 @@ func New(d Deps) *Server {
 		rateLimiter:         d.RateLimiter,
 		refresher:           d.Refresher,
 		reloadPricing:       d.ReloadPricing,
-		marketSnapshot:      d.MarketSnapshot,
+		syncMarketPrices:    d.SyncMarketPrices,
 		version:             d.Version,
 		updates:             d.Updates,
 		insightsCache:       newTTLCache(insightsCacheTTL),

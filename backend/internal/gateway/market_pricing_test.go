@@ -2,7 +2,7 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,43 +90,23 @@ func TestMarketPricingSettingsValidation(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"markup_percent":10`)
 }
 
-func TestMarketBindingCRUD(t *testing.T) {
-	s, _, cookie := newMarketPricingTestServer(t)
-
-	rec := marketRequest(t, s, cookie, http.MethodPut, "/api/market-pricing/bindings/openai/gpt-4o", `{"market_slug":"ag/gpt-4o"}`)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-
-	rec = marketRequest(t, s, cookie, http.MethodGet, "/api/market-pricing/bindings", "")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	body := rec.Body.String()
-	require.Contains(t, body, "ag/gpt-4o")
-	require.Contains(t, body, `"market_slug"`)
-	require.Contains(t, body, `"provider_id"`)
-	require.NotContains(t, body, `"MarketSlug"`)
-	require.NotContains(t, body, `"ProviderID"`)
-
-	rec = marketRequest(t, s, cookie, http.MethodDelete, "/api/market-pricing/bindings/openai/gpt-4o", "")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-
-	rec = marketRequest(t, s, cookie, http.MethodGet, "/api/market-pricing/bindings", "")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.NotContains(t, rec.Body.String(), "ag/gpt-4o")
-}
-
 func TestMarketRefreshReturnsCounts(t *testing.T) {
 	s, _, cookie := newMarketPricingTestServer(t)
+	s.syncMarketPrices = func(context.Context) (int, error) { return 3, nil }
 
-	rec := marketRequest(t, s, cookie, http.MethodPut, "/api/market-pricing/bindings/openai/gpt-4o", `{"market_slug":"ag/gpt-4o"}`)
+	rec := marketRequest(t, s, cookie, http.MethodPost, "/api/market-pricing/refresh", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"synced":3`)
+	require.Contains(t, rec.Body.String(), "last_fetched_at")
+}
 
-	rec = marketRequest(t, s, cookie, http.MethodPost, "/api/market-pricing/refresh", "")
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var out struct {
-		Synced        *float64 `json:"synced"`
-		LastFetchedAt string   `json:"last_fetched_at"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
-	require.NotNil(t, out.Synced)
-	require.GreaterOrEqual(t, *out.Synced, 0.0)
-	require.NotEmpty(t, out.LastFetchedAt)
+func TestMarketRefreshErrorRecords(t *testing.T) {
+	s, _, cookie := newMarketPricingTestServer(t)
+	s.syncMarketPrices = func(context.Context) (int, error) { return 0, errors.New("market down") }
+
+	rec := marketRequest(t, s, cookie, http.MethodPost, "/api/market-pricing/refresh", "")
+	require.Equal(t, http.StatusBadGateway, rec.Code, rec.Body.String())
+
+	rec = marketRequest(t, s, cookie, http.MethodGet, "/api/market-pricing/settings", "")
+	require.Contains(t, rec.Body.String(), "market down")
 }

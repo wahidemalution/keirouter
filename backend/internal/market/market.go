@@ -1,13 +1,15 @@
 package market
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"strings"
+	"net/http"
+	"time"
 )
 
-const StreamURL = "https://inferhub.dev/api/market/stream"
+const APIURL = "https://inferhub.dev/api/market"
 
 type Model struct {
 	Slug      string  `json:"slug"`
@@ -29,27 +31,23 @@ func ParseSnapshot(r io.Reader) ([]Model, error) {
 	return body.Models, nil
 }
 
-func ReadStream(r io.Reader, onSnapshot func([]Model) error) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" {
-			continue
-		}
-		models, err := ParseSnapshot(strings.NewReader(payload))
-		if err != nil {
-			continue
-		}
-		if onSnapshot != nil {
-			if err := onSnapshot(models); err != nil {
-				return err
-			}
-		}
+// Fetch downloads the market snapshot in one request.
+func Fetch(ctx context.Context, url string) ([]Model, error) {
+	if url == "" {
+		url = APIURL
 	}
-	return sc.Err()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("market API status %d", resp.StatusCode)
+	}
+	return ParseSnapshot(resp.Body)
 }

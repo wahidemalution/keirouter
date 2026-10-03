@@ -37,7 +37,6 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/limits"
-	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
@@ -385,6 +384,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return nil
 	}
 
+	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}
+
 	gw := gateway.New(gateway.Deps{
 		Config:               cfg,
 		Logger:               log,
@@ -417,7 +418,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		RateLimiter:          limiter,
 		Refresher:            tokenRefresher,
 		ReloadPricing:        reloadPricing,
-		MarketSnapshot:       globalMarketSnapshot,
+		SyncMarketPrices:     app.syncChainMarketPrices,
 		Guardrails:           guardrailEngine,
 		GuardrailRepo:        db.Guardrails(),
 		GuardrailLogs:        db.GuardrailLogs(),
@@ -441,7 +442,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}, nil
+	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}
+
+	return app, nil
 }
 
 // seedFreeAccounts auto-creates a default account for providers that are free
@@ -540,7 +543,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.bg.Add(1)
 		go func() {
 			defer a.bg.Done()
-			a.runMarketStream(ctx)
+			a.runMarketSync(ctx)
 		}()
 	}
 
@@ -853,27 +856,5 @@ func buildModelPrices(ctx context.Context, db *store.DB, log *slog.Logger) map[s
 			ReasoningPerM: model.OutputPerM, Source: "custom", Estimated: false,
 		}
 	}
-	bindings, err := db.MarketBindings().List(ctx, store.DefaultTenantID)
-	if err == nil && len(bindings) > 0 {
-		settings := market.LoadSettings(ctx, db.Settings().Get)
-		applyMarketBindings(ctx, out, bindings, globalMarketSnapshot(), settings, marketCacheReadMult, marketCacheWriteMult)
-	}
 	return out
-}
-
-// applyMarketBindings overlays market-derived prices for bound models, keeping
-// the existing price when a slug is absent from the snapshot (fail-safe).
-func applyMarketBindings(ctx context.Context, out map[string]meter.Price, bindings []store.MarketBinding, snapshot []market.Model, settings market.Settings, readMult, writeMult float64) {
-	for _, b := range bindings {
-		rate, ok := market.ComputeRate(b.MarketSlug, snapshot, settings.MarkupPercent, readMult, writeMult)
-		if !ok {
-			continue
-		}
-		out[b.ProviderID+"/"+b.ModelID] = meter.Price{
-			InputPerM: rate.InputPerM, OutputPerM: rate.OutputPerM,
-			CachedInputPerM: rate.CachedInputPerM, CacheWritePerM: rate.CacheWritePerM,
-			ReasoningPerM: rate.OutputPerM,
-			Source:        "market", SourceURL: market.StreamURL,
-		}
-	}
 }

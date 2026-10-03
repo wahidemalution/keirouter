@@ -75,9 +75,81 @@ func TestBudgetRepo_ListByScope_NewestFirst(t *testing.T) {
 	require.Equal(t, "older", got[1].ID)
 }
 
-func TestBudgetRepo_IncrementLimitOnTx_Overflow(t *testing.T) {
-	db := newTestDB(t)
+func TestChainMarketSlugsRoundTrip(t *testing.T) {
 	ctx := context.Background()
+	db := newTestDB(t)
+
+	now := time.Now().UTC()
+	c := Chain{
+		ID: "chain-market", TenantID: DefaultTenantID, Name: "chain-market", Strategy: "priority",
+		InputPerM: 1, OutputPerM: 2, CacheWritePerM: 3, CacheReadPerM: 4,
+		MarketSlugs: []string{"a/one", "b/two"},
+		Steps:       []ChainStep{{ID: "s1", ChainID: "chain-market", Position: 0, Provider: "openai", Model: "gpt-4o", CreatedAt: now}},
+		CreatedAt:   now, UpdatedAt: now,
+	}
+	require.NoError(t, db.Chains().Create(ctx, c))
+
+	got, err := db.Chains().Get(ctx, "chain-market")
+	require.NoError(t, err)
+	require.Equal(t, []string{"a/one", "b/two"}, got.MarketSlugs)
+
+	list, err := db.Chains().ListByTenant(ctx, DefaultTenantID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, []string{"a/one", "b/two"}, list[0].MarketSlugs)
+
+	list[0].MarketSlugs = []string{"c/three"}
+	require.NoError(t, db.Chains().Update(ctx, list[0]))
+	after, err := db.Chains().Get(ctx, "chain-market")
+	require.NoError(t, err)
+	require.Equal(t, []string{"c/three"}, after.MarketSlugs)
+
+	empty := c
+	empty.ID = "chain-empty"
+	empty.Name = "chain-empty"
+	empty.MarketSlugs = nil
+	empty.Steps = nil
+	require.NoError(t, db.Chains().Create(ctx, empty))
+	gotEmpty, err := db.Chains().Get(ctx, "chain-empty")
+	require.NoError(t, err)
+	require.Empty(t, gotEmpty.MarketSlugs)
+}
+
+func TestChainRepo_UpdateRatesOnlyTouchesPrices(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	now := time.Now().UTC()
+
+	c := Chain{
+		ID: "cr-1", TenantID: DefaultTenantID, Name: "keep-name", Strategy: "priority",
+		FallbackProvider: "openai", FallbackModel: "gpt-4o",
+		InputPerM: 1, OutputPerM: 2, CacheWritePerM: 3, CacheReadPerM: 4,
+		MarketSlugs: []string{"a/one", "b/two"},
+		Steps:       []ChainStep{{ID: "cs-1", ChainID: "cr-1", Position: 0, Provider: "openai", Model: "gpt-4o", CreatedAt: now}},
+		CreatedAt:   now, UpdatedAt: now,
+	}
+	require.NoError(t, db.Chains().Create(ctx, c))
+
+	require.NoError(t, db.Chains().UpdateRates(ctx, "cr-1", 10, 20, 30, 40))
+
+	got, err := db.Chains().Get(ctx, "cr-1")
+	require.NoError(t, err)
+	require.Equal(t, 10.0, got.InputPerM)
+	require.Equal(t, 20.0, got.OutputPerM)
+	require.Equal(t, 30.0, got.CacheWritePerM)
+	require.Equal(t, 40.0, got.CacheReadPerM)
+	require.Equal(t, "keep-name", got.Name)
+	require.Equal(t, "priority", got.Strategy)
+	require.Equal(t, "openai", got.FallbackProvider)
+	require.Equal(t, "gpt-4o", got.FallbackModel)
+	require.Equal(t, []string{"a/one", "b/two"}, got.MarketSlugs)
+	require.Len(t, got.Steps, 1)
+	require.Equal(t, "cs-1", got.Steps[0].ID)
+}
+
+func TestBudgetRepo_IncrementLimitOnTx_Overflow(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
 
 	b := Budget{
 		ID: "ovf", TenantID: DefaultTenantID, ScopeKind: ScopeAPIKey, ScopeID: "key1",

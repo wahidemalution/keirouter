@@ -147,9 +147,6 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/market-pricing/settings", s.adminGetMarketPricingSettings)
 	r.Patch("/market-pricing/settings", s.adminUpdateMarketPricingSettings)
 	r.Post("/market-pricing/refresh", s.adminRefreshMarketPrices)
-	r.Get("/market-pricing/bindings", s.adminListMarketBindings)
-	r.Put("/market-pricing/bindings/{provider}/{model}", s.adminSetMarketBinding)
-	r.Delete("/market-pricing/bindings/{provider}/{model}", s.adminDeleteMarketBinding)
 
 	// Update check (queries GitHub for the latest release + changelog).
 	r.Get("/update/check", s.adminUpdateCheck)
@@ -1831,6 +1828,15 @@ func parseCodexConsumeResponse(statusCode int, body []byte) map[string]any {
 
 // ---- chains -----------------------------------------------------------------
 
+// marketSlugsJSON ensures a nil slug slice serializes as a JSON array ([]),
+// never null, so the frontend editor can always iterate the response.
+func marketSlugsJSON(slugs []string) []string {
+	if slugs == nil {
+		return []string{}
+	}
+	return slugs
+}
+
 func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 	chains, err := s.chains.ListByTenant(r.Context(), adminTenant)
 	if err != nil {
@@ -1849,6 +1855,7 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 			"id": c.ID, "name": c.Name, "strategy": c.Strategy, "steps": steps,
 			"input_per_m": c.InputPerM, "output_per_m": c.OutputPerM,
 			"cache_write_per_m": c.CacheWritePerM, "cache_read_per_m": c.CacheReadPerM,
+			"market_slugs": marketSlugsJSON(c.MarketSlugs),
 		}
 		if c.FallbackProvider != "" && c.FallbackModel != "" {
 			entry["fallback_provider"] = c.FallbackProvider
@@ -1861,14 +1868,15 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name             string  `json:"name"`
-		Strategy         string  `json:"strategy"`
-		FallbackProvider string  `json:"fallback_provider"`
-		FallbackModel    string  `json:"fallback_model"`
-		InputPerM        float64 `json:"input_per_m"`
-		OutputPerM       float64 `json:"output_per_m"`
-		CacheWritePerM   float64 `json:"cache_write_per_m"`
-		CacheReadPerM    float64 `json:"cache_read_per_m"`
+		Name             string   `json:"name"`
+		Strategy         string   `json:"strategy"`
+		FallbackProvider string   `json:"fallback_provider"`
+		FallbackModel    string   `json:"fallback_model"`
+		InputPerM        float64  `json:"input_per_m"`
+		OutputPerM       float64  `json:"output_per_m"`
+		CacheWritePerM   float64  `json:"cache_write_per_m"`
+		CacheReadPerM    float64  `json:"cache_read_per_m"`
+		MarketSlugs      []string `json:"market_slugs"`
 		Steps            []struct {
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
@@ -1921,6 +1929,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		OutputPerM:       body.OutputPerM,
 		CacheWritePerM:   body.CacheWritePerM,
 		CacheReadPerM:    body.CacheReadPerM,
+		MarketSlugs:      body.MarketSlugs,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -1958,14 +1967,15 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name             *string  `json:"name"`
-		Strategy         *string  `json:"strategy"`
-		FallbackProvider *string  `json:"fallback_provider"`
-		FallbackModel    *string  `json:"fallback_model"`
-		InputPerM        *float64 `json:"input_per_m"`
-		OutputPerM       *float64 `json:"output_per_m"`
-		CacheWritePerM   *float64 `json:"cache_write_per_m"`
-		CacheReadPerM    *float64 `json:"cache_read_per_m"`
+		Name             *string   `json:"name"`
+		Strategy         *string   `json:"strategy"`
+		FallbackProvider *string   `json:"fallback_provider"`
+		FallbackModel    *string   `json:"fallback_model"`
+		InputPerM        *float64  `json:"input_per_m"`
+		OutputPerM       *float64  `json:"output_per_m"`
+		CacheWritePerM   *float64  `json:"cache_write_per_m"`
+		CacheReadPerM    *float64  `json:"cache_read_per_m"`
+		MarketSlugs      *[]string `json:"market_slugs"`
 		Steps            *[]struct {
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
@@ -1990,6 +2000,9 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.FallbackModel != nil {
 		existing.FallbackModel = *body.FallbackModel
+	}
+	if body.MarketSlugs != nil {
+		existing.MarketSlugs = *body.MarketSlugs
 	}
 	if body.InputPerM != nil || body.OutputPerM != nil || body.CacheWritePerM != nil || body.CacheReadPerM != nil {
 		rates := []*float64{body.InputPerM, body.OutputPerM, body.CacheWritePerM, body.CacheReadPerM}

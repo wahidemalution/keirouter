@@ -173,14 +173,6 @@ export interface MarketPricingSettings {
   last_synced_count: number;
 }
 
-export interface MarketBinding {
-  tenant_id: string;
-  provider_id: string;
-  model_id: string;
-  market_slug: string;
-  updated_at: string;
-}
-
 export interface ProviderRoutingSettings {
   routing_strategy: "inherit" | "fill-first" | "round-robin" | "smart-round-robin" | string;
   sticky_limit: number;
@@ -373,6 +365,7 @@ export interface Chain {
   output_per_m: number;
   cache_write_per_m: number;
   cache_read_per_m: number;
+  market_slugs: string[];
   steps: ChainStep[];
 }
 
@@ -1675,9 +1668,9 @@ export const api = {
     request<CodexUsageDetails>("GET", `/accounts/${id}/codex-usage-details`),
 
   listChains: () => request<{ chains: Chain[] }>("GET", "/chains"),
-  createChain: (input: { name: string; strategy?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; steps: { provider: string; model: string }[] }) =>
+  createChain: (input: { name: string; strategy?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; steps: { provider: string; model: string }[] }) =>
     request<{ id: string }>("POST", "/chains", input),
-  updateChain: (id: string, patch: { name?: string; strategy?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; steps?: { provider: string; model: string }[] }) =>
+  updateChain: (id: string, patch: { name?: string; strategy?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; steps?: { provider: string; model: string }[] }) =>
     request<{ id: string }>("PATCH", `/chains/${id}`, patch),
   deleteChain: (id: string) => request<void>("DELETE", `/chains/${id}`),
 
@@ -1746,11 +1739,6 @@ export const api = {
   updateMarketPricingSettings: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_minutes" | "markup_percent">>) =>
     request<MarketPricingSettings>("PATCH", "/market-pricing/settings", patch),
   refreshMarketPrices: () => request<{ synced: number; last_fetched_at: string }>("POST", "/market-pricing/refresh", {}),
-  listMarketBindings: () => request<{ bindings: MarketBinding[] }>("GET", "/market-pricing/bindings"),
-  setMarketBinding: (provider: string, model: string, market_slug: string) =>
-    request<MarketBinding>("PUT", `/market-pricing/bindings/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`, { market_slug }),
-  deleteMarketBinding: (provider: string, model: string) =>
-    request<{ deleted: boolean }>("DELETE", `/market-pricing/bindings/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`),
 
   testHeadroom: (body?: { url?: string; timeout_ms?: number }) =>
     request<HeadroomTestResult>("POST", "/settings/headroom-test", body ?? {}),

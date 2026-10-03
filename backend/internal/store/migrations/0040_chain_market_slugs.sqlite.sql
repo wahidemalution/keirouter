@@ -1,0 +1,1 @@
+ALTER TABLE chains ADD COLUMN market_slugs TEXT NOT NULL DEFAULT '[]';
