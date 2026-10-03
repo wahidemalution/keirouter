@@ -11,6 +11,7 @@ import {
   type PaymentOrder,
 } from "../../lib/api";
 import { Badge, Button, Card, EmptyState, ErrorCard, Input, Spinner } from "../../components/ui";
+import { TurnstileWidget, useTurnstileSiteKey } from "../../components/TurnstileWidget";
 import { useToast } from "../../components/Toast";
 import { formatUSD } from "../../lib/format";
 import { portal } from "../../lib/portalRoutes";
@@ -66,6 +67,9 @@ export function PortalTopupPage() {
 
   const [packageId, setPackageId] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
+  const siteKey = useTurnstileSiteKey();
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [resetSignal, setResetSignal] = useState(0);
 
   // On return from the gateway, refresh the ledger/balance and orders so the
   // just-completed payment is reflected without a manual reload.
@@ -78,7 +82,11 @@ export function PortalTopupPage() {
 
   const buyMutation = useMutation({
     mutationFn: (input: { amount_idr?: number; package_id?: string }) =>
-      createTopupOrder({ ...input, idempotency_key: crypto.randomUUID() }),
+      createTopupOrder({
+        ...input,
+        idempotency_key: crypto.randomUUID(),
+        turnstile_token: turnstileToken || undefined,
+      }),
     onSuccess: (order) => {
       const link = order.payment_link_url;
       let safe = false;
@@ -96,7 +104,11 @@ export function PortalTopupPage() {
         toast.error("Invalid payment link");
       }
     },
-    onError: (e: Error) => toast.error("Payment failed", e.message),
+    onError: (e: Error) => {
+      toast.error("Payment failed", e.message);
+      setTurnstileToken("");
+      setResetSignal((n) => n + 1);
+    },
   });
 
   if (statusLoading) return <Spinner />;
@@ -268,10 +280,16 @@ export function PortalTopupPage() {
                     </p>
                   )}
                 </div>
+                <TurnstileWidget
+                  siteKey={siteKey}
+                  onToken={setTurnstileToken}
+                  resetSignal={resetSignal}
+                  className="mt-5 flex justify-center"
+                />
                 <Button
                   className="mt-5 w-full"
                   onClick={submit}
-                  disabled={!amountValid || !fxRate || buyMutation.isPending}
+                  disabled={!amountValid || !fxRate || buyMutation.isPending || (!!siteKey && !turnstileToken)}
                 >
                   <CreditCard size={16} />
                   {buyMutation.isPending ? "Starting payment…" : "Buy credit"}
