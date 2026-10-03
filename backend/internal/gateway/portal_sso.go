@@ -43,6 +43,13 @@ func (s *Server) handlePortalLoginStart(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "portal sso not configured")
 		return
 	}
+	if s.turnstile != nil && s.turnstile.Enabled() {
+		if err := s.turnstile.Verify(r.Context(), r.URL.Query().Get("token"), extractIP(r)); err != nil {
+			s.log.Warn("portal: turnstile failed", "err", err)
+			http.Redirect(w, r, "/portal?turnstile=failed", http.StatusFound)
+			return
+		}
+	}
 	state, err := randomState()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate state")

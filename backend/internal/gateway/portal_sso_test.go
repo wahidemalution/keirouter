@@ -15,6 +15,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 	"github.com/mydisha/keirouter/backend/internal/identity"
+	"github.com/mydisha/keirouter/backend/internal/portalauth"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 	"github.com/stretchr/testify/require"
@@ -144,6 +145,19 @@ func TestPortalLoginStartRequiresConfiguredSSO(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.handlePortalLoginStart(rec, req)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestPortalLoginStartRejectsBadTurnstile(t *testing.T) {
+	srv := newPortalTestServer(t)
+	srv.cfg.PortalSSO.Enabled = true
+	srv.portalSSO = portalauth.New(portalauth.Config{ClientID: "id", ClientSecret: "sec", AllowedDomains: nil})
+	srv.turnstile = &fakeTurnstile{enabled: true, accept: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/portal/auth/google/start?token=bad", nil)
+	rec := httptest.NewRecorder()
+	srv.handlePortalLoginStart(rec, req)
+	require.Equal(t, http.StatusFound, rec.Code)
+	require.Equal(t, "/portal?turnstile=failed", rec.Header().Get("Location"))
 }
 
 // seedPlan creates a plan for portal provisioning tests.
