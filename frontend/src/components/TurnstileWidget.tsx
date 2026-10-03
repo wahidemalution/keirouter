@@ -15,6 +15,7 @@ type TurnstileApi = {
     },
   ) => string;
   reset: (widgetId?: string) => void;
+  remove: (widgetId?: string) => void;
 };
 
 declare global {
@@ -62,10 +63,16 @@ export function TurnstileWidget({
   siteKey,
   onToken,
   className,
+  resetSignal,
 }: {
   siteKey: string;
   onToken: (token: string) => void;
   className?: string;
+  /**
+   * Bump this to force a fresh challenge after a failed submission. Tokens are
+   * single-use, so reusing a consumed token always fails.
+   */
+  resetSignal?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | null>(null);
@@ -88,9 +95,19 @@ export function TurnstileWidget({
       .catch(() => onTokenRef.current(""));
     return () => {
       cancelled = true;
+      if (widgetId.current && window.turnstile) {
+        window.turnstile.remove(widgetId.current);
+      }
+      widgetId.current = null;
       onTokenRef.current("");
     };
   }, [siteKey]);
+
+  useEffect(() => {
+    if (resetSignal === undefined || !widgetId.current || !window.turnstile) return;
+    window.turnstile.reset(widgetId.current);
+    onTokenRef.current("");
+  }, [resetSignal]);
 
   if (!siteKey) return null;
   return <div ref={ref} className={className} />;

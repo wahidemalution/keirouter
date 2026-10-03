@@ -77,6 +77,7 @@ function LoginScreen() {
   const [error, setError] = useState("");
   const siteKey = useTurnstileSiteKey();
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [resetSignal, setResetSignal] = useState(0);
 
   const login = useMutation({
     mutationFn: () => api.login(password, turnstileToken || undefined),
@@ -84,7 +85,11 @@ function LoginScreen() {
       setError("");
       qc.invalidateQueries({ queryKey: ["auth-status"] });
     },
-    onError: (e: Error) => setError(e.message || "Incorrect password"),
+    onError: (e: Error) => {
+      setError(e.message || "Incorrect password");
+      setTurnstileToken("");
+      setResetSignal((n) => n + 1);
+    },
   });
 
   return (
@@ -111,7 +116,12 @@ function LoginScreen() {
               autoFocus
             />
           </Field>
-          <TurnstileWidget siteKey={siteKey} onToken={setTurnstileToken} className="flex justify-center" />
+          <TurnstileWidget
+            siteKey={siteKey}
+            onToken={setTurnstileToken}
+            resetSignal={resetSignal}
+            className="flex justify-center"
+          />
           {error && <p className="text-xs text-[color:var(--color-danger)]">{error}</p>}
           <Button
             type="submit"
