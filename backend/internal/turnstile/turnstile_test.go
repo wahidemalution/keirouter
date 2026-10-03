@@ -47,6 +47,18 @@ func TestVerifyRejectsEmptyToken(t *testing.T) {
 	}
 }
 
+func TestVerifyRejectsNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	v := New(Config{Enabled: true, SiteKey: "site", SecretKey: "sec", VerifyURL: srv.URL})
+	if err := v.Verify(context.Background(), "tok", ""); err == nil {
+		t.Fatal("non-200 must error")
+	}
+}
+
 func TestVerifyRejectsUnsuccessful(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":false,"error-codes":["timeout-or-duplicate"]}`))

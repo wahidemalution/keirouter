@@ -100,6 +100,10 @@ func (v *Verifier) Verify(ctx context.Context, token, remoteIP string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("turnstile status: %d", resp.StatusCode)
+	}
+
 	var out verifyResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return fmt.Errorf("turnstile decode: %w", err)
