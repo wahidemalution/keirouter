@@ -69,12 +69,20 @@ type createOrderRequest struct {
 	AmountIDR      int64  `json:"amount_idr"`
 	PackageID      string `json:"package_id"`
 	IdempotencyKey string `json:"idempotency_key"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
 // handlePortalCreateOrder creates a SumoPod payment for the caller's key.
 func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request) {
 	if !s.cfg.Payment.Enabled || s.paymentClient == nil {
 		writeError(w, http.StatusServiceUnavailable, "payments are not enabled")
+		return
+	}
+	var body createOrderRequest
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if !s.turnstileVerify(w, r, body.TurnstileToken) {
 		return
 	}
 	u, keyID, ok := s.portalKeyID(w, r)
@@ -87,10 +95,6 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var body createOrderRequest
-	if !decodeJSON(w, r, &body) {
-		return
-	}
 	p := s.cfg.Payment
 	amountIDR := body.AmountIDR
 	if body.PackageID != "" {

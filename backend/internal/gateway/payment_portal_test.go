@@ -145,6 +145,20 @@ func TestPortalCreateOrderIdempotencyScopedToCallerKey(t *testing.T) {
 	require.Empty(t, ordersB)
 }
 
+func TestPortalCreateOrderRejectsBadTurnstile(t *testing.T) {
+	s, tok := paymentPortalTestServer(t)
+	fake := &fakeTurnstile{enabled: true, accept: false}
+	s.turnstile = fake
+
+	req := httptest.NewRequest(http.MethodPost, "/portal/api/topup/orders",
+		strings.NewReader(`{"amount_idr":50000}`))
+	req.AddCookie(&http.Cookie{Name: portalSessionCookie, Value: tok})
+	rec := httptest.NewRecorder()
+	s.handlePortalCreateOrder(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Equal(t, 1, fake.calls)
+}
+
 func TestPortalPaymentConfigDisabled(t *testing.T) {
 	srv := newPortalTestServer(t) // payment not enabled
 	rec := httptest.NewRecorder()
