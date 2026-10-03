@@ -1,6 +1,7 @@
 package market
 
 import (
+	"math"
 	"testing"
 )
 
@@ -39,5 +40,52 @@ func TestComputeChainRateMissingSlugs(t *testing.T) {
 	}
 	if _, ok := ComputeChainRate(nil, models, 0, 0.1, 1.25); ok {
 		t.Fatal("empty slugs must return false")
+	}
+}
+
+func TestComputeChainRateRejectsNonFinite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		m    Model
+	}{
+		{"nan input", Model{Slug: "a", MinAskIn: math.NaN(), MinAskOut: 1}},
+		{"inf input", Model{Slug: "a", MinAskIn: math.Inf(1), MinAskOut: 1}},
+		{"nan output", Model{Slug: "a", MinAskIn: 1, MinAskOut: math.NaN()}},
+		{"inf output", Model{Slug: "a", MinAskIn: 1, MinAskOut: math.Inf(1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := ComputeChainRate([]string{"a"}, []Model{tc.m}, 0, 0.1, 1.25); ok {
+				t.Fatal("non-finite ask must return false")
+			}
+		})
+	}
+}
+
+func TestComputeChainRateSkipsZeroOrNegativeAsk(t *testing.T) {
+	// Only slug has a zero ask: must not price the chain at 0.
+	zero := []Model{{Slug: "a", MinAskIn: 0, MinAskOut: 5}}
+	if _, ok := ComputeChainRate([]string{"a"}, zero, 0, 0.1, 1.25); ok {
+		t.Fatal("zero MinAskIn must be skipped, leaving chain unpriced")
+	}
+	zeroOut := []Model{{Slug: "a", MinAskIn: 5, MinAskOut: 0}}
+	if _, ok := ComputeChainRate([]string{"a"}, zeroOut, 0, 0.1, 1.25); ok {
+		t.Fatal("zero MinAskOut must be skipped, leaving chain unpriced")
+	}
+	negative := []Model{{Slug: "a", MinAskIn: -1, MinAskOut: 5}}
+	if _, ok := ComputeChainRate([]string{"a"}, negative, 0, 0.1, 1.25); ok {
+		t.Fatal("negative ask must be skipped, leaving chain unpriced")
+	}
+
+	// A zeroed slug alongside a valid one is simply ignored.
+	mixed := []Model{
+		{Slug: "a", MinAskIn: 0, MinAskOut: 0},
+		{Slug: "b", MinAskIn: 2, MinAskOut: 3},
+	}
+	rate, ok := ComputeChainRate([]string{"a", "b"}, mixed, 0, 0.1, 1.25)
+	if !ok {
+		t.Fatal("expected valid slug to price the chain")
+	}
+	if rate.InputPerM != 2 || rate.OutputPerM != 3 {
+		t.Fatalf("price = (%v,%v), want (2,3)", rate.InputPerM, rate.OutputPerM)
 	}
 }

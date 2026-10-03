@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -16,7 +17,7 @@ const (
 // syncChainMarketPrices recomputes every chain that has market slugs and
 // writes the derived rates onto the chain row. Chains whose slugs are all
 // absent from the snapshot keep their existing price. Returns the number of
-// chains whose price changed.
+// chains whose price changed and a non-nil error when any write failed.
 func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
 	models, err := market.Fetch(ctx, a.marketURL)
 	if err != nil {
@@ -29,6 +30,7 @@ func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
 	}
 
 	changed := 0
+	failed := 0
 	for _, c := range chains {
 		if len(c.MarketSlugs) == 0 {
 			continue
@@ -41,15 +43,15 @@ func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
 			c.CacheWritePerM == rate.CacheWritePerM && c.CacheReadPerM == rate.CachedInputPerM {
 			continue
 		}
-		c.InputPerM = rate.InputPerM
-		c.OutputPerM = rate.OutputPerM
-		c.CacheWritePerM = rate.CacheWritePerM
-		c.CacheReadPerM = rate.CachedInputPerM
-		if err := a.db.Chains().Update(ctx, c); err != nil {
+		if err := a.db.Chains().UpdateRates(ctx, c.ID, rate.InputPerM, rate.OutputPerM, rate.CacheWritePerM, rate.CachedInputPerM); err != nil {
 			a.log.Warn("market price write failed", "chain", c.Name, "err", err)
+			failed++
 			continue
 		}
 		changed++
+	}
+	if failed > 0 {
+		return changed, fmt.Errorf("%d chain price writes failed", failed)
 	}
 	return changed, nil
 }

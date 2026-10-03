@@ -107,3 +107,49 @@ func TestSyncChainMarketPricesSkipsUnknownSlug(t *testing.T) {
 		t.Fatalf("price changed to %v, want untouched 9", got.InputPerM)
 	}
 }
+
+func TestSyncChainMarketPricesSkipsZeroAskButUpdatesValid(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+
+	zero := store.Chain{
+		ID: "zero", TenantID: store.DefaultTenantID, Name: "zero", Strategy: "priority",
+		InputPerM: 7, OutputPerM: 7, MarketSlugs: []string{"z/zero"},
+	}
+	valid := store.Chain{
+		ID: "valid", TenantID: store.DefaultTenantID, Name: "valid", Strategy: "priority",
+		MarketSlugs: []string{"a/x"},
+	}
+	if err := db.Chains().Create(ctx, zero); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Chains().Create(ctx, valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := market.SaveSettings(ctx, db.Settings().Set, market.Settings{
+		RefreshIntervalMinutes: 2, MarkupPercent: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"slug":"z/zero","minAskIn":0,"minAskOut":0},{"slug":"a/x","minAskIn":1,"minAskOut":5}]}`))
+	}))
+	defer srv.Close()
+
+	a := newSyncTestApp(t, db)
+	a.marketURL = srv.URL
+	n, err := a.syncChainMarketPrices(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v, want 1,nil", n, err)
+	}
+
+	gotZero, _ := db.Chains().Get(ctx, "zero")
+	if gotZero.InputPerM != 7 || gotZero.OutputPerM != 7 {
+		t.Fatalf("zero-ask chain price = (%v,%v), want untouched (7,7)", gotZero.InputPerM, gotZero.OutputPerM)
+	}
+	gotValid, _ := db.Chains().Get(ctx, "valid")
+	if gotValid.InputPerM != 1 || gotValid.OutputPerM != 5 {
+		t.Fatalf("valid chain price = (%v,%v), want (1,5)", gotValid.InputPerM, gotValid.OutputPerM)
+	}
+}

@@ -25,6 +25,9 @@ func ComputeChainRate(slugs []string, models []Model, markupPercent, cacheReadMu
 		if !ok {
 			continue
 		}
+		if m.MinAskIn <= 0 || m.MinAskOut <= 0 {
+			continue
+		}
 		found = true
 		minIn = math.Min(minIn, m.MinAskIn)
 		minOut = math.Min(minOut, m.MinAskOut)
@@ -34,10 +37,15 @@ func ComputeChainRate(slugs []string, models []Model, markupPercent, cacheReadMu
 	}
 	effectiveInput := minIn * mult
 	effectiveOutput := minOut * mult
-	return Rate{
-		InputPerM:       effectiveInput,
-		OutputPerM:      effectiveOutput,
-		CachedInputPerM: effectiveInput * cacheReadMult,
-		CacheWritePerM:  effectiveInput * cacheWriteMult,
-	}, true
+	if !validRate(effectiveInput) || !validRate(effectiveOutput) {
+		return Rate{}, false
+	}
+	cachedInput := effectiveInput * cacheReadMult
+	cacheWrite := effectiveInput * cacheWriteMult
+	if !validRate(cachedInput) || !validRate(cacheWrite) {
+		return Rate{}, false
+	}
+	return Rate{InputPerM: effectiveInput, OutputPerM: effectiveOutput, CachedInputPerM: cachedInput, CacheWritePerM: cacheWrite}, true
 }
+
+func validRate(v float64) bool { return v >= 0 && !math.IsInf(v, 0) && !math.IsNaN(v) }

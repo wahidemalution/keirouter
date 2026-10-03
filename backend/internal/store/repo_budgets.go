@@ -380,6 +380,16 @@ func (r *ChainRepo) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// UpdateRates writes only the four chain price columns, leaving name,
+// strategy, fallback, slugs, and steps untouched.
+func (r *ChainRepo) UpdateRates(ctx context.Context, id string, input, output, cacheWrite, cacheRead float64) error {
+	q := r.db.rebind(`UPDATE chains SET input_per_m = ?, output_per_m = ?, cache_write_per_m = ?, cache_read_per_m = ?, updated_at = ? WHERE id = ?`)
+	if _, err := r.db.sql.ExecContext(ctx, q, input, output, cacheWrite, cacheRead, formatTime(time.Now()), id); err != nil {
+		return fmt.Errorf("store: update chain rates: %w", err)
+	}
+	return nil
+}
+
 // Update replaces a chain's name, strategy, and steps in a transaction.
 func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 	tx, err := r.db.sql.BeginTx(ctx, nil)
