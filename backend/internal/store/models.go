@@ -278,6 +278,41 @@ type KeyLimitAdjustment struct {
 	CreatedAt         time.Time
 }
 
+// PaymentOrderStatus is the lifecycle state of a payment-gateway order.
+type PaymentOrderStatus string
+
+const (
+	PaymentPending   PaymentOrderStatus = "pending"
+	PaymentCompleted PaymentOrderStatus = "completed"
+	PaymentManual    PaymentOrderStatus = "manual"
+	PaymentFailed    PaymentOrderStatus = "failed"
+	PaymentExpired   PaymentOrderStatus = "expired"
+)
+
+// PaymentOrder is one payment-gateway top-up. AmountIDR is whole rupiah,
+// CreditMicros and FxRateMicros are integer micros (credit in micro-USD, rate
+// in IDR-per-USD x 1e6). The rate and credit are locked at creation.
+type PaymentOrder struct {
+	ID                string
+	TenantID          string
+	KeyID             string
+	GoogleSub         string
+	AmountIDR         int64
+	CreditMicros      int64
+	FxRateMicros      int64
+	Status            PaymentOrderStatus
+	Provider          string
+	ProviderPaymentID string
+	PaymentLinkURL    string
+	IdempotencyKey    string
+	Actor             string
+	Reason            string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	PaidAt            string
+	ExpiresAt         string
+}
+
 // AuditEntry is one append-only audit record.
 type AuditEntry struct {
 	ID        string
