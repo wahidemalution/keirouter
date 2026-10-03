@@ -48,6 +48,14 @@ services:
       KEIROUTER_PORTAL_SSO__ENABLED: ${KEIROUTER_PORTAL_SSO__ENABLED:-false}
       KEIROUTER_PORTAL_SSO__GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       KEIROUTER_PORTAL_SSO__GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # SumoPod payment gateway (portal top-up). Set the ENABLED var to true in
+      # .env only after the API key is filled; the server refuses to start if
+      # enabled without it. Webhook auth: set either the Svix secret, the token,
+      # or both (both set -> both must pass); empty -> webhook 503.
+      KEIROUTER_PAYMENT__ENABLED: ${KEIROUTER_PAYMENT__ENABLED:-false}
+      KEIROUTER_PAYMENT__API_KEY: ${KEIROUTER_PAYMENT__API_KEY:-}
+      KEIROUTER_PAYMENT__WEBHOOK_SECRET: ${KEIROUTER_PAYMENT__WEBHOOK_SECRET:-}
+      KEIROUTER_PAYMENT__WEBHOOK_TOKEN: ${KEIROUTER_PAYMENT__WEBHOOK_TOKEN:-}
       KEIROUTER_LOG__FORMAT: ${KEIROUTER_LOG_FORMAT:-json}
       KEIROUTER_DATABASE__DRIVER: postgres
       KEIROUTER_DATABASE__DSN: "postgres://keirouter:${POSTGRES_PASSWORD:-keirouter}@postgres:5432/keirouter?sslmode=disable"
