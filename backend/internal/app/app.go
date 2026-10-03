@@ -417,6 +417,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		RateLimiter:          limiter,
 		Refresher:            tokenRefresher,
 		ReloadPricing:        reloadPricing,
+		MarketSnapshot:       globalMarketSnapshot,
 		Guardrails:           guardrailEngine,
 		GuardrailRepo:        db.Guardrails(),
 		GuardrailLogs:        db.GuardrailLogs(),
