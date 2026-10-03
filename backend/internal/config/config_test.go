@@ -129,3 +129,51 @@ func TestPortalSSOValidation(t *testing.T) {
 		t.Fatalf("disabled portal_sso must validate, got %v", err)
 	}
 }
+
+func TestPaymentConfigDefaultsAndValidation(t *testing.T) {
+	c := Default()
+	if c.Payment.Enabled {
+		t.Fatal("payment must default disabled")
+	}
+	if c.Payment.BaseURL != "https://api-pay-sandbox.sumopod.com" {
+		t.Fatalf("unexpected default base url %q", c.Payment.BaseURL)
+	}
+	if c.Payment.MinTopupIDR != 10000 || c.Payment.MaxTopupIDR != 10000000 {
+		t.Fatalf("unexpected default min/max: %d/%d", c.Payment.MinTopupIDR, c.Payment.MaxTopupIDR)
+	}
+
+	// enabled without api_key must fail validation
+	bad := Default()
+	bad.Payment.Enabled = true
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected validation error for enabled payment without api_key")
+	}
+
+	// enabled with api_key and sane bounds passes
+	ok := Default()
+	ok.Payment.Enabled = true
+	ok.Payment.APIKey = "key"
+	ok.Payment.Packages = []PaymentPackage{{ID: "idr10k", Label: "Rp 10.000", AmountIDR: 10000}}
+	if err := ok.validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+
+	// package outside [min,max] rejected
+	out := ok
+	out.Payment.Packages = []PaymentPackage{{ID: "x", Label: "x", AmountIDR: 5}}
+	if err := out.validate(); err == nil {
+		t.Fatal("expected validation error for out-of-range package")
+	}
+}
+
+func TestPaymentConfigEnvOverride(t *testing.T) {
+	t.Setenv("KEIROUTER_PAYMENT__API_KEY", "sekret")
+	t.Setenv("KEIROUTER_PAYMENT__WEBHOOK_SECRET", "whsec_x")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Payment.APIKey != "sekret" || cfg.Payment.WebhookSecret != "whsec_x" {
+		t.Fatalf("env override not applied: %+v", cfg.Payment)
+	}
+}

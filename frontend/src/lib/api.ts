@@ -1383,6 +1383,51 @@ export interface PortalTopupData {
   balance?: { limit_usd: number; spent_usd: number; usd_remaining: number };
 }
 
+export interface PaymentPackage {
+  id: string;
+  label: string;
+  amount_idr: number;
+}
+
+export interface PaymentConfig {
+  enabled: boolean;
+  min_topup_idr?: number;
+  max_topup_idr?: number;
+  payment_method_type_code?: string;
+  currency_source?: string;
+  fx_rate?: number;
+  packages?: PaymentPackage[];
+}
+
+export interface PaymentOrder {
+  order_id: string;
+  status: "pending" | "completed" | "manual" | "failed" | "expired";
+  amount_idr: number;
+  credit_usd: number;
+  fx_rate: number;
+  payment_link_url?: string;
+  expires_at?: string;
+  created_at: string;
+  paid_at?: string;
+}
+
+export interface PaymentOrderAdmin extends PaymentOrder {
+  google_sub: string;
+  user_email?: string;
+  key_id: string;
+  key_display?: string;
+  provider: string;
+  provider_payment_id: string;
+  actor: string;
+  budget_limit_usd?: number;
+}
+
+export interface PaymentSummary {
+  total_idr: number;
+  total_credit_usd: number;
+  count_by_status: Record<string, number>;
+}
+
 /** Masked metadata for the signed-in portal user's key. */
 export async function fetchPortalKey(): Promise<PortalKeyInfo> {
   const resp = await fetch("/portal/api/key");
@@ -1407,6 +1452,46 @@ export async function fetchPortalTopups(): Promise<PortalTopupData> {
   const resp = await fetch("/portal/api/topups");
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load topups");
+  return data;
+}
+
+/** Non-secret payment options the portal top-up page renders. */
+export async function fetchPortalPaymentConfig(): Promise<PaymentConfig> {
+  const resp = await fetch("/portal/payment/config");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load payment config");
+  return data;
+}
+
+/** Create a SumoPod payment for the signed-in user's key. */
+export async function createTopupOrder(input: {
+  amount_idr?: number;
+  package_id?: string;
+  idempotency_key?: string;
+}): Promise<PaymentOrder> {
+  const resp = await fetch("/portal/api/topup/orders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to create payment");
+  return data;
+}
+
+/** List the signed-in user's payment orders. */
+export async function fetchPortalTopupOrders(): Promise<{ orders: PaymentOrder[] }> {
+  const resp = await fetch("/portal/api/topup/orders");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load orders");
+  return data;
+}
+
+/** Load a single payment order owned by the signed-in user. */
+export async function fetchPortalTopupOrder(id: string): Promise<PaymentOrder> {
+  const resp = await fetch(`/portal/api/topup/orders/${id}`);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load order");
   return data;
 }
 
@@ -1505,6 +1590,12 @@ export const api = {
   getPortalSettings: () => request<{ default_plan_id: string }>("GET", "/portal-settings"),
   updatePortalSettings: (defaultPlanId: string) =>
     request<{ default_plan_id: string }>("POST", "/portal-settings", { default_plan_id: defaultPlanId }),
+
+  // Payment orders (admin): revenue summary and manual credit approval.
+  paymentOrders: () => request<{ orders: PaymentOrderAdmin[] }>("GET", "/payments/orders"),
+  paymentSummary: () => request<PaymentSummary>("GET", "/payments/summary"),
+  approvePaymentOrder: (id: string, reason: string) =>
+    request<PaymentOrderAdmin>("POST", `/payments/orders/${id}/approve`, { reason }),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
   createKey: (name: string, opts?: {

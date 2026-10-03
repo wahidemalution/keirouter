@@ -159,6 +159,27 @@ func (r *BudgetRepo) SetLimitOnTx(ctx context.Context, tx *sql.Tx, id string, ne
 	return before, newLimitMicros, nil
 }
 
+// SetPeriodOnTx sets a budget's reset period inside an existing transaction.
+// Payment crediting uses it to convert a key's existing periodic budget to a
+// non-resetting "total" budget before purchased credit is added, so the credit
+// is not re-granted on every period reset. The enclosing transaction already
+// holds LockKeyTopup, so the row is serialized.
+func (r *BudgetRepo) SetPeriodOnTx(ctx context.Context, tx *sql.Tx, id, period string) error {
+	q := r.db.rebind(`UPDATE budgets SET period = ?, updated_at = ? WHERE id = ?`)
+	res, err := tx.ExecContext(ctx, q, period, formatTime(time.Now()), id)
+	if err != nil {
+		return fmt.Errorf("store: set budget period: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: set budget period: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // LockKeyTopup serializes concurrent top-ups for one API key. On Postgres it
 // takes a transaction-scoped advisory lock keyed by the key id, so two requests
 // cannot both create the key's budget or lose an increment. On SQLite, whose
