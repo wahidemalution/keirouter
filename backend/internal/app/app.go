@@ -385,6 +385,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return nil
 	}
 
+	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}
+
 	gw := gateway.New(gateway.Deps{
 		Config:               cfg,
 		Logger:               log,
@@ -417,6 +419,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		RateLimiter:          limiter,
 		Refresher:            tokenRefresher,
 		ReloadPricing:        reloadPricing,
+		SyncMarketPrices:     app.syncChainMarketPrices,
 		MarketSnapshot:       globalMarketSnapshot,
 		Guardrails:           guardrailEngine,
 		GuardrailRepo:        db.Guardrails(),
@@ -441,7 +444,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}, nil
+	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}
+
+	return app, nil
 }
 
 // seedFreeAccounts auto-creates a default account for providers that are free

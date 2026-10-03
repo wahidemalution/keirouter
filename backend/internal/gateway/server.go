@@ -82,6 +82,7 @@ type Server struct {
 	rateLimiter         interface{ SetEnabled(bool) }
 	refresher           dispatch.TokenRefresher
 	reloadPricing       func(context.Context) error
+	syncMarketPrices    func(context.Context) (int, error)
 	marketSnapshot      func() []market.Model
 	version             string
 	updates             *update.Checker
@@ -137,6 +138,7 @@ type Deps struct {
 	RateLimiter          interface{ SetEnabled(bool) }
 	Refresher            dispatch.TokenRefresher
 	ReloadPricing        func(context.Context) error
+	SyncMarketPrices     func(context.Context) (int, error)
 	MarketSnapshot       func() []market.Model
 	Guardrails           *guardrails.Engine
 	GuardrailRepo        *store.GuardrailRepo
@@ -202,6 +204,7 @@ func New(d Deps) *Server {
 		rateLimiter:         d.RateLimiter,
 		refresher:           d.Refresher,
 		reloadPricing:       d.ReloadPricing,
+		syncMarketPrices:    d.SyncMarketPrices,
 		marketSnapshot:      d.MarketSnapshot,
 		version:             d.Version,
 		updates:             d.Updates,

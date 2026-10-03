@@ -65,19 +65,22 @@ func (s *Server) adminRefreshMarketPrices(w http.ResponseWriter, r *http.Request
 		return
 	}
 	current := market.LoadSettings(r.Context(), s.settings.Get)
-	if s.reloadPricing != nil {
-		if err := s.reloadPricing(r.Context()); err != nil {
+	synced := 0
+	if s.syncMarketPrices != nil {
+		n, err := s.syncMarketPrices(r.Context())
+		if err != nil {
 			current.LastFetchError = err.Error()
 			_ = market.SaveSettings(r.Context(), s.settings.Set, current)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
+		synced = n
 	}
 	current.LastFetchedAt = time.Now().UTC().Format(time.RFC3339)
 	current.LastFetchError = ""
-	current.LastSyncedCount = s.countMarketBindings(r.Context())
+	current.LastSyncedCount = synced
 	_ = market.SaveSettings(r.Context(), s.settings.Set, current)
-	writeJSON(w, http.StatusOK, map[string]any{"synced": current.LastSyncedCount, "last_fetched_at": current.LastFetchedAt})
+	writeJSON(w, http.StatusOK, map[string]any{"synced": synced, "last_fetched_at": current.LastFetchedAt})
 }
 
 func (s *Server) countMarketBindings(ctx context.Context) int {
