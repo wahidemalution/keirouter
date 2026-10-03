@@ -282,13 +282,9 @@ func (s *Server) provisionPortalKey(ctx context.Context, plan store.Plan, sub, e
 		if alertPct < 1 || alertPct > 100 {
 			alertPct = 80
 		}
-		period := plan.Period
-		if p, ok := normalizeBudgetPeriod(period); ok {
-			period = p
-		}
-		if period == "" {
-			period = "monthly"
-		}
+		// Portal keys are prepaid: the plan allowance is a one-time starter
+		// credit on a total-period budget so purchased credit never resets.
+		period := "total"
 		now := time.Now()
 		if err := s.budgets.CreateOnTx(ctx, tx, store.Budget{
 			ID:          uuid.NewString(),
@@ -486,6 +482,17 @@ func (s *Server) applyPortalPlan(ctx context.Context, keyID string, plan *store.
 	if err != nil {
 		return err
 	}
+	// Portal keys are prepaid: the effective limit is the plan's starter
+	// allowance plus all completed/manual payment credit already purchased, so
+	// re-basing a plan never resets paid balance.
+	var wantLimit int64
+	if plan != nil {
+		paid, err := s.db.PaymentOrders().SumCompletedCreditByKey(ctx, keyID)
+		if err != nil {
+			return err
+		}
+		wantLimit = plan.LimitMicros + paid
+	}
 	switch {
 	case !wantBudget:
 		for _, b := range existing {
@@ -498,30 +505,21 @@ func (s *Server) applyPortalPlan(ctx context.Context, keyID string, plan *store.
 		if alertPct < 1 || alertPct > 100 {
 			alertPct = 80
 		}
-		period := plan.Period
-		if p, ok := normalizeBudgetPeriod(period); ok {
-			period = p
-		}
-		if period == "" {
-			period = "monthly"
-		}
 		now := time.Now()
 		if err := s.budgets.Create(ctx, store.Budget{
 			ID: uuid.NewString(), TenantID: store.DefaultTenantID,
 			ScopeKind: store.ScopeAPIKey, ScopeID: keyID,
-			LimitMicros: plan.LimitMicros, LimitTokens: plan.LimitTokens,
-			Period: period, AlertPct: alertPct, HardCutoff: plan.HardCutoff,
+			LimitMicros: wantLimit, LimitTokens: plan.LimitTokens,
+			Period: "total", AlertPct: alertPct, HardCutoff: plan.HardCutoff,
 			CreatedAt: now, UpdatedAt: now,
 		}); err != nil {
 			return err
 		}
 	default:
 		b := existing[0]
-		b.LimitMicros = plan.LimitMicros
+		b.LimitMicros = wantLimit
 		b.LimitTokens = plan.LimitTokens
-		if p, ok := normalizeBudgetPeriod(plan.Period); ok {
-			b.Period = p
-		}
+		b.Period = "total"
 		if b.AlertPct < 1 || b.AlertPct > 100 {
 			b.AlertPct = 80
 		}

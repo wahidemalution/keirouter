@@ -489,6 +489,59 @@ func TestPortalTopupsIncludesBalance(t *testing.T) {
 	require.GreaterOrEqual(t, body.Balance.USDRemaining, 0.0)
 }
 
+// TestProvisionPortalKey_UsesTotalPrepaidBudget proves a portal-provisioned key
+// gets a non-resetting "total" period budget, not the plan's calendar period.
+func TestProvisionPortalKey_UsesTotalPrepaidBudget(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+	seedPlan(t, srv, "free", 5_000_000, "")
+	plan, err := srv.db.Plans().Get(ctx, "free")
+	require.NoError(t, err)
+	require.Equal(t, "monthly", plan.Period)
+
+	issued, err := srv.provisionPortalKey(ctx, plan, "gsub", "e@example.com")
+	require.NoError(t, err)
+
+	budgets, err := srv.budgets.ListByScope(ctx, store.ScopeAPIKey, issued.Record.ID)
+	require.NoError(t, err)
+	require.Len(t, budgets, 1)
+	require.Equal(t, "total", budgets[0].Period)
+	require.EqualValues(t, 5_000_000, budgets[0].LimitMicros)
+}
+
+// TestApplyPortalPlan_PreservesPaidCredit proves a plan re-base does not discard
+// credit already purchased through the payment gateway.
+func TestApplyPortalPlan_PreservesPaidCredit(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+	issued, err := srv.identity.Create(ctx, store.DefaultTenantID, "", "portal-key")
+	require.NoError(t, err)
+	require.NoError(t, srv.budgets.Create(ctx, store.Budget{
+		ID: "bud-rebase", TenantID: store.DefaultTenantID,
+		ScopeKind: store.ScopeAPIKey, ScopeID: issued.Record.ID,
+		LimitMicros: 0, Period: "monthly", AlertPct: 80, HardCutoff: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	require.NoError(t, srv.db.PaymentOrders().Create(ctx, store.PaymentOrder{
+		ID: "po-1", TenantID: store.DefaultTenantID, KeyID: issued.Record.ID,
+		CreditMicros: 2_000_000, Status: store.PaymentCompleted,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+
+	plan := store.Plan{
+		ID: "free", TenantID: store.DefaultTenantID, Name: "Free",
+		LimitMicros: 1_000_000, Period: "monthly", AlertPct: 80, HardCutoff: true,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, srv.applyPortalPlan(ctx, issued.Record.ID, &plan))
+
+	budgets, err := srv.budgets.ListByScope(ctx, store.ScopeAPIKey, issued.Record.ID)
+	require.NoError(t, err)
+	require.Len(t, budgets, 1)
+	require.EqualValues(t, 3_000_000, budgets[0].LimitMicros)
+	require.Equal(t, "total", budgets[0].Period)
+}
+
 func TestAdminSetPortalUserPlanResyncsBudget(t *testing.T) {
 	srv := newPortalTestServer(t)
 	ctx := context.Background()
