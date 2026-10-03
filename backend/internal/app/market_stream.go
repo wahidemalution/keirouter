@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -75,7 +76,7 @@ func (a *App) consumeMarketStream(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return err
+		return fmt.Errorf("market stream status %d", resp.StatusCode)
 	}
 	return market.ReadStream(resp.Body, func(models []market.Model) error {
 		setGlobalMarketSnapshot(models)
