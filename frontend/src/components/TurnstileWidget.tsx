@@ -43,7 +43,10 @@ function loadScript(): Promise<void> {
       document.head.appendChild(script);
     }
     script.addEventListener("load", () => resolve());
-    script.addEventListener("error", () => reject(new Error("failed to load turnstile")));
+    script.addEventListener("error", () => {
+      scriptPromise = null;
+      reject(new Error("failed to load turnstile"));
+    });
   });
   return scriptPromise;
 }

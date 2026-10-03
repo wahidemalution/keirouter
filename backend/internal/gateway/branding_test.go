@@ -14,6 +14,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/store"
+	"github.com/mydisha/keirouter/backend/internal/turnstile"
 )
 
 func newBrandingGateway(t *testing.T) (*Server, *identity.Service) {
@@ -94,7 +95,11 @@ var errFakeTurnstile = errors.New("fake turnstile rejected")
 
 func TestPortalBrandingExposesTurnstile(t *testing.T) {
 	srv := newPortalTestServer(t)
-	srv.turnstile = &fakeTurnstile{enabled: true, siteKey: "site-abc"}
+	srv.turnstile = turnstile.New(turnstile.Config{
+		Enabled:   true,
+		SiteKey:   "site-abc",
+		SecretKey: "super-secret",
+	})
 	srv.cfg = config.Default()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/portal/branding", nil)
@@ -103,4 +108,5 @@ func TestPortalBrandingExposesTurnstile(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"turnstile_enabled":true`)
 	require.Contains(t, rec.Body.String(), `"turnstile_site_key":"site-abc"`)
+	require.NotContains(t, rec.Body.String(), "super-secret")
 }
