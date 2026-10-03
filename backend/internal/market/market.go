@@ -2,12 +2,18 @@ package market
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
 	"strings"
+	"time"
 )
 
 const StreamURL = "https://inferhub.dev/api/market/stream"
+
+const APIURL = "https://inferhub.dev/api/market"
 
 type Model struct {
 	Slug      string  `json:"slug"`
@@ -27,6 +33,27 @@ func ParseSnapshot(r io.Reader) ([]Model, error) {
 		return nil, err
 	}
 	return body.Models, nil
+}
+
+// Fetch downloads the market snapshot in one request.
+func Fetch(ctx context.Context, url string) ([]Model, error) {
+	if url == "" {
+		url = APIURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("market API status %d", resp.StatusCode)
+	}
+	return ParseSnapshot(resp.Body)
 }
 
 func ReadStream(r io.Reader, onSnapshot func([]Model) error) error {
