@@ -30,9 +30,13 @@ func (s *Server) mountAuthenticatedAuth(r chi.Router) {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Password string `json:"password"`
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstile_token"`
 	}
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if !s.turnstileVerify(w, r, body.TurnstileToken) {
 		return
 	}
 

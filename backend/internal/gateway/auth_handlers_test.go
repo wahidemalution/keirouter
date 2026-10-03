@@ -110,6 +110,32 @@ func TestLoginIssuesUsableSessionOverPlainHTTP_Issue56(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, noCookieResp.StatusCode)
 }
 
+// TestLoginRejectsWhenTurnstileInvalid verifies that an enabled Turnstile whose
+// verification fails blocks login with 403 before the password check runs.
+func TestLoginRejectsWhenTurnstileInvalid(t *testing.T) {
+	s, _, _ := newMarketPricingTestServer(t)
+	fake := &fakeTurnstile{enabled: true, accept: false}
+	s.turnstile = fake
+
+	rec := marketRequest(t, s, &http.Cookie{Name: sessionCookie, Value: ""},
+		http.MethodPost, "/api/auth/login", `{"password":"keirouter"}`)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	require.Equal(t, 1, fake.calls)
+}
+
+// TestLoginPassesWithValidTurnstile verifies that a valid Turnstile token lets
+// login proceed to the password check, and the token is read from the body.
+func TestLoginPassesWithValidTurnstile(t *testing.T) {
+	s, _, _ := newMarketPricingTestServer(t)
+	fake := &fakeTurnstile{enabled: true, accept: true}
+	s.turnstile = fake
+
+	rec := marketRequest(t, s, &http.Cookie{Name: sessionCookie, Value: ""},
+		http.MethodPost, "/api/auth/login", `{"password":"keirouter","turnstile_token":"tok"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, 1, fake.calls)
+}
+
 // TestLogoutClearsCookieWithoutSecureFlag ensures the expiry cookie written on
 // logout matches the non-Secure session cookie set over plain HTTP, so the
 // browser actually deletes it.
