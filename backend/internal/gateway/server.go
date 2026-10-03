@@ -33,6 +33,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
+	"github.com/mydisha/keirouter/backend/internal/payment"
 	"github.com/mydisha/keirouter/backend/internal/pipeline"
 	"github.com/mydisha/keirouter/backend/internal/portalauth"
 	"github.com/mydisha/keirouter/backend/internal/store"
@@ -94,6 +95,7 @@ type Server struct {
 	providerHealth      *health.Service
 	probeRunner         *health.ProbeRunner
 	portalSSO           *portalauth.Service
+	paymentClient       *payment.Client
 	router              chi.Router
 }
 
@@ -142,6 +144,7 @@ type Deps struct {
 	HealthChecker        *healthcheck.Checker
 	ProviderHealth       *health.Service
 	ProbeRunner          *health.ProbeRunner
+	Payment              *payment.Client
 }
 
 // New builds a gateway Server and wires its routes.
@@ -209,6 +212,7 @@ func New(d Deps) *Server {
 		healthChecker:       d.HealthChecker,
 		providerHealth:      d.ProviderHealth,
 		probeRunner:         d.ProbeRunner,
+		paymentClient:       d.Payment,
 	}
 	if d.Config.PortalSSO.Enabled {
 		s.portalSSO = portalauth.New(portalauth.Config{
@@ -221,6 +225,9 @@ func New(d Deps) *Server {
 	s.currencySvc = currency.New(d.Settings)
 	if d.Settings != nil {
 		s.currencySvc.Start(context.Background())
+	}
+	if s.paymentClient == nil && d.Config.Payment.Enabled {
+		s.paymentClient = payment.NewClient(d.Config.Payment.BaseURL, d.Config.Payment.APIKey)
 	}
 	s.router = s.routes()
 	startSystemCollector(d.Resources)
