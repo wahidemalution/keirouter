@@ -109,6 +109,42 @@ func TestPortalCreateOrderHappyPath(t *testing.T) {
 	require.Contains(t, listRec.Body.String(), body["order_id"].(string))
 }
 
+func TestPortalCreateOrderIdempotencyScopedToCallerKey(t *testing.T) {
+	s, _ := paymentPortalTestServer(t)
+	ctx := context.Background()
+
+	// Second portal user with a different key.
+	issuedB, err := s.identity.Create(ctx, store.DefaultTenantID, "", "portal-key-b")
+	require.NoError(t, err)
+	require.NoError(t, s.db.PortalUsers().Upsert(ctx, store.PortalUser{
+		GoogleSub: "gsub-b", Email: "b@example.com", KeyID: issuedB.Record.ID,
+	}))
+	tokB, err := s.auth.IssuePortalSession("portal:gsub-b", "b@example.com")
+	require.NoError(t, err)
+
+	// Seed an order for key A with idempotency key "idemX".
+	uA, err := s.db.PortalUsers().GetBySub(ctx, "gsub")
+	require.NoError(t, err)
+	require.NoError(t, s.db.PaymentOrders().Create(ctx, store.PaymentOrder{
+		ID: "order-a", TenantID: adminTenant, KeyID: uA.KeyID, GoogleSub: "gsub",
+		AmountIDR: 50000, CreditMicros: 3_125_000, FxRateMicros: 16_000_000,
+		Status: store.PaymentPending, Provider: "sumopod", IdempotencyKey: "idemX",
+		Actor: "portal", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/portal/api/topup/orders",
+		strings.NewReader(`{"amount_idr":50000,"idempotency_key":"idemX"}`))
+	req.AddCookie(&http.Cookie{Name: portalSessionCookie, Value: tokB})
+	rec := httptest.NewRecorder()
+	s.handlePortalCreateOrder(rec, req)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+
+	// No order was created for key B.
+	ordersB, err := s.db.PaymentOrders().ListByKey(ctx, issuedB.Record.ID)
+	require.NoError(t, err)
+	require.Empty(t, ordersB)
+}
+
 func TestPortalPaymentConfigDisabled(t *testing.T) {
 	srv := newPortalTestServer(t) // payment not enabled
 	rec := httptest.NewRecorder()

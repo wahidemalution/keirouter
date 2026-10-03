@@ -118,6 +118,10 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 	}
 	if idem != "" {
 		if existing, gerr := s.db.PaymentOrders().GetByIdempotencyKey(r.Context(), idem); gerr == nil {
+			if existing.KeyID != keyID {
+				writeError(w, http.StatusConflict, "idempotency key already used")
+				return
+			}
 			s.writeOrderResponse(w, http.StatusOK, existing)
 			return
 		} else if !errors.Is(gerr, store.ErrNotFound) {
@@ -174,6 +178,10 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 	if err := s.db.PaymentOrders().Create(r.Context(), o); err != nil {
 		if idem != "" {
 			if existing, gerr := s.db.PaymentOrders().GetByIdempotencyKey(r.Context(), idem); gerr == nil {
+				if existing.KeyID != keyID {
+					writeError(w, http.StatusConflict, "idempotency key already used")
+					return
+				}
 				s.writeOrderResponse(w, http.StatusOK, existing)
 				return
 			}
@@ -225,7 +233,14 @@ func (s *Server) handlePortalGetOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	id := chi.URLParam(r, "id")
 	o, err := s.db.PaymentOrders().Get(r.Context(), id)
-	if err != nil || o.KeyID != keyID {
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			sanitizeError(s.log, err, "portal get order: load failed")
+		}
+		writeError(w, http.StatusNotFound, "order not found")
+		return
+	}
+	if o.KeyID != keyID {
 		writeError(w, http.StatusNotFound, "order not found")
 		return
 	}
