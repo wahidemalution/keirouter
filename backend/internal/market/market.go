@@ -1,17 +1,13 @@
 package market
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
-
-const StreamURL = "https://inferhub.dev/api/market/stream"
 
 const APIURL = "https://inferhub.dev/api/market"
 
@@ -54,29 +50,4 @@ func Fetch(ctx context.Context, url string) ([]Model, error) {
 		return nil, fmt.Errorf("market API status %d", resp.StatusCode)
 	}
 	return ParseSnapshot(resp.Body)
-}
-
-func ReadStream(r io.Reader, onSnapshot func([]Model) error) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" {
-			continue
-		}
-		models, err := ParseSnapshot(strings.NewReader(payload))
-		if err != nil {
-			continue
-		}
-		if onSnapshot != nil {
-			if err := onSnapshot(models); err != nil {
-				return err
-			}
-		}
-	}
-	return sc.Err()
 }

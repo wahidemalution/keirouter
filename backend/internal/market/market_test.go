@@ -19,20 +19,6 @@ func TestParseSnapshot(t *testing.T) {
 	}
 }
 
-func TestReadStreamSkipsMalformedFrames(t *testing.T) {
-	stream := "data: {\"models\":[{\"slug\":\"a/b\",\"minAskIn\":1,\"minAskOut\":2}]}\n\n" +
-		"data: {not json}\n\n" +
-		"data: {\"models\":[{\"slug\":\"c/d\",\"minAskIn\":3,\"minAskOut\":4}]}\n\n"
-	var batches [][]Model
-	err := ReadStream(strings.NewReader(stream), func(m []Model) error { batches = append(batches, m); return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(batches) != 2 || batches[1][0].Slug != "c/d" {
-		t.Fatalf("expected 2 good frames, got %+v", batches)
-	}
-}
-
 func TestFetchParsesEnvelope(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

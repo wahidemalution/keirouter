@@ -147,9 +147,6 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/market-pricing/settings", s.adminGetMarketPricingSettings)
 	r.Patch("/market-pricing/settings", s.adminUpdateMarketPricingSettings)
 	r.Post("/market-pricing/refresh", s.adminRefreshMarketPrices)
-	r.Get("/market-pricing/bindings", s.adminListMarketBindings)
-	r.Put("/market-pricing/bindings/{provider}/{model}", s.adminSetMarketBinding)
-	r.Delete("/market-pricing/bindings/{provider}/{model}", s.adminDeleteMarketBinding)
 
 	// Update check (queries GitHub for the latest release + changelog).
 	r.Get("/update/check", s.adminUpdateCheck)

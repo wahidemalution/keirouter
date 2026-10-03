@@ -37,7 +37,6 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/limits"
-	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
@@ -420,7 +419,6 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Refresher:            tokenRefresher,
 		ReloadPricing:        reloadPricing,
 		SyncMarketPrices:     app.syncChainMarketPrices,
-		MarketSnapshot:       globalMarketSnapshot,
 		Guardrails:           guardrailEngine,
 		GuardrailRepo:        db.Guardrails(),
 		GuardrailLogs:        db.GuardrailLogs(),
@@ -860,8 +858,3 @@ func buildModelPrices(ctx context.Context, db *store.DB, log *slog.Logger) map[s
 	}
 	return out
 }
-
-// globalMarketSnapshot is a no-op stub retained only because the gateway's
-// MarketSnapshot dependency still references it. Task 7 removes that dep and
-// this stub together.
-func globalMarketSnapshot() []market.Model { return nil }
