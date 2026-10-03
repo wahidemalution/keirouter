@@ -66,6 +66,8 @@ type App struct {
 	healthChecker      *healthcheck.Checker
 	providerHealth     *health.Service
 	probeRunner        *health.ProbeRunner
+	reloadPricing      func(context.Context) error
+	marketURL          string
 
 	// bg tracks long-lived background workers that touch the DB (oauth
 	// keepalive, health checker, cooldown sweeper) so shutdown can wait for
@@ -438,7 +440,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner}, nil
+	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}, nil
 }
 
 // seedFreeAccounts auto-creates a default account for providers that are free
@@ -531,6 +533,13 @@ func (a *App) Run(ctx context.Context) error {
 		go func() {
 			defer a.bg.Done()
 			a.runCooldownSweeper(ctx)
+		}()
+	}
+	if a.db != nil {
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.runMarketStream(ctx)
 		}()
 	}
 
@@ -842,6 +851,11 @@ func buildModelPrices(ctx context.Context, db *store.DB, log *slog.Logger) map[s
 			CachedInputPerM: model.InputPerM, CacheWritePerM: model.InputPerM,
 			ReasoningPerM: model.OutputPerM, Source: "custom", Estimated: false,
 		}
+	}
+	bindings, err := db.MarketBindings().List(ctx, store.DefaultTenantID)
+	if err == nil && len(bindings) > 0 {
+		settings := market.LoadSettings(ctx, db.Settings().Get)
+		applyMarketBindings(ctx, out, bindings, globalMarketSnapshot(), settings, marketCacheReadMult, marketCacheWriteMult)
 	}
 	return out
 }
