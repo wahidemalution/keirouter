@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ type Config struct {
 	Data           DataConfig           `koanf:"data"`
 	Guardrails     GuardrailsConfig     `koanf:"guardrails"`
 	PortalSSO      PortalSSOConfig      `koanf:"portal_sso"`
+	Payment        PaymentConfig        `koanf:"payment"`
 }
 
 // DefaultMaxRequestBodyBytes is the default maximum size accepted for inbound
@@ -123,6 +125,34 @@ type PortalSSOConfig struct {
 	AllowedDomains     []string      `koanf:"allowed_domains"`
 	RedirectURL        string        `koanf:"redirect_url"`
 	SessionTTL         time.Duration `koanf:"session_ttl"`
+}
+
+// PaymentConfig configures the SumoPod payment gateway used for portal
+// self-service credit top-ups. The API key and webhook secrets are intended to
+// come from environment variables (KEIROUTER_PAYMENT__API_KEY,
+// KEIROUTER_PAYMENT__WEBHOOK_SECRET, KEIROUTER_PAYMENT__WEBHOOK_TOKEN), never
+// committed to YAML.
+type PaymentConfig struct {
+	Enabled               bool             `koanf:"enabled"`
+	Provider              string           `koanf:"provider"`
+	BaseURL               string           `koanf:"base_url"`
+	APIKey                string           `koanf:"api_key"`
+	WebhookSecret         string           `koanf:"webhook_secret"`
+	WebhookToken          string           `koanf:"webhook_token"`
+	MinTopupIDR           int64            `koanf:"min_topup_idr"`
+	MaxTopupIDR           int64            `koanf:"max_topup_idr"`
+	Packages              []PaymentPackage `koanf:"packages"`
+	PaymentMethodTypeCode string           `koanf:"payment_method_type_code"`
+	ExpiresInHours        int              `koanf:"expires_in_hours"`
+	SuccessReturnURL      string           `koanf:"success_return_url"`
+	CancelReturnURL       string           `koanf:"cancel_return_url"`
+}
+
+// PaymentPackage is an admin-defined preset top-up amount in whole IDR.
+type PaymentPackage struct {
+	ID        string `koanf:"id"`
+	Label     string `koanf:"label"`
+	AmountIDR int64  `koanf:"amount_idr"`
 }
 
 // CacheConfig configures the semantic response cache.
@@ -377,6 +407,21 @@ func Default() Config {
 			Enabled:    false,
 			SessionTTL: 24 * time.Hour,
 		},
+		Payment: PaymentConfig{
+			Enabled:               false,
+			Provider:              "sumopod",
+			BaseURL:               "https://api-pay-sandbox.sumopod.com",
+			MinTopupIDR:           10000,
+			MaxTopupIDR:           10000000,
+			PaymentMethodTypeCode: "QRIS",
+			ExpiresInHours:        24,
+			Packages: []PaymentPackage{
+				{ID: "idr10k", Label: "Rp 10.000", AmountIDR: 10000},
+				{ID: "idr25k", Label: "Rp 25.000", AmountIDR: 25000},
+				{ID: "idr50k", Label: "Rp 50.000", AmountIDR: 50000},
+				{ID: "idr100k", Label: "Rp 100.000", AmountIDR: 100000},
+			},
+		},
 	}
 }
 
@@ -508,6 +553,35 @@ func (c *Config) validate() error {
 		}
 		if c.PortalSSO.SessionTTL <= 0 {
 			c.PortalSSO.SessionTTL = 24 * time.Hour
+		}
+	}
+	if c.Payment.Provider == "" {
+		c.Payment.Provider = "sumopod"
+	}
+	if c.Payment.PaymentMethodTypeCode == "" {
+		c.Payment.PaymentMethodTypeCode = "QRIS"
+	}
+	if c.Payment.ExpiresInHours <= 0 {
+		c.Payment.ExpiresInHours = 24
+	}
+	if c.Payment.MaxTopupIDR < c.Payment.MinTopupIDR {
+		return fmt.Errorf("payment.max_topup_idr must be >= min_topup_idr")
+	}
+	if c.Payment.Enabled {
+		u, err := url.Parse(strings.TrimSpace(c.Payment.BaseURL))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return errors.New("payment.base_url must be a valid http(s) URL when enabled")
+		}
+		if strings.TrimSpace(c.Payment.APIKey) == "" {
+			return errors.New("payment.enabled requires api_key")
+		}
+		if c.Payment.MinTopupIDR <= 0 {
+			return errors.New("payment.min_topup_idr must be positive when enabled")
+		}
+	}
+	for _, p := range c.Payment.Packages {
+		if p.ID == "" || p.AmountIDR < c.Payment.MinTopupIDR || p.AmountIDR > c.Payment.MaxTopupIDR {
+			return fmt.Errorf("payment package %q amount_idr not within [min,max]", p.ID)
 		}
 	}
 	return nil

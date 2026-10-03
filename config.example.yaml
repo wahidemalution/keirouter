@@ -183,3 +183,20 @@ portal_sso:
   # Optional: defaults to <public-base-url>/portal/auth/google/callback.
   redirect_url: ""
   session_ttl: 24h
+
+# SumoPod payment gateway for portal credit top-ups. Secrets via env:
+# KEIROUTER_PAYMENT__API_KEY, KEIROUTER_PAYMENT__WEBHOOK_SECRET,
+# KEIROUTER_PAYMENT__WEBHOOK_TOKEN.
+payment:
+  enabled: false
+  provider: sumopod
+  base_url: https://api-pay-sandbox.sumopod.com
+  min_topup_idr: 10000
+  max_topup_idr: 10000000
+  payment_method_type_code: QRIS
+  expires_in_hours: 24
+  packages:
+    - { id: idr10k,  label: "Rp 10.000",  amount_idr: 10000 }
+    - { id: idr25k,  label: "Rp 25.000",  amount_idr: 25000 }
+    - { id: idr50k,  label: "Rp 50.000",  amount_idr: 50000 }
+    - { id: idr100k, label: "Rp 100.000", amount_idr: 100000 }
