@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { WifiOff } from "lucide-react";
 import { api, fetchPortalBranding } from "../lib/api";
 import { Card, Button, Input, Field, Spinner } from "./ui";
+import { TurnstileWidget, useTurnstileSiteKey } from "./TurnstileWidget";
 
 // AuthGate gates the dashboard behind a login, and surfaces a one-time
 // onboarding step that nudges the operator off the default password.
@@ -74,14 +75,16 @@ function LoginScreen() {
   const qc = useQueryClient();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const siteKey = useTurnstileSiteKey();
+  const [turnstileToken, setTurnstileToken] = useState("");
 
   const login = useMutation({
-    mutationFn: () => api.login(password),
+    mutationFn: () => api.login(password, turnstileToken || undefined),
     onSuccess: () => {
       setError("");
       qc.invalidateQueries({ queryKey: ["auth-status"] });
     },
-    onError: () => setError("Incorrect password"),
+    onError: (e: Error) => setError(e.message || "Incorrect password"),
   });
 
   return (
@@ -108,8 +111,13 @@ function LoginScreen() {
               autoFocus
             />
           </Field>
+          <TurnstileWidget siteKey={siteKey} onToken={setTurnstileToken} className="flex justify-center" />
           {error && <p className="text-xs text-[color:var(--color-danger)]">{error}</p>}
-          <Button type="submit" className="w-full" disabled={login.isPending || !password}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={login.isPending || !password || (!!siteKey && !turnstileToken)}
+          >
             {login.isPending ? "Signing in…" : "Sign in"}
           </Button>
         </form>
