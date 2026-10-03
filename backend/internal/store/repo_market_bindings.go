@@ -6,11 +6,11 @@ import (
 )
 
 type MarketBinding struct {
-	TenantID   string
-	ProviderID string
-	ModelID    string
-	MarketSlug string
-	UpdatedAt  time.Time
+	TenantID   string    `json:"tenant_id"`
+	ProviderID string    `json:"provider_id"`
+	ModelID    string    `json:"model_id"`
+	MarketSlug string    `json:"market_slug"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type MarketBindingRepo struct{ db *DB }

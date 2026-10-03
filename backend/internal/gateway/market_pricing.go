@@ -13,6 +13,10 @@ import (
 )
 
 func (s *Server) adminGetMarketPricingSettings(w http.ResponseWriter, r *http.Request) {
+	if s.settings == nil {
+		writeError(w, http.StatusServiceUnavailable, "settings store not configured")
+		return
+	}
 	writeJSON(w, http.StatusOK, market.LoadSettings(r.Context(), s.settings.Get))
 }
 
@@ -77,6 +81,9 @@ func (s *Server) adminRefreshMarketPrices(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) countMarketBindings(ctx context.Context) int {
+	if s.db == nil {
+		return 0
+	}
 	bindings, err := s.db.MarketBindings().List(ctx, store.DefaultTenantID)
 	if err != nil {
 		return 0
@@ -95,6 +102,10 @@ func (s *Server) countMarketBindings(ctx context.Context) int {
 }
 
 func (s *Server) adminListMarketBindings(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not configured")
+		return
+	}
 	bindings, err := s.db.MarketBindings().List(r.Context(), store.DefaultTenantID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -104,6 +115,10 @@ func (s *Server) adminListMarketBindings(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) adminSetMarketBinding(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not configured")
+		return
+	}
 	provider := chi.URLParam(r, "provider")
 	model := chi.URLParam(r, "model")
 	var body struct {
@@ -126,6 +141,10 @@ func (s *Server) adminSetMarketBinding(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminDeleteMarketBinding(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not configured")
+		return
+	}
 	provider := chi.URLParam(r, "provider")
 	model := chi.URLParam(r, "model")
 	if err := s.db.MarketBindings().Delete(r.Context(), store.DefaultTenantID, provider, model); err != nil {
