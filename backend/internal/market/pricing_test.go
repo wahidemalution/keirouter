@@ -14,7 +14,7 @@ func TestComputeRateAppliesMarkupAndDiscount(t *testing.T) {
 	if math.Abs(r.InputPerM-2) > 1e-9 || math.Abs(r.OutputPerM-10) > 1e-9 {
 		t.Fatalf("unexpected rates %+v", r)
 	}
-	if math.Abs(r.CachedInputPerM-0.2) > 1e-9 || math.Abs(r.CacheWritePerM-2.5) > 1e-9 {
+	if math.Abs(r.CachedInputPerM-0.1) > 1e-9 || math.Abs(r.CacheWritePerM-1.25) > 1e-9 {
 		t.Fatalf("unexpected cache rates %+v", r)
 	}
 }

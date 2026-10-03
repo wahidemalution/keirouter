@@ -35,8 +35,8 @@ func ComputeRate(slug string, models []Model, markupPercent, cacheReadMult, cach
 	return Rate{
 		InputPerM:       input,
 		OutputPerM:      output,
-		CachedInputPerM: input * cacheReadMult,
-		CacheWritePerM:  input * cacheWriteMult,
+		CachedInputPerM: effectiveInput * cacheReadMult,
+		CacheWritePerM:  effectiveInput * cacheWriteMult,
 		DiscountPercent: discount,
 	}, true
 }
