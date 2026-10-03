@@ -341,6 +341,7 @@ func (s *Server) routes() chi.Router {
 	r.Get("/portal/auth/google/callback", s.handlePortalLoginCallback)
 	r.Get("/portal/auth/status", s.handlePortalStatus)
 	r.Get("/portal/plans", s.handlePortalPlans)
+	r.Get("/portal/payment/config", s.handlePortalPaymentConfig)
 	r.Group(func(r chi.Router) {
 		r.Use(s.portalSessionMiddleware)
 		r.Post("/portal/auth/claim", s.handlePortalClaim)
@@ -352,6 +353,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/portal/api/key", s.handlePortalKey)
 		r.Get("/portal/api/key/reveal", s.handlePortalKeyReveal)
 		r.Get("/portal/api/topups", s.handlePortalTopups)
+		r.Post("/portal/api/topup/orders", s.handlePortalCreateOrder)
+		r.Get("/portal/api/topup/orders", s.handlePortalListOrders)
+		r.Get("/portal/api/topup/orders/{id}", s.handlePortalGetOrder)
 		r.Post("/portal/auth/logout", s.handlePortalLogout)
 	})
 
