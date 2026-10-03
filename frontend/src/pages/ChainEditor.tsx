@@ -11,6 +11,18 @@ import { ChainModelPicker } from "../components/chains/ChainModelPicker";
 import { ChainRoutePreview } from "../components/chains/ChainRoutePreview";
 import { type ChainStrategy, type DraftChainStep, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, strategyDescription, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
+const parseMarketSlugs = (raw: string): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw.split("\n")) {
+    const s = line.trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+};
+
 const strategyOptions: { value: ChainStrategy; label: string; icon: typeof Zap }[] = [
   { value: "priority", label: "Priority", icon: Zap },
   { value: "round_robin", label: "Round robin", icon: Repeat2 },
@@ -36,6 +48,7 @@ export function ChainEditorPage() {
   const [fallbackEnabled, setFallbackEnabled] = useState(false);
   const [fallback, setFallback] = useState<DraftChainStep>(() => makeDraftStep());
   const [chainPrice, setChainPrice] = useState({ inputPerM: 0, outputPerM: 0, cacheWritePerM: 0, cacheReadPerM: 0 });
+  const [marketSlugs, setMarketSlugs] = useState("");
   const [priceOpen, setPriceOpen] = useState(false);
   const [priceDrafts, setPriceDrafts] = useState<Map<string, string>>(() => new Map());
   const [error, setError] = useState("");
@@ -48,6 +61,7 @@ export function ChainEditorPage() {
     setFallbackEnabled(Boolean(existing.fallback_provider && existing.fallback_model));
     setFallback(makeDraftStep(existing.fallback_provider && existing.fallback_model ? { provider: existing.fallback_provider, model: existing.fallback_model } : undefined));
     setChainPrice({ inputPerM: existing.input_per_m ?? 0, outputPerM: existing.output_per_m ?? 0, cacheWritePerM: existing.cache_write_per_m ?? 0, cacheReadPerM: existing.cache_read_per_m ?? 0 });
+    setMarketSlugs((existing.market_slugs ?? []).join("\n"));
     setPriceOpen((existing.input_per_m ?? 0) > 0 || (existing.output_per_m ?? 0) > 0 || (existing.cache_write_per_m ?? 0) > 0 || (existing.cache_read_per_m ?? 0) > 0);
     setHydrated(true);
   }, [existing, hydrated]);
@@ -61,7 +75,8 @@ export function ChainEditorPage() {
     duplicateKeys.add(key);
     return false;
   });
-  const priced = chainPrice.inputPerM > 0 || chainPrice.outputPerM > 0 || chainPrice.cacheWritePerM > 0 || chainPrice.cacheReadPerM > 0;
+  const hasMarketSlugs = parseMarketSlugs(marketSlugs).length > 0;
+  const priced = !hasMarketSlugs && (chainPrice.inputPerM > 0 || chainPrice.outputPerM > 0 || chainPrice.cacheWritePerM > 0 || chainPrice.cacheReadPerM > 0);
   const needsPricing = priced && (chainPrice.inputPerM <= 0 || chainPrice.outputPerM <= 0);
   const validationMessage = !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : needsPricing ? "Set both input and output price, or clear all price fields." : "";
   const valid = !validationMessage;
@@ -69,7 +84,7 @@ export function ChainEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" };
+      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" };
       return isEdit ? api.updateChain(id!, payload) : api.createChain(payload);
     },
     onSuccess: () => {
@@ -117,15 +132,32 @@ export function ChainEditorPage() {
         <Card className="p-5 sm:p-6"><Field label="Chain name"><Input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} placeholder="production-fallback" className="font-mono" data-modal-autofocus /><p className={`text-xs ${name && !isValidChainName(name) ? "text-[color:var(--color-danger)]" : "text-[var(--text-muted)]"}`}>Use as <span className="font-mono">chain:{name || "your-chain"}</span> or the bare name as a model target.</p></Field></Card>
         <Card className="p-5 sm:p-6"><div className="mb-3"><h2 className="text-base font-semibold">Routing strategy</h2><p className="mt-1 text-sm text-[var(--text-muted)]">Choose how KeiRouter decides which route step starts first.</p></div><div className="grid gap-2 sm:grid-cols-2"><div className="grid grid-cols-2 gap-2 sm:col-span-2 lg:grid-cols-4">{strategyOptions.map((option) => { const Icon = option.icon; const selected = strategy === option.value; return <button key={option.value} type="button" onClick={() => { setStrategy(option.value); setDirty(true); }} className={`flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40 ${selected ? "border-accent-500 bg-accent-500/10 text-accent-700 dark:text-accent-200" : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)]"}`}><Icon className="h-4 w-4" />{option.label}</button>; })}</div><p className="sm:col-span-2 text-sm leading-6 text-[var(--text-muted)]">{strategyDescription(strategy)}</p></div></Card>
         <Card className="p-5 sm:p-6">
+          <div className="mb-3">
+            <h2 className="text-base font-semibold">Market slugs</h2>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">One inferhub.dev slug per line. KeiRouter prices this chain from the cheapest of these slugs plus markup. Leave empty to set the price manually.</p>
+          </div>
+          <Field label="Slugs">
+            <textarea
+              value={marketSlugs}
+              onChange={(event) => { setMarketSlugs(event.target.value); setDirty(true); }}
+              rows={4}
+              spellCheck={false}
+              placeholder={"cbcn/deepseek-v4.1-flash\nali/deepseek-v4.1-flash\ncb/deepseek-v4.1-flash"}
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3 font-mono text-sm text-[var(--text)] outline-none focus:border-accent-500"
+            />
+          </Field>
+          {hasMarketSlugs && <p className="mt-2 text-xs text-[var(--text-muted)]">Prices below are managed automatically from the market.</p>}
+        </Card>
+        <Card className="p-5 sm:p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><h2 className="text-base font-semibold">Model pricing</h2><p className="mt-1 text-sm text-[var(--text-muted)]">One price for the whole chain model, applied to every route step. Leave blank to use the catalog price.</p></div>
             <button type="button" onClick={() => { setPriceOpen((open) => !open); setDirty(true); }} aria-expanded={priceOpen} className={`flex h-9 items-center gap-1 rounded-lg px-2 text-xs font-medium ${priced ? "text-accent-700 dark:text-accent-300" : "text-[var(--text-muted)]"} hover:bg-[var(--bg-elevated)]`}><DollarSign className="h-3.5 w-3.5" /><span>Pricing</span><ChevronDown className={`h-3.5 w-3.5 transition-transform ${priceOpen ? "rotate-180" : ""}`} /></button>
           </div>
           {priceOpen && <div className="mt-4 grid gap-2 border-t border-[var(--border)] pt-4 sm:grid-cols-4">
-            <Field label="Input $/M"><Input type="number" min={0} step="0.01" value={rateDraft("inputPerM")} onChange={(event) => updateChainRate("inputPerM", event.target.value)} placeholder="0" /></Field>
-            <Field label="Output $/M"><Input type="number" min={0} step="0.01" value={rateDraft("outputPerM")} onChange={(event) => updateChainRate("outputPerM", event.target.value)} placeholder="0" /></Field>
-            <Field label={`Cache write $/M${chainPrice.cacheWritePerM === +(chainPrice.inputPerM * CACHE_WRITE_FACTOR).toFixed(8) ? " (auto)" : ""}`}><Input type="number" min={0} step="0.01" value={rateDraft("cacheWritePerM")} onChange={(event) => updateChainRate("cacheWritePerM", event.target.value)} placeholder="auto" /></Field>
-            <Field label={`Cache read $/M${chainPrice.cacheReadPerM === +(chainPrice.inputPerM * CACHE_READ_FACTOR).toFixed(8) ? " (auto)" : ""}`}><Input type="number" min={0} step="0.01" value={rateDraft("cacheReadPerM")} onChange={(event) => updateChainRate("cacheReadPerM", event.target.value)} placeholder="auto" /></Field>
+            <Field label="Input $/M"><Input type="number" min={0} step="0.01" disabled={hasMarketSlugs} value={rateDraft("inputPerM")} onChange={(event) => updateChainRate("inputPerM", event.target.value)} placeholder="0" /></Field>
+            <Field label="Output $/M"><Input type="number" min={0} step="0.01" disabled={hasMarketSlugs} value={rateDraft("outputPerM")} onChange={(event) => updateChainRate("outputPerM", event.target.value)} placeholder="0" /></Field>
+            <Field label={`Cache write $/M${chainPrice.cacheWritePerM === +(chainPrice.inputPerM * CACHE_WRITE_FACTOR).toFixed(8) ? " (auto)" : ""}`}><Input type="number" min={0} step="0.01" disabled={hasMarketSlugs} value={rateDraft("cacheWritePerM")} onChange={(event) => updateChainRate("cacheWritePerM", event.target.value)} placeholder="auto" /></Field>
+            <Field label={`Cache read $/M${chainPrice.cacheReadPerM === +(chainPrice.inputPerM * CACHE_READ_FACTOR).toFixed(8) ? " (auto)" : ""}`}><Input type="number" min={0} step="0.01" disabled={hasMarketSlugs} value={rateDraft("cacheReadPerM")} onChange={(event) => updateChainRate("cacheReadPerM", event.target.value)} placeholder="auto" /></Field>
           </div>}
         </Card>
         <Card className="p-5 sm:p-6"><div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-base font-semibold">Model route</h2><p className="mt-1 text-sm text-[var(--text-muted)]">Each completed row is an eligible target. Reorder the path to set its declared priority.</p></div><Badge tone="neutral">{completeSteps.length} configured</Badge></div><div className="space-y-2">{steps.map((step, index) => { return <div key={step.id} className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)]/35 p-3"><div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"><div className="flex items-center gap-2"><GripVertical className="h-4 w-4 text-[var(--text-muted)]" aria-hidden="true" /><span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-xs font-semibold text-[var(--text-muted)]">{index + 1}</span></div><ChainModelPicker value={step} providers={providersQuery.data?.providers ?? []} onChange={(next) => updateStep(step.id, next)} autoFocus={!isEdit && index === 0 && !step.model} /><div className="flex items-center justify-end gap-1"><button type="button" disabled={index === 0} onClick={() => moveStep(index, -1)} className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] disabled:cursor-not-allowed disabled:opacity-30" aria-label={`Move step ${index + 1} up`}><ArrowUp className="h-4 w-4" /></button><button type="button" disabled={index === steps.length - 1} onClick={() => moveStep(index, 1)} className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] disabled:cursor-not-allowed disabled:opacity-30" aria-label={`Move step ${index + 1} down`}><ArrowDown className="h-4 w-4" /></button><button type="button" disabled={steps.length === 1} onClick={() => removeStep(step.id)} className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)] disabled:cursor-not-allowed disabled:opacity-30" aria-label={`Remove step ${index + 1}`}><X className="h-4 w-4" /></button></div></div></div>; })}</div><Button variant="ghost" className="mt-3 w-full border-dashed" onClick={() => { setSteps((current) => [...current, makeDraftStep()]); setDirty(true); }}><Plus className="h-4 w-4" />Add model</Button></Card>
