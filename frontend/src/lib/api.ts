@@ -173,14 +173,6 @@ export interface MarketPricingSettings {
   last_synced_count: number;
 }
 
-export interface MarketBinding {
-  tenant_id: string;
-  provider_id: string;
-  model_id: string;
-  market_slug: string;
-  updated_at: string;
-}
-
 export interface ProviderRoutingSettings {
   routing_strategy: "inherit" | "fill-first" | "round-robin" | "smart-round-robin" | string;
   sticky_limit: number;
@@ -1747,11 +1739,6 @@ export const api = {
   updateMarketPricingSettings: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_minutes" | "markup_percent">>) =>
     request<MarketPricingSettings>("PATCH", "/market-pricing/settings", patch),
   refreshMarketPrices: () => request<{ synced: number; last_fetched_at: string }>("POST", "/market-pricing/refresh", {}),
-  listMarketBindings: () => request<{ bindings: MarketBinding[] }>("GET", "/market-pricing/bindings"),
-  setMarketBinding: (provider: string, model: string, market_slug: string) =>
-    request<MarketBinding>("PUT", `/market-pricing/bindings/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`, { market_slug }),
-  deleteMarketBinding: (provider: string, model: string) =>
-    request<{ deleted: boolean }>("DELETE", `/market-pricing/bindings/${encodeURIComponent(provider)}/${encodeURIComponent(model)}`),
 
   testHeadroom: (body?: { url?: string; timeout_ms?: number }) =>
     request<HeadroomTestResult>("POST", "/settings/headroom-test", body ?? {}),
