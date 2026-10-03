@@ -200,3 +200,10 @@ payment:
     - { id: idr25k,  label: "Rp 25.000",  amount_idr: 25000 }
     - { id: idr50k,  label: "Rp 50.000",  amount_idr: 50000 }
     - { id: idr100k, label: "Rp 100.000", amount_idr: 100000 }
+
+# Cloudflare Turnstile bot protection for dashboard login, portal sign-in, and
+# portal top-up. Secret via env: KEIROUTER_TURNSTILE__SECRET_KEY.
+turnstile:
+  enabled: false
+  site_key: ""
+  # secret_key is set via KEIROUTER_TURNSTILE__SECRET_KEY, not in this file.

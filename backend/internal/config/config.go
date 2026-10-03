@@ -34,6 +34,7 @@ type Config struct {
 	Guardrails     GuardrailsConfig     `koanf:"guardrails"`
 	PortalSSO      PortalSSOConfig      `koanf:"portal_sso"`
 	Payment        PaymentConfig        `koanf:"payment"`
+	Turnstile      TurnstileConfig      `koanf:"turnstile"`
 }
 
 // DefaultMaxRequestBodyBytes is the default maximum size accepted for inbound
@@ -153,6 +154,17 @@ type PaymentPackage struct {
 	ID        string `koanf:"id"`
 	Label     string `koanf:"label"`
 	AmountIDR int64  `koanf:"amount_idr"`
+}
+
+// TurnstileConfig configures Cloudflare Turnstile bot protection for the
+// dashboard login, portal sign-in start, and portal top-up order creation. The
+// secret key is intended to come from the environment
+// (KEIROUTER_TURNSTILE__SECRET_KEY), never committed to YAML. The site key is
+// public and is exposed to the browser via /v1/portal/branding.
+type TurnstileConfig struct {
+	Enabled   bool   `koanf:"enabled"`
+	SiteKey   string `koanf:"site_key"`
+	SecretKey string `koanf:"secret_key"`
 }
 
 // CacheConfig configures the semantic response cache.
@@ -407,6 +419,9 @@ func Default() Config {
 			Enabled:    false,
 			SessionTTL: 24 * time.Hour,
 		},
+		Turnstile: TurnstileConfig{
+			Enabled: false,
+		},
 		Payment: PaymentConfig{
 			Enabled:               false,
 			Provider:              "sumopod",
@@ -553,6 +568,11 @@ func (c *Config) validate() error {
 		}
 		if c.PortalSSO.SessionTTL <= 0 {
 			c.PortalSSO.SessionTTL = 24 * time.Hour
+		}
+	}
+	if c.Turnstile.Enabled {
+		if strings.TrimSpace(c.Turnstile.SiteKey) == "" || strings.TrimSpace(c.Turnstile.SecretKey) == "" {
+			return errors.New("turnstile.enabled requires site_key and secret_key")
 		}
 	}
 	if c.Payment.Provider == "" {

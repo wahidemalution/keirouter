@@ -177,3 +177,24 @@ func TestPaymentConfigEnvOverride(t *testing.T) {
 		t.Fatalf("env override not applied: %+v", cfg.Payment)
 	}
 }
+
+func TestTurnstileValidation(t *testing.T) {
+	cfg := Default()
+	if cfg.Turnstile.Enabled {
+		t.Fatal("turnstile must default disabled")
+	}
+	// Enabled without keys must fail.
+	cfg = Default()
+	cfg.Turnstile.Enabled = true
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error when enabled without keys")
+	}
+	// Enabled with both keys must pass.
+	cfg = Default()
+	cfg.Turnstile.Enabled = true
+	cfg.Turnstile.SiteKey = "1x00000000000000000000AA"
+	cfg.Turnstile.SecretKey = "1x0000000000000000000000000000000AA"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
