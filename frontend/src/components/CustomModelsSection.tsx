@@ -295,7 +295,7 @@ function CustomModelCell({
     },
     onError: (e) => toast.error("Market slug save failed", e.message),
   });
-  const slugUnchanged = slug === marketSlug;
+  const slugUnchanged = slug.trim() === marketSlug.trim();
 
   const handleCopy = () => {
     navigator.clipboard.writeText(fullModel);
