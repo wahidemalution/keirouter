@@ -64,7 +64,11 @@ func (s *Server) handleSumopodWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	order, err := s.db.PaymentOrders().GetByProviderPaymentID(r.Context(), "sumopod", ev.Data.PaymentID)
+	provider := p.Provider
+	if provider == "" {
+		provider = "sumopod"
+	}
+	order, err := s.db.PaymentOrders().GetByProviderPaymentID(r.Context(), provider, ev.Data.PaymentID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
