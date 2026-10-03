@@ -87,7 +87,11 @@ func (s *Server) adminApprovePaymentOrder(w http.ResponseWriter, r *http.Request
 	}
 	updated, budget, applied, err := s.creditPaymentOrder(r.Context(), order, store.PaymentManual, "dashboard", reason)
 	if err != nil {
-		writeError(w, http.StatusConflict, sanitizeError(s.log, err, "cannot approve order"))
+		if errors.Is(err, ErrKeyDisabled) {
+			writeError(w, http.StatusConflict, "order key is disabled")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	if !applied {

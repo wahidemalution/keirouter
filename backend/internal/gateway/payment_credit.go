@@ -10,6 +10,10 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
+// ErrKeyDisabled is returned when a payment order's key is disabled, so callers
+// can distinguish a fail-closed conflict from a real internal fault.
+var ErrKeyDisabled = errors.New("payment: key is disabled")
+
 // creditPaymentOrder applies an order's stored credit to its key exactly once.
 // It is the single guarded path used by both the webhook and admin manual
 // approval: it conditionally transitions the order away from pending and
@@ -28,7 +32,7 @@ func (s *Server) creditPaymentOrder(ctx context.Context, order store.PaymentOrde
 		return store.PaymentOrder{}, store.Budget{}, false, fmt.Errorf("payment: load key: %w", err)
 	}
 	if key.Disabled {
-		return store.PaymentOrder{}, store.Budget{}, false, errors.New("payment: key is disabled")
+		return store.PaymentOrder{}, store.Budget{}, false, ErrKeyDisabled
 	}
 
 	tx, err := s.db.SQL().BeginTx(ctx, nil)
