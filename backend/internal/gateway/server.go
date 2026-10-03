@@ -359,6 +359,9 @@ func (s *Server) routes() chi.Router {
 		r.Post("/portal/auth/logout", s.handlePortalLogout)
 	})
 
+	// Payment gateway webhook: authenticated by signature/token, not by session.
+	r.Post("/webhooks/sumopod", s.handleSumopodWebhook)
+
 	// Public landing API: read-only aggregates, no auth, per-IP limited.
 	r.Group(func(r chi.Router) {
 		r.Use(s.publicRateLimiter)
