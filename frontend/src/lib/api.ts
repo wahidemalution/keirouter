@@ -107,6 +107,8 @@ export interface BrandingSettings {
   tagline: string;
   color_palette: string;
   api_key_prefix: string;
+  turnstile_enabled?: boolean;
+  turnstile_site_key?: string;
 }
 
 export interface LandingNotification {
@@ -1478,6 +1480,7 @@ export async function createTopupOrder(input: {
   amount_idr?: number;
   package_id?: string;
   idempotency_key?: string;
+  turnstile_token?: string;
 }): Promise<PaymentOrder> {
   const resp = await fetch("/portal/api/topup/orders", {
     method: "POST",
@@ -1508,11 +1511,11 @@ export async function fetchPortalTopupOrder(id: string): Promise<PaymentOrder> {
 export const api = {
   // Auth (no session required for status/login/logout).
   authStatus: () => request<AuthStatus>("GET", "/auth/status"),
-  login: (password: string) =>
+  login: (password: string, turnstileToken?: string) =>
     request<{ ok: boolean; using_default: boolean; onboarding_complete: boolean }>(
       "POST",
       "/auth/login",
-      { password },
+      { password, ...(turnstileToken ? { turnstile_token: turnstileToken } : {}) },
     ),
   logout: () => request<{ ok: boolean }>("POST", "/auth/logout"),
   changePassword: (newPassword: string) =>
