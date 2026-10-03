@@ -39,6 +39,7 @@ export const routeLoaders = {
   "/provider-health": () => named(import("./pages/ProviderHealth"), "ProviderHealthPage"),
   "/bansos": () => named(import("./pages/Bansos"), "BansosPage"),
   "/portal-users": () => named(import("./pages/PortalUsers"), "PortalUsersPage"),
+  "/payments": () => named(import("./pages/Payments"), "PaymentsPage"),
   "/model": () => import("./pages/PublicModels").then((m) => ({ default: m.default })),
 } as const;
 
