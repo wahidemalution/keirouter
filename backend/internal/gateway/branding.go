@@ -132,12 +132,26 @@ func (s *Server) adminUpdateBranding(w http.ResponseWriter, r *http.Request) {
 
 // ---- public portal endpoint -------------------------------------------------
 
-// portalBranding returns branding config for the public portal (no auth).
-// This allows the portal to display the custom name and logo without requiring
-// a dashboard session.
+// portalBranding returns branding config for the public portal (no auth), plus
+// the public Turnstile site key when configured. The secret key is never
+// included.
 func (s *Server) portalBranding(w http.ResponseWriter, r *http.Request) {
 	bs := s.loadBrandingSettings(r.Context())
-	writeJSON(w, http.StatusOK, bs)
+	turnstileEnabled := s.turnstile != nil && s.turnstile.Enabled()
+	turnstileSiteKey := ""
+	if turnstileEnabled {
+		turnstileSiteKey = s.turnstile.SiteKey()
+	}
+	resp := struct {
+		BrandingSettings
+		TurnstileEnabled bool   `json:"turnstile_enabled"`
+		TurnstileSiteKey string `json:"turnstile_site_key"`
+	}{
+		BrandingSettings: bs,
+		TurnstileEnabled: turnstileEnabled,
+		TurnstileSiteKey: turnstileSiteKey,
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // LoadAPIKeyPrefix reads the persisted API key prefix from the settings store,

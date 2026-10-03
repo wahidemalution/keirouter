@@ -40,10 +40,19 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/transform"
 	"github.com/mydisha/keirouter/backend/internal/tunnel/cloudflare"
 	"github.com/mydisha/keirouter/backend/internal/tunnel/tailscale"
+	"github.com/mydisha/keirouter/backend/internal/turnstile"
 	"github.com/mydisha/keirouter/backend/internal/update"
 	"github.com/mydisha/keirouter/backend/internal/usagehub"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
+
+// turnstileVerifier is the behavior the gateway needs from Turnstile. It is an
+// interface so tests can substitute a fake and never call the network.
+type turnstileVerifier interface {
+	Enabled() bool
+	SiteKey() string
+	Verify(ctx context.Context, token, remoteIP string) error
+}
 
 // Server holds the gateway's dependencies and HTTP routes.
 type Server struct {
@@ -97,6 +106,7 @@ type Server struct {
 	probeRunner         *health.ProbeRunner
 	portalSSO           *portalauth.Service
 	paymentClient       *payment.Client
+	turnstile           turnstileVerifier
 	router              chi.Router
 }
 
@@ -232,6 +242,11 @@ func New(d Deps) *Server {
 	if s.paymentClient == nil && d.Config.Payment.Enabled {
 		s.paymentClient = payment.NewClient(d.Config.Payment.BaseURL, d.Config.Payment.APIKey)
 	}
+	s.turnstile = turnstile.New(turnstile.Config{
+		Enabled:   d.Config.Turnstile.Enabled,
+		SiteKey:   d.Config.Turnstile.SiteKey,
+		SecretKey: d.Config.Turnstile.SecretKey,
+	})
 	s.router = s.routes()
 	startSystemCollector(d.Resources)
 	return s
@@ -469,6 +484,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
+}
+
+// turnstileVerify enforces Turnstile when enabled. It returns true when the
+// request may proceed (protection disabled or token valid). On failure it writes
+// a 403 and returns false. Protection failures fail closed.
+func (s *Server) turnstileVerify(w http.ResponseWriter, r *http.Request, token string) bool {
+	if s.turnstile == nil || !s.turnstile.Enabled() {
+		return true
+	}
+	if err := s.turnstile.Verify(r.Context(), token, extractIP(r)); err != nil {
+		s.log.Warn("turnstile verification failed", "err", err)
+		writeError(w, http.StatusForbidden, "turnstile verification failed")
+		return false
+	}
+	return true
 }
 
 // writeError writes an OpenAI-style error envelope.

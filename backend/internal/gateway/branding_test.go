@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,4 +71,36 @@ func TestLoadBrandingFallsBackForInvalidStoredPrefix(t *testing.T) {
 func TestBrandingDefaultsKeyPrefix(t *testing.T) {
 	s, _ := newBrandingGateway(t)
 	require.Equal(t, "kr_", s.loadBrandingSettings(context.Background()).APIKeyPrefix)
+}
+
+type fakeTurnstile struct {
+	enabled bool
+	siteKey string
+	accept  bool
+	calls   int
+}
+
+func (f *fakeTurnstile) Enabled() bool   { return f.enabled }
+func (f *fakeTurnstile) SiteKey() string { return f.siteKey }
+func (f *fakeTurnstile) Verify(_ context.Context, token, _ string) error {
+	f.calls++
+	if f.accept {
+		return nil
+	}
+	return errFakeTurnstile
+}
+
+var errFakeTurnstile = errors.New("fake turnstile rejected")
+
+func TestPortalBrandingExposesTurnstile(t *testing.T) {
+	srv := newPortalTestServer(t)
+	srv.turnstile = &fakeTurnstile{enabled: true, siteKey: "site-abc"}
+	srv.cfg = config.Default()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/portal/branding", nil)
+	rec := httptest.NewRecorder()
+	srv.portalBranding(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"turnstile_enabled":true`)
+	require.Contains(t, rec.Body.String(), `"turnstile_site_key":"site-abc"`)
 }
