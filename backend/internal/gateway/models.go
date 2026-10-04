@@ -28,16 +28,17 @@ type modelEntry struct {
 	CapabilitySource capability.CapabilitySource `json:"capability_source,omitempty"`
 }
 
-// handleListModels reports targetable models: the tenant's chains (as virtual
-// models) plus every catalogued LLM model in provider/model form. This lets a
-// client discover what it can pass in the `model` field.
+// handleListModels reports the tenant's chains as virtual models only.
+// Underlying provider/model ids are intentionally hidden so API clients
+// discover just the routing targets the operator curates; anything else
+// (catalog models, custom provider models, live-discovered models) is not
+// advertised here.
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	key, _ := authedKey(r.Context())
 	tenantID := tenantOf(key)
 
-	data := make([]modelEntry, 0, 64)
-	seen := make(map[string]struct{}, 64)
-	usableProviders := s.usableModelProviders(r.Context(), tenantID)
+	data := make([]modelEntry, 0, 16)
+	seen := make(map[string]struct{}, 16)
 
 	// Chains are exposed as "combo" models, matching the upstream convention:
 	// a combo chains multiple providers with auto-fallback and is callable by
@@ -48,47 +49,6 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		for _, c := range chains {
 			data = appendModelEntry(data, seen, modelEntry{
 				ID: c.Name, Object: "model", OwnedBy: "combo", Kind: string(core.ServiceLLM), Name: c.Name,
-			})
-		}
-	}
-
-	// Static catalog models for providers the tenant has connected. Without this
-	// gate, discovery advertises provider/model ids that the dispatcher will later
-	// reject with "no accounts configured".
-	for _, pm := range connectors.ModelsByKind(core.ServiceLLM) {
-		if !usableProviders[pm.Provider] {
-			continue
-		}
-		caps, source := capabilityPayload(pm.Provider, pm.Model.ID, core.ServiceLLM)
-		data = appendModelEntry(data, seen, modelEntry{
-			ID:           pm.Provider + "/" + pm.Model.ID,
-			Object:       "model",
-			OwnedBy:      pm.Provider,
-			Provider:     pm.Provider,
-			Kind:         string(core.ServiceLLM),
-			Name:         pm.Model.Name,
-			Capabilities: &caps, CapabilitySource: source,
-		})
-	}
-
-	// Live model discovery: for providers with a LiveModelSource and connected
-	// accounts, fetch the live catalog and merge (live models supplement, not
-	// replace, the static catalog).
-	liveModels := s.fetchLiveModels(r.Context(), tenantID)
-	for provider, models := range liveModels {
-		if !usableProviders[provider] {
-			continue
-		}
-		for _, lm := range models {
-			caps, source := capabilityPayload(provider, lm.ID, lm.Kind)
-			data = appendModelEntry(data, seen, modelEntry{
-				ID:           provider + "/" + lm.ID,
-				Object:       "model",
-				OwnedBy:      provider,
-				Provider:     provider,
-				Kind:         string(lm.Kind),
-				Name:         lm.Name,
-				Capabilities: &caps, CapabilitySource: source,
 			})
 		}
 	}

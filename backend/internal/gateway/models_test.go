@@ -18,27 +18,6 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
 
-func TestListModelsOnlyShowsConnectedProviders(t *testing.T) {
-	gw, apiKey := newModelDiscoveryTestGateway(t, []store.Account{
-		modelDiscoveryAccount("acc-openai", "openai", false, false),
-		modelDiscoveryAccount("acc-anthropic-disabled", "anthropic", true, false),
-		modelDiscoveryAccount("acc-gemini-reconnect", "gemini", false, true),
-	})
-
-	body := getAuthedJSON(t, gw, apiKey, "/v1/models")
-	models := modelIDsFromResponse(t, body)
-
-	require.NotEmpty(t, models)
-	require.Contains(t, models, "openai/gpt-4o")
-	require.NotContains(t, models, "anthropic/claude-sonnet-4-20250514")
-	require.NotContains(t, models, "gemini/gemini-2.5-pro")
-	for _, id := range models {
-		if strings.Contains(id, "/") {
-			require.Truef(t, strings.HasPrefix(id, "openai/"), "unexpected unconnected provider model %q", id)
-		}
-	}
-}
-
 func TestListModelsByKindOnlyShowsConnectedProviders(t *testing.T) {
 	gw, apiKey := newModelDiscoveryTestGateway(t, []store.Account{
 		modelDiscoveryAccount("acc-openai", "openai", false, false),
