@@ -9,7 +9,7 @@ import { Cpu, Eye, EyeOff, Gift, Gauge, Copy, Check, Globe } from "lucide-react"
 import { fetchPublicBansos, fetchPublicBansosKey } from "../lib/publicApi";
 import { PublicLayout } from "../components/PublicLayout";
 
-const WA_URL = "https://wa.me/84826240052";
+const WA_URL = "https://wa.me/62";
 
 const fmtUSD = (n: number) => `$${n.toLocaleString("id-ID", { maximumFractionDigits: 4 })}`;
 

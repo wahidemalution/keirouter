@@ -16,7 +16,7 @@ import {
   ModelCard, ProviderFilterButton, MODEL_PAGE, fmtCount, fmtShort, buildProviders, resolveProvider,
 } from "../components/ModelCatalog";
 
-const WA_URL = "https://wa.me/84826240052";
+const WA_URL = "https://wa.me/62";
 
 function Metric({
   icon,
