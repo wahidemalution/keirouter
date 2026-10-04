@@ -182,6 +182,14 @@ func (s *Server) handlePortalClaim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to save claim")
 		return
 	}
+	// Rename the key to "portal:<email>" so the dashboard shows it as claimed.
+	// Best-effort: the binding above already succeeded, and the new name is
+	// guaranteed free because the same plaintext can only bind once.
+	if email != "" {
+		if err := s.db.APIKeys().SetName(r.Context(), key.ID, "portal:"+email); err != nil {
+			s.log.Warn("portal: failed to rename claimed key", "key_id", key.ID, "err", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key_id": key.ID})
 }
 

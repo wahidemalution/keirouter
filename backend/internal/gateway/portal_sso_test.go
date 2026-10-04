@@ -103,6 +103,11 @@ func TestPortalClaimBindsKeyAndRejectsSecondUser(t *testing.T) {
 	require.Equal(t, issued.Record.ID, u.KeyID)
 	require.NotEmpty(t, u.SealedKey.WrappedDEK, "claimed key plaintext must be sealed")
 	require.NotEmpty(t, u.SealedKey.Ciphertext, "claimed key plaintext must be sealed")
+
+	// The claimed key is renamed so the dashboard shows it as portal-claimed.
+	key, err := srv.identity.Get(ctx, issued.Record.ID)
+	require.NoError(t, err)
+	require.Equal(t, "portal:sub-1@example.com", key.Name)
 }
 
 // TestPortalClaimSealsKeyForReveal proves a claimed key can be revealed again,

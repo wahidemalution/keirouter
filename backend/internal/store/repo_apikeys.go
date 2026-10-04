@@ -109,6 +109,13 @@ func (r *APIKeyRepo) SetDisabled(ctx context.Context, id string, disabled bool) 
 	return err
 }
 
+// SetName renames a key.
+func (r *APIKeyRepo) SetName(ctx context.Context, id, name string) error {
+	q := r.db.rebind(`UPDATE api_keys SET name = ? WHERE id = ?`)
+	_, err := r.db.sql.ExecContext(ctx, q, name, id)
+	return err
+}
+
 // Delete removes a key.
 func (r *APIKeyRepo) Delete(ctx context.Context, id string) error {
 	q := r.db.rebind(`DELETE FROM api_keys WHERE id = ?`)
