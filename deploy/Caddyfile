@@ -1,0 +1,69 @@
+# KeiRouter — Caddy reverse proxy (install di HOST, bukan container).
+# Ganti DOMAIN, lalu:
+#   sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo caddy validate --config /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# TLS otomatis via Let's Encrypt (butuh port 80/443 + DNS A -> VPS).
+# Di belakang Cloudflare (proxy ON): pakai Origin CA agar tidak bentrok ACME,
+# lalu uncomment baris `tls` di bawah. Jangan aktifkan CF-only bila tanpa CF.
+{
+	# email admin@example.com
+}
+
+DOMAIN {
+	# tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+
+	encode zstd gzip
+
+	# Selaras KEIROUTER_SERVER__MAX_REQUEST_BODY_BYTES (default 128 MiB).
+	request_body {
+		max_size 128MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	# /metrics sudah loopback-only di aplikasi; di sini ditutup total.
+	handle /metrics {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:20180 {
+			# WAJIB: SSE stream token LLM tidak di-buffer.
+			flush_interval -1
+
+			transport http {
+				read_timeout 10m
+				write_timeout 30m
+				dial_timeout 10s
+				response_header_timeout 5m
+			}
+
+			# Pertahankan hostname publik (Caddy default ganti ke alamat
+			# upstream). Dipakai app untuk SSO/portal/kimchi callback.
+			header_up Host {host}
+			# Jangan set X-Forwarded-* manual — default Caddy sudah benar
+			# (menambah XFF; meneruskan X-Forwarded-Host/Proto).
+
+			# Opsi Cloudflare-only (defense in depth), JANGAN bila tanpa CF:
+			# @not_cf not header CF-Connecting-IP *
+			# respond @not_cf 403
+		}
+	}
+
+	log {
+		output file /var/log/caddy/keirouter.log {
+			roll_size 100mb
+			roll_keep 14
+		}
+		format json
+	}
+}
