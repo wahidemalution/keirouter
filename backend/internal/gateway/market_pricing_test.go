@@ -68,6 +68,10 @@ func TestMarketPricingSettingsRoundTrip(t *testing.T) {
 	rec = marketRequest(t, s, cookie, http.MethodPatch, "/api/market-pricing/settings", `{"markup_percent":25}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), `"markup_percent":25`)
+
+	rec = marketRequest(t, s, cookie, http.MethodPatch, "/api/market-pricing/settings", `{"refresh_interval_seconds":15}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"refresh_interval_seconds":15`)
 }
 
 func TestMarketPricingSettingsValidation(t *testing.T) {
@@ -79,7 +83,7 @@ func TestMarketPricingSettingsValidation(t *testing.T) {
 	}{
 		{"markup too high", `{"markup_percent":1001}`},
 		{"markup negative", `{"markup_percent":-1}`},
-		{"refresh too low", `{"refresh_interval_minutes":0}`},
+		{"refresh too low", `{"refresh_interval_seconds":0}`},
 	} {
 		rec := marketRequest(t, s, cookie, http.MethodPatch, "/api/market-pricing/settings", tc.body)
 		require.Equal(t, http.StatusBadRequest, rec.Code, tc.name+": "+rec.Body.String())

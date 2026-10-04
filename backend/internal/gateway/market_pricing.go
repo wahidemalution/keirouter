@@ -24,7 +24,7 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 	current := market.LoadSettings(r.Context(), s.settings.Get)
 	var patch struct {
 		AutoRefresh            *bool    `json:"auto_refresh"`
-		RefreshIntervalMinutes *int     `json:"refresh_interval_minutes"`
+		RefreshIntervalSeconds *int     `json:"refresh_interval_seconds"`
 		MarkupPercent          *float64 `json:"markup_percent"`
 	}
 	if !decodeJSON(w, r, &patch) {
@@ -33,12 +33,12 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 	if patch.AutoRefresh != nil {
 		current.AutoRefresh = *patch.AutoRefresh
 	}
-	if patch.RefreshIntervalMinutes != nil {
-		if *patch.RefreshIntervalMinutes < 1 {
-			writeError(w, http.StatusBadRequest, "refresh_interval_minutes must be at least 1")
+	if patch.RefreshIntervalSeconds != nil {
+		if *patch.RefreshIntervalSeconds < 1 {
+			writeError(w, http.StatusBadRequest, "refresh_interval_seconds must be at least 1")
 			return
 		}
-		current.RefreshIntervalMinutes = *patch.RefreshIntervalMinutes
+		current.RefreshIntervalSeconds = *patch.RefreshIntervalSeconds
 	}
 	if patch.MarkupPercent != nil {
 		v := *patch.MarkupPercent

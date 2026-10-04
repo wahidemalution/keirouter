@@ -59,7 +59,7 @@ func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
 // runMarketSync polls the market feed and refreshes chain prices on the
 // configured interval while auto-refresh is enabled.
 func (a *App) runMarketSync(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var lastRun time.Time
 	for {
@@ -71,7 +71,7 @@ func (a *App) runMarketSync(ctx context.Context) {
 			if !settings.AutoRefresh {
 				continue
 			}
-			interval := time.Duration(settings.RefreshIntervalMinutes) * time.Minute
+			interval := time.Duration(settings.RefreshIntervalSeconds) * time.Second
 			if time.Since(lastRun) < interval {
 				continue
 			}

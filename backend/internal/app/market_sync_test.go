@@ -49,7 +49,7 @@ func TestSyncChainMarketPricesWritesCheapest(t *testing.T) {
 	}
 
 	if err := market.SaveSettings(ctx, db.Settings().Set, market.Settings{
-		RefreshIntervalMinutes: 2, MarkupPercent: 0,
+		RefreshIntervalSeconds: 2, MarkupPercent: 0,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestSyncChainMarketPricesSkipsZeroAskButUpdatesValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := market.SaveSettings(ctx, db.Settings().Set, market.Settings{
-		RefreshIntervalMinutes: 2, MarkupPercent: 0,
+		RefreshIntervalSeconds: 2, MarkupPercent: 0,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -10,16 +10,16 @@ export function MarketPricingSection() {
   const toast = useToast();
   const settings = useQuery({ queryKey: ["market-pricing-settings"], queryFn: () => api.marketPricingSettings() });
   const [markup, setMarkup] = useState("");
-  const [intervalMin, setIntervalMin] = useState("");
+  const [intervalSec, setIntervalSec] = useState("");
   useEffect(() => {
     if (settings.data) {
       setMarkup(String(settings.data.markup_percent));
-      setIntervalMin(String(settings.data.refresh_interval_minutes));
+      setIntervalSec(String(settings.data.refresh_interval_seconds));
     }
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_minutes" | "markup_percent">>) =>
+    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent">>) =>
       api.updateMarketPricingSettings(patch),
     onSuccess: (data) => {
       qc.setQueryData(["market-pricing-settings"], data);
@@ -45,9 +45,9 @@ export function MarketPricingSection() {
   const markupTrim = markup.trim();
   const markupInvalid =
     markupTrim === "" || !Number.isFinite(Number(markup)) || Number(markup) < 0 || Number(markup) > 1000;
-  const intervalTrim = intervalMin.trim();
+  const intervalTrim = intervalSec.trim();
   const intervalInvalid =
-    intervalTrim === "" || !Number.isInteger(Number(intervalMin)) || Number(intervalMin) < 1;
+    intervalTrim === "" || !Number.isInteger(Number(intervalSec)) || Number(intervalSec) < 1;
 
   return (
     <div className="space-y-4">
@@ -84,12 +84,12 @@ export function MarketPricingSection() {
                   Added on top of the cheapest bound slug price.
                 </p>
               </Field>
-              <Field label="Refresh interval (minutes)">
+              <Field label="Refresh interval (seconds)">
                 <Input
                   type="number"
                   min={1}
-                  value={intervalMin}
-                  onChange={(e) => setIntervalMin(e.target.value)}
+                  value={intervalSec}
+                  onChange={(e) => setIntervalSec(e.target.value)}
                   className="w-24"
                 />
               </Field>
@@ -101,7 +101,7 @@ export function MarketPricingSection() {
               onClick={() =>
                 save.mutate({
                   markup_percent: Number(markup),
-                  refresh_interval_minutes: Number(intervalMin),
+                  refresh_interval_seconds: Number(intervalSec),
                 })
               }
               disabled={save.isPending || markupInvalid || intervalInvalid}

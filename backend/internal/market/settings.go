@@ -9,7 +9,7 @@ const SettingsKey = "market_pricing_settings"
 
 type Settings struct {
 	AutoRefresh            bool    `json:"auto_refresh"`
-	RefreshIntervalMinutes int     `json:"refresh_interval_minutes"`
+	RefreshIntervalSeconds int     `json:"refresh_interval_seconds"`
 	MarkupPercent          float64 `json:"markup_percent"`
 	LastFetchedAt          string  `json:"last_fetched_at"`
 	LastFetchError         string  `json:"last_fetch_error,omitempty"`
@@ -17,7 +17,7 @@ type Settings struct {
 }
 
 func DefaultSettings() Settings {
-	return Settings{AutoRefresh: false, RefreshIntervalMinutes: 2, MarkupPercent: 10}
+	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10}
 }
 
 func LoadSettings(ctx context.Context, get func(context.Context, string) (string, error)) Settings {
@@ -30,8 +30,8 @@ func LoadSettings(ctx context.Context, get func(context.Context, string) (string
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
 		return def
 	}
-	if s.RefreshIntervalMinutes <= 0 {
-		s.RefreshIntervalMinutes = def.RefreshIntervalMinutes
+	if s.RefreshIntervalSeconds <= 0 {
+		s.RefreshIntervalSeconds = def.RefreshIntervalSeconds
 	}
 	if s.MarkupPercent < 0 {
 		s.MarkupPercent = def.MarkupPercent
