@@ -7,7 +7,7 @@
 // Styling is scoped through `.landing-root` tokens only; this module never
 // imports lib/api.ts or the dashboard Layout.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, Boxes, Coins, Cpu } from "lucide-react";
 import { fetchPublicOverview, fetchPublicModels } from "../lib/publicApi";
@@ -17,6 +17,30 @@ import {
 } from "../components/ModelCatalog";
 
 const WA_URL = "https://wa.me/62";
+
+// Smoothly counts a displayed metric toward its latest value. Formatting stays
+// with the callers' fmt helpers; this only animates the raw number.
+function useCountUp(target: number, duration = 900): number {
+  const [display, setDisplay] = useState(target);
+  const displayRef = useRef(target);
+  const rafRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const from = displayRef.current;
+    if (target === from) return;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const value = from + (target - from) * eased;
+      displayRef.current = value;
+      setDisplay(value);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [target, duration]);
+  return display;
+}
 
 function Metric({
   icon,
@@ -58,6 +82,7 @@ export default function PublicLanding() {
     queryKey: ["public-overview"],
     queryFn: fetchPublicOverview,
     staleTime: 30_000,
+    refetchInterval: 5_000,
     retry: false,
   });
   const models = useQuery({
@@ -69,6 +94,8 @@ export default function PublicLanding() {
 
   const modelList = models.data ?? [];
   const overviewData = overview.data;
+  const requestsCount = useCountUp(overviewData?.total_requests ?? 0);
+  const tokensCount = useCountUp(overviewData?.total_tokens ?? 0);
   const [modelVisible, setModelVisible] = useState(MODEL_PAGE);
   const [providerFilter, setProviderFilter] = useState<string | null>(null);
 
@@ -111,13 +138,13 @@ export default function PublicLanding() {
           <Metric
             icon={<Activity className="h-5 w-5" />}
             label="Total Request"
-            value={fmtShort(overviewData?.total_requests ?? 0)}
+            value={fmtShort(requestsCount)}
             sub={<>Total request sepanjang waktu</>}
           />
           <Metric
             icon={<Coins className="h-5 w-5" />}
             label="Token"
-            value={fmtCount(overviewData?.total_tokens ?? 0)}
+            value={fmtCount(tokensCount)}
             hero
             sub={<>total sepanjang waktu</>}
           />
