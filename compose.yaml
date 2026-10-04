@@ -31,6 +31,7 @@ services:
       # SumoPod payment gateway (only when ENABLED=true). API key and webhook
       # secrets stay in the environment, never in the image or config.yaml.
       KEIROUTER_PAYMENT__ENABLED: ${KEIROUTER_PAYMENT__ENABLED:-false}
+      KEIROUTER_PAYMENT__BASE_URL: ${KEIROUTER_PAYMENT__BASE_URL:-https://api-pay-sandbox.sumopod.com}
       KEIROUTER_PAYMENT__API_KEY: ${KEIROUTER_PAYMENT__API_KEY:-}
       KEIROUTER_PAYMENT__WEBHOOK_SECRET: ${KEIROUTER_PAYMENT__WEBHOOK_SECRET:-}
       KEIROUTER_PAYMENT__WEBHOOK_TOKEN: ${KEIROUTER_PAYMENT__WEBHOOK_TOKEN:-}

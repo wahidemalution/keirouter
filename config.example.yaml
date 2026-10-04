@@ -187,6 +187,9 @@ portal_sso:
 # SumoPod payment gateway for portal credit top-ups. Secrets via env:
 # KEIROUTER_PAYMENT__API_KEY, KEIROUTER_PAYMENT__WEBHOOK_SECRET,
 # KEIROUTER_PAYMENT__WEBHOOK_TOKEN.
+# base_url can also be overridden via KEIROUTER_PAYMENT__BASE_URL: use
+# https://api-pay-sandbox.sumopod.com for sandbox (default) or
+# https://api-pay.sumopod.com for production.
 payment:
   enabled: false
   provider: sumopod

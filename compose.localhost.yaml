@@ -53,6 +53,7 @@ services:
       # enabled without it. Webhook auth: set either the Svix secret, the token,
       # or both (both set -> both must pass); empty -> webhook 503.
       KEIROUTER_PAYMENT__ENABLED: ${KEIROUTER_PAYMENT__ENABLED:-false}
+      KEIROUTER_PAYMENT__BASE_URL: ${KEIROUTER_PAYMENT__BASE_URL:-https://api-pay-sandbox.sumopod.com}
       KEIROUTER_PAYMENT__API_KEY: ${KEIROUTER_PAYMENT__API_KEY:-}
       KEIROUTER_PAYMENT__WEBHOOK_SECRET: ${KEIROUTER_PAYMENT__WEBHOOK_SECRET:-}
       KEIROUTER_PAYMENT__WEBHOOK_TOKEN: ${KEIROUTER_PAYMENT__WEBHOOK_TOKEN:-}
