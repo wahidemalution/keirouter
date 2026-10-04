@@ -151,16 +151,28 @@ func (s *Server) handlePortalClaim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "api_key is required")
 		return
 	}
-	key, err := s.identity.Authenticate(r.Context(), strings.TrimSpace(body.APIKey))
+	plaintext := strings.TrimSpace(body.APIKey)
+	key, err := s.identity.Authenticate(r.Context(), plaintext)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid api key")
 		return
 	}
 	email, _ := s.auth.SessionEmail(portalSessionToken(r))
+	// Seal the presented plaintext so the owner can reveal the claimed key
+	// again on /portal/key, matching portal-provisioned keys. Without this the
+	// binding is masked-only.
+	sealed := crypto.Sealed{}
+	if s.vault != nil {
+		if sealed, err = s.vault.Sealer().SealString(plaintext); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to secure claim")
+			return
+		}
+	}
 	u := store.PortalUser{
 		GoogleSub: portalGoogleSub(sub),
 		Email:     email,
 		KeyID:     key.ID,
+		SealedKey: sealed,
 	}
 	if err := s.db.PortalUsers().Upsert(r.Context(), u); err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {

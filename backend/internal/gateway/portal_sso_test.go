@@ -101,6 +101,46 @@ func TestPortalClaimBindsKeyAndRejectsSecondUser(t *testing.T) {
 	u, err := srv.db.PortalUsers().GetBySub(ctx, "sub-1")
 	require.NoError(t, err)
 	require.Equal(t, issued.Record.ID, u.KeyID)
+	require.NotEmpty(t, u.SealedKey.WrappedDEK, "claimed key plaintext must be sealed")
+	require.NotEmpty(t, u.SealedKey.Ciphertext, "claimed key plaintext must be sealed")
+}
+
+// TestPortalClaimSealsKeyForReveal proves a claimed key can be revealed again,
+// matching portal-provisioned keys.
+func TestPortalClaimSealsKeyForReveal(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+	issued, err := srv.identity.Create(ctx, store.DefaultTenantID, "", "portal-key")
+	require.NoError(t, err)
+
+	tok, err := srv.auth.IssuePortalSession("portal:sub-claim", "c@example.com")
+	require.NoError(t, err)
+	claimReq := httptest.NewRequest(http.MethodPost, "/portal/auth/claim",
+		strings.NewReader(`{"api_key":"`+issued.Plaintext+`"}`))
+	claimReq.AddCookie(&http.Cookie{Name: portalSessionCookie, Value: tok})
+	claimRec := httptest.NewRecorder()
+	srv.handlePortalClaim(claimRec, claimReq)
+	require.Equal(t, http.StatusOK, claimRec.Code)
+
+	// Metadata reports the claimed key is revealable.
+	keyRec := httptest.NewRecorder()
+	keyReq := httptest.NewRequest(http.MethodGet, "/portal/api/key", nil)
+	keyReq.AddCookie(&http.Cookie{Name: portalSessionCookie, Value: tok})
+	srv.handlePortalKey(keyRec, keyReq)
+	require.Equal(t, http.StatusOK, keyRec.Code)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(keyRec.Body.Bytes(), &meta))
+	require.Equal(t, true, meta["revealable"])
+
+	// Reveal returns the original plaintext.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/portal/api/key/reveal", nil)
+	req.AddCookie(&http.Cookie{Name: portalSessionCookie, Value: tok})
+	srv.handlePortalKeyReveal(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	require.Equal(t, issued.Plaintext, out["key"])
 }
 
 func TestPortalSessionRejectedByAdminMiddleware(t *testing.T) {
