@@ -25,6 +25,7 @@ const TABS = [
 
 const BELL_D = "M6 17h12l-1.5-3V9a4.5 4.5 0 0 0-9 0v5L6 17Zm4 3h4";
 const THEME_D = "M20 13A8 8 0 0 1 11 4a7 7 0 1 0 9 9Z";
+const USER_D = "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 8a8 8 0 0 1 16 0";
 
 function UiIcon({ d, size = 20 }: { d: string; size?: number }) {
   return (
@@ -108,6 +109,19 @@ function ThemeButton({ theme, onToggle }: { theme: Theme; onToggle: () => void }
   );
 }
 
+function AccountButton() {
+  return (
+    <a
+      href="/portal"
+      title="Masuk / Akun"
+      aria-label="Masuk portal"
+      className="flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--line)] text-[var(--green)] no-underline transition-colors hover:bg-[var(--soft)]"
+    >
+      <UiIcon d={USER_D} />
+    </a>
+  );
+}
+
 function TabLink({
   tab,
   active,
@@ -171,6 +185,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         </div>
         <AnnouncementButton onClick={() => setAnnouncementOpen((v) => !v)} />
         <ThemeButton theme={theme} onToggle={toggleTheme} />
+        <AccountButton />
       </nav>
 
       {/* Mobile: top bar + fixed bottom dock. */}
@@ -179,6 +194,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-2">
           <AnnouncementButton onClick={() => setAnnouncementOpen((v) => !v)} />
           <ThemeButton theme={theme} onToggle={toggleTheme} />
+          <AccountButton />
         </div>
       </header>
       <nav
