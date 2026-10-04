@@ -19,7 +19,7 @@ import (
 type modelEntry struct {
 	ID               string                      `json:"id"`
 	Object           string                      `json:"object"`
-	OwnedBy          string                      `json:"owned_by"`
+	OwnedBy          string                      `json:"owned_by,omitempty"`
 	Provider         string                      `json:"provider,omitempty"`
 	Kind             string                      `json:"kind,omitempty"`
 	Name             string                      `json:"name,omitempty"`
@@ -40,15 +40,13 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	data := make([]modelEntry, 0, 16)
 	seen := make(map[string]struct{}, 16)
 
-	// Chains are exposed as "combo" models, matching the upstream convention:
-	// a combo chains multiple providers with auto-fallback and is callable by
-	// its bare name (and via the chain: prefix). owned_by:"combo" lets client
-	// tools surface them distinctly from single-provider models.
+	// Chains are exposed as virtual models callable by their bare name (and
+	// via the chain: prefix).
 	chains, err := s.chains.ListByTenant(r.Context(), tenantID)
 	if err == nil {
 		for _, c := range chains {
 			data = appendModelEntry(data, seen, modelEntry{
-				ID: c.Name, Object: "model", OwnedBy: "combo", Kind: string(core.ServiceLLM), Name: c.Name,
+				ID: c.Name, Object: "model", Kind: string(core.ServiceLLM), Name: c.Name,
 			})
 		}
 	}
