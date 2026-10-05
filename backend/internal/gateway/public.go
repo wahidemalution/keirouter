@@ -82,12 +82,16 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			price, _ := connectors.ModelPriceByProviderModel(first.Provider, first.Model)
 			inputPerM, outputPerM, cachedPerM, cacheWritePerM = price.InputPerM, price.OutputPerM, price.CachedInputPerM, price.CacheWritePerM
 		}
+		provider, providerID := "combo", "combo"
+		if c.DisplayProvider != "" {
+			provider, providerID = c.DisplayProvider, c.DisplayProvider
+		}
 		u := usage[c.ID]
 		rows = append(rows, publicModelRow{
 			Name:        c.Name,
 			ModelID:     c.Name,
-			Provider:    "combo",
-			ProviderID:  "combo",
+			Provider:    provider,
+			ProviderID:  providerID,
 			CapProvider: first.Provider,
 			CapModel:    first.Model,
 			InputPerM:   inputPerM,

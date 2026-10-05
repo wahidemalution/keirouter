@@ -426,6 +426,47 @@ func TestPublicRateLimitReturns429(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, last, "must exceed the per-IP budget within 100 requests")
 }
 
+func TestPublicModelsUsesChainDisplayProvider(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "c1", TenantID: adminTenant, Name: "deepseek-flash", Strategy: "priority",
+		DisplayProvider: "deepseek",
+		Steps: []store.ChainStep{{ID: "s1", ChainID: "c1", Position: 0,
+			Provider: "custom-openai-x", Model: "nuta/deepseek-v4.1-flash"}},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "c2", TenantID: adminTenant, Name: "unlabeled", Strategy: "priority",
+		Steps: []store.ChainStep{{ID: "s2", ChainID: "c2", Position: 0,
+			Provider: "custom-openai-x", Model: "some-model"}},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/public/models", nil)
+	gw.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var payload struct {
+		Models []struct {
+			Name       string `json:"name"`
+			Provider   string `json:"provider"`
+			ProviderID string `json:"provider_id"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	byName := map[string]struct{ Provider, ProviderID string }{}
+	for _, m := range payload.Models {
+		byName[m.Name] = struct{ Provider, ProviderID string }{m.Provider, m.ProviderID}
+	}
+	require.Equal(t, "deepseek", byName["deepseek-flash"].Provider)
+	require.Equal(t, "deepseek", byName["deepseek-flash"].ProviderID)
+	require.Equal(t, "combo", byName["unlabeled"].Provider)
+	require.Equal(t, "combo", byName["unlabeled"].ProviderID)
+}
+
 func newPublicTestGateway(t *testing.T) *Server {
 	t.Helper()
 	_, gw := newPublicTestGatewayWithDB(t)
