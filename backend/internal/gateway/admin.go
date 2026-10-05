@@ -164,6 +164,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	s.mountKiro(r)
 	s.mountCustomFlows(r)
 	s.mountCustomProviders(r)
+	s.mountProviderCategories(r)
 
 	s.mountCLITools(r)
 
@@ -1855,7 +1856,8 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 			"id": c.ID, "name": c.Name, "strategy": c.Strategy, "steps": steps,
 			"input_per_m": c.InputPerM, "output_per_m": c.OutputPerM,
 			"cache_write_per_m": c.CacheWritePerM, "cache_read_per_m": c.CacheReadPerM,
-			"market_slugs": marketSlugsJSON(c.MarketSlugs),
+			"market_slugs":     marketSlugsJSON(c.MarketSlugs),
+			"display_provider": c.DisplayProvider,
 		}
 		if c.FallbackProvider != "" && c.FallbackModel != "" {
 			entry["fallback_provider"] = c.FallbackProvider
@@ -1872,6 +1874,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		Strategy         string   `json:"strategy"`
 		FallbackProvider string   `json:"fallback_provider"`
 		FallbackModel    string   `json:"fallback_model"`
+		DisplayProvider  string   `json:"display_provider"`
 		InputPerM        float64  `json:"input_per_m"`
 		OutputPerM       float64  `json:"output_per_m"`
 		CacheWritePerM   float64  `json:"cache_write_per_m"`
@@ -1925,6 +1928,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		Strategy:         defaultStr(body.Strategy, "priority"),
 		FallbackProvider: body.FallbackProvider,
 		FallbackModel:    body.FallbackModel,
+		DisplayProvider:  body.DisplayProvider,
 		InputPerM:        body.InputPerM,
 		OutputPerM:       body.OutputPerM,
 		CacheWritePerM:   body.CacheWritePerM,
@@ -1971,6 +1975,7 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		Strategy         *string   `json:"strategy"`
 		FallbackProvider *string   `json:"fallback_provider"`
 		FallbackModel    *string   `json:"fallback_model"`
+		DisplayProvider  *string   `json:"display_provider"`
 		InputPerM        *float64  `json:"input_per_m"`
 		OutputPerM       *float64  `json:"output_per_m"`
 		CacheWritePerM   *float64  `json:"cache_write_per_m"`
@@ -2000,6 +2005,9 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.FallbackModel != nil {
 		existing.FallbackModel = *body.FallbackModel
+	}
+	if body.DisplayProvider != nil {
+		existing.DisplayProvider = *body.DisplayProvider
 	}
 	if body.MarketSlugs != nil {
 		existing.MarketSlugs = *body.MarketSlugs
