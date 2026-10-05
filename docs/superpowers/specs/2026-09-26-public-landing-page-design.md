@@ -100,6 +100,9 @@ Design rules (binding):
 `GET /v1/public/models`
 - Catalog = operator-defined routing chains only; each entry is one chain
   (provider `combo`).
+
+> Update (2026-10-05): the provider category shown per model is operator-chosen
+> per chain (`display_provider`), not derived from the model name.
 - Each: `name`, `model_id`, `provider` (display name), `input_per_m`,
   `output_per_m`, `discount_pct` (computed from list vs. effective rate when
   both known; omitted otherwise), `capabilities` (vision/reasoning/tools/…),

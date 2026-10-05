@@ -33,6 +33,10 @@ Non-goals:
 1. **Entry identity = chain.** Display name is the chain `name`; provider label
    is `combo`, provider id `combo` (mirrors the existing `/v1/models` combo
    convention, `models.go:42-52`).
+
+   > Superseded (2026-10-05): the provider label/id is now the chain's operator-
+   > chosen `display_provider` when set, falling back to `combo` when empty. See
+   > `2026-10-05-chain-display-provider-design.md`.
 2. **Price = first step's catalog price.** The first (lowest-position) step's
    resolved `(provider, model)` supplies `ModelPriceByProviderModel`. If the
    model is untracked (e.g. a custom provider), price is `0/0` — same as the
