@@ -38,11 +38,14 @@ export function ChainEditorPage() {
   const queryClient = useQueryClient();
   const chainsQuery = useQuery({ queryKey: ["chains"], queryFn: () => api.listChains() });
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), staleTime: 300_000 });
+  const categoriesQuery = useQuery({ queryKey: ["provider-categories"], queryFn: () => api.listProviderCategories(), staleTime: 300_000 });
   const existing = (chainsQuery.data?.chains ?? []).find((chain) => chain.id === id);
   const [hydrated, setHydrated] = useState(!isEdit);
   const [dirty, setDirty] = useState(false);
   const [confirmExit, setConfirmExit] = useState(false);
   const [name, setName] = useState("");
+  const [displayProvider, setDisplayProvider] = useState("");
+  const [newProviderOpen, setNewProviderOpen] = useState(false);
   const [strategy, setStrategy] = useState<ChainStrategy>("priority");
   const [steps, setSteps] = useState<DraftChainStep[]>(() => [makeDraftStep()]);
   const [fallbackEnabled, setFallbackEnabled] = useState(false);
@@ -56,6 +59,7 @@ export function ChainEditorPage() {
   useEffect(() => {
     if (!existing || hydrated) return;
     setName(existing.name);
+    setDisplayProvider(existing.display_provider ?? "");
     setStrategy(normalizeChainStrategy(existing.strategy));
     setSteps(toDraftSteps(existing));
     setFallbackEnabled(Boolean(existing.fallback_provider && existing.fallback_model));
@@ -84,7 +88,7 @@ export function ChainEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" };
+      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider };
       return isEdit ? api.updateChain(id!, payload) : api.createChain(payload);
     },
     onSuccess: () => {
@@ -130,6 +134,27 @@ export function ChainEditorPage() {
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
       <div className="space-y-5">
         <Card className="p-5 sm:p-6"><Field label="Chain name"><Input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} placeholder="production-fallback" className="font-mono" data-modal-autofocus /><p className={`text-xs ${name && !isValidChainName(name) ? "text-[color:var(--color-danger)]" : "text-[var(--text-muted)]"}`}>Use as <span className="font-mono">chain:{name || "your-chain"}</span> or the bare name as a model target.</p></Field></Card>
+        <Card className="p-5 sm:p-6">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold">Display provider</h2>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">The vendor category shown on the public model page. Leave as combo to use the default label.</p>
+            </div>
+            <Button variant="ghost" type="button" onClick={() => setNewProviderOpen(true)}><Plus className="h-4 w-4" />Add provider</Button>
+          </div>
+          <Field label="Provider">
+            <select
+              value={displayProvider}
+              onChange={(event) => { setDisplayProvider(event.target.value); setDirty(true); }}
+              className="min-h-10 w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 text-sm"
+            >
+              <option value="">combo (default)</option>
+              {(categoriesQuery.data?.categories ?? []).map((c) => (
+                <option key={c.id} value={c.id}>{c.label}</option>
+              ))}
+            </select>
+          </Field>
+        </Card>
         <Card className="p-5 sm:p-6"><div className="mb-3"><h2 className="text-base font-semibold">Routing strategy</h2><p className="mt-1 text-sm text-[var(--text-muted)]">Choose how KeiRouter decides which route step starts first.</p></div><div className="grid gap-2 sm:grid-cols-2"><div className="grid grid-cols-2 gap-2 sm:col-span-2 lg:grid-cols-4">{strategyOptions.map((option) => { const Icon = option.icon; const selected = strategy === option.value; return <button key={option.value} type="button" onClick={() => { setStrategy(option.value); setDirty(true); }} className={`flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40 ${selected ? "border-accent-500 bg-accent-500/10 text-accent-700 dark:text-accent-200" : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text)]"}`}><Icon className="h-4 w-4" />{option.label}</button>; })}</div><p className="sm:col-span-2 text-sm leading-6 text-[var(--text-muted)]">{strategyDescription(strategy)}</p></div></Card>
         <Card className="p-5 sm:p-6">
           <div className="mb-3">
@@ -167,5 +192,42 @@ export function ChainEditorPage() {
       <aside className="xl:sticky xl:top-5"><Card className="p-5"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Route summary</p><div className="mt-3"><p className="truncate font-mono text-base font-semibold">chain:{name || "your-chain"}</p><p className="mt-1 text-sm text-[var(--text-muted)]">{strategyLabel(strategy)} · {completeSteps.length} configured model{completeSteps.length === 1 ? "" : "s"}</p></div><div className="my-5 border-t border-[var(--border)]" /><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Effective route</p><ChainRoutePreview chain={routeChain} providers={providersQuery.data?.providers ?? []} /><div className="mt-5 rounded-lg bg-[var(--bg-subtle)] px-3 py-2.5 text-xs leading-5 text-[var(--text-muted)]">{strategyDescription(strategy)}</div>{validationMessage && <p className="mt-4 flex gap-2 text-xs leading-5 text-[color:var(--color-warning)]"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{validationMessage}</p>}</Card></aside>
     </div>
     <Modal open={confirmExit} onClose={() => setConfirmExit(false)} title="Discard unsaved changes" subtitle="Your route edits have not been saved."><div className="flex justify-end gap-2 px-6 py-4"><Button variant="ghost" onClick={() => setConfirmExit(false)}>Keep editing</Button><Button variant="danger" onClick={() => navigate(dashboard("/chains"))}>Discard changes</Button></div></Modal>
+    <NewProviderCategoryModal
+      open={newProviderOpen}
+      onClose={() => setNewProviderOpen(false)}
+      onCreated={(id) => { setDisplayProvider(id); setDirty(true); setNewProviderOpen(false); }}
+    />
   </>;
+}
+
+function NewProviderCategoryModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id: string) => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [label, setLabel] = useState("");
+  const [error, setError] = useState("");
+  const create = useMutation({
+    mutationFn: () => api.createProviderCategory({ label: label.trim() }),
+    onSuccess: (cat) => {
+      qc.invalidateQueries({ queryKey: ["provider-categories"] });
+      toast.success("Provider added", `${cat.label} is ready to use.`);
+      setLabel(""); setError("");
+      onCreated(cat.id);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  const canSubmit = label.trim().length > 0 && !create.isPending;
+  return (
+    <Modal open={open} onClose={() => { setLabel(""); setError(""); onClose(); }} title="New display provider" subtitle="A label for the public model page filter. The id is derived from the name.">
+      <form className="space-y-4 px-6 py-5" onSubmit={(e) => { e.preventDefault(); if (canSubmit) create.mutate(); }}>
+        <Field label="Name">
+          <Input value={label} onChange={(e) => { setLabel(e.target.value); setError(""); }} placeholder="e.g. DeepSeek" autoFocus />
+        </Field>
+        {error && <p className="text-sm text-[color:var(--color-danger)]">{error}</p>}
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <Button type="button" variant="ghost" onClick={() => { setLabel(""); setError(""); onClose(); }}>Cancel</Button>
+          <Button type="submit" disabled={!canSubmit}>{create.isPending ? "Adding…" : "Add provider"}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
