@@ -69,6 +69,16 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Operator-chosen display providers carry a human label distinct from the
+	// slug id; map id -> label so the catalog shows "Google", not "google".
+	cats, err := s.db.ProviderCategories().List(ctx, adminTenant)
+	if err != nil {
+		return nil, err
+	}
+	labels := make(map[string]string, len(cats))
+	for _, c := range cats {
+		labels[c.ID] = c.Label
+	}
 	rows := make([]publicModelRow, 0, len(chains))
 	for _, c := range chains {
 		if len(c.Steps) == 0 {
@@ -85,6 +95,9 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 		provider, providerID := "combo", "combo"
 		if c.DisplayProvider != "" {
 			provider, providerID = c.DisplayProvider, c.DisplayProvider
+			if label, ok := labels[c.DisplayProvider]; ok && label != "" {
+				provider = label
+			}
 		}
 		u := usage[c.ID]
 		rows = append(rows, publicModelRow{

@@ -443,6 +443,10 @@ func TestPublicModelsUsesChainDisplayProvider(t *testing.T) {
 			Provider: "custom-openai-x", Model: "some-model"}},
 		CreatedAt: now, UpdatedAt: now,
 	}))
+	require.NoError(t, db.ProviderCategories().Create(ctx, store.ProviderCategory{
+		ID: "deepseek", TenantID: adminTenant, Label: "DeepSeek",
+		CreatedAt: now, UpdatedAt: now,
+	}))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/public/models", nil)
@@ -461,7 +465,7 @@ func TestPublicModelsUsesChainDisplayProvider(t *testing.T) {
 	for _, m := range payload.Models {
 		byName[m.Name] = struct{ Provider, ProviderID string }{m.Provider, m.ProviderID}
 	}
-	require.Equal(t, "deepseek", byName["deepseek-flash"].Provider)
+	require.Equal(t, "DeepSeek", byName["deepseek-flash"].Provider)
 	require.Equal(t, "deepseek", byName["deepseek-flash"].ProviderID)
 	require.Equal(t, "combo", byName["unlabeled"].Provider)
 	require.Equal(t, "combo", byName["unlabeled"].ProviderID)
