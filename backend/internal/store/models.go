@@ -130,6 +130,9 @@ type Chain struct {
 	Strategy         string
 	FallbackProvider string
 	FallbackModel    string
+	// DisplayProvider is the operator-chosen category shown in the public model
+	// catalog. Empty means the legacy "combo" sentinel.
+	DisplayProvider string
 	// Operator price for the chain model. All zero = fall back to catalog.
 	InputPerM      float64
 	OutputPerM     float64
@@ -149,6 +152,16 @@ type ChainStep struct {
 	Provider  string
 	Model     string
 	CreatedAt time.Time
+}
+
+// ProviderCategory is an operator-managed display provider label used by the
+// public model catalog. ID is the slug sent as provider_id.
+type ProviderCategory struct {
+	ID        string
+	TenantID  string
+	Label     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // UsageRecord is the terminal accounting fact for one inbound request.

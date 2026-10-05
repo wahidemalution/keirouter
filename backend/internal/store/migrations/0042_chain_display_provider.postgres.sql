@@ -1,0 +1,1 @@
+ALTER TABLE chains ADD COLUMN IF NOT EXISTS display_provider TEXT NOT NULL DEFAULT '';
