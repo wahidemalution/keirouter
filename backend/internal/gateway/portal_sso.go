@@ -157,6 +157,12 @@ func (s *Server) handlePortalClaim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid api key")
 		return
 	}
+	// The bansos key is a shared public key whose plaintext anyone can reveal;
+	// it must never be bound to a single account.
+	if key.ID == s.bansosKeyID(r.Context()) {
+		writeError(w, http.StatusForbidden, "the bansos key cannot be claimed")
+		return
+	}
 	email, _ := s.auth.SessionEmail(portalSessionToken(r))
 	// Seal the presented plaintext so the owner can reveal the claimed key
 	// again on /portal/key, matching portal-provisioned keys. Without this the

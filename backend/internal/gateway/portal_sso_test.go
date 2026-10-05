@@ -74,6 +74,34 @@ func TestPortalClaimRejectsBadKey(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestPortalClaimRejectsBansosKey(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+
+	// Configure a bansos whose plaintext is publicly revealable while active.
+	issued, err := srv.identity.Create(ctx, store.DefaultTenantID, "", "bansos")
+	require.NoError(t, err)
+	sealed, err := srv.vault.Sealer().SealString(issued.Plaintext)
+	require.NoError(t, err)
+	require.NoError(t, srv.saveBansos(ctx, bansosConfig{
+		KeyID: issued.Record.ID, Active: true, Mode: bansosModeUnlimited,
+		SealedKey: sealed,
+	}))
+
+	tok, err := srv.auth.IssuePortalSession("portal:sub-bansos", "b@example.com")
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/portal/auth/claim",
+		strings.NewReader(`{"api_key":"`+issued.Plaintext+`"}`))
+	req.AddCookie(&http.Cookie{Name: portalSessionCookie, Value: tok})
+	rec := httptest.NewRecorder()
+	srv.handlePortalClaim(rec, req)
+	require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	// No binding must have been created for the bansos key.
+	_, err = srv.db.PortalUsers().GetBySub(ctx, "sub-bansos")
+	require.ErrorIs(t, err, store.ErrNotFound)
+}
+
 func TestPortalClaimBindsKeyAndRejectsSecondUser(t *testing.T) {
 	srv := newPortalTestServer(t)
 	ctx := context.Background()
