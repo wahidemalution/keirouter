@@ -441,6 +441,65 @@ func TestGenericKeyEndpointsRejectBansosKey(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, aw.Code, aw.Body.String())
 }
 
+// A portal binding must never let the shared bansos key be deleted: doing so
+// orphans settings.bansos and makes rotate (and the admin page) fail with a
+// stale key id.
+func TestAdminDeletePortalUserRejectsBansosKey(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+
+	w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos",
+		`{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	cfg, _, err := s.loadBansos(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, db.PortalUsers().Upsert(ctx, store.PortalUser{
+		GoogleSub: "sub-x", Email: "x@example.com", KeyID: cfg.KeyID,
+	}))
+
+	rec := httptest.NewRecorder()
+	s.adminDeletePortalUser(rec, withChiParam(httptest.NewRequest(http.MethodDelete, "/portal/users/sub-x", nil), "sub-x"))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+
+	// The bansos key and binding must both survive.
+	_, err = s.identity.Get(ctx, cfg.KeyID)
+	require.NoError(t, err)
+	u, err := db.PortalUsers().GetBySub(ctx, "sub-x")
+	require.NoError(t, err)
+	require.Equal(t, cfg.KeyID, u.KeyID)
+}
+
+// Rotate must self-heal when the referenced key row was deleted out from under
+// the config, instead of 500ing with a stale key id.
+func TestAdminBansosRotateRecreatesMissingKey(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	ctx := context.Background()
+
+	w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos",
+		`{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	cfg, _, err := s.loadBansos(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, s.identity.Delete(ctx, cfg.KeyID))
+
+	aw := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", `{"active":true}`)
+	require.Equal(t, http.StatusOK, aw.Code, aw.Body.String())
+
+	rw := callBansosHandler(t, s, s.adminBansosRotate, http.MethodPost, "/bansos/rotate", "")
+	require.Equal(t, http.StatusOK, rw.Code, rw.Body.String())
+	var rotated struct {
+		Key string `json:"key"`
+	}
+	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &rotated))
+	require.NotEmpty(t, rotated.Key)
+
+	rec, err := s.identity.Authenticate(ctx, rotated.Key)
+	require.NoError(t, err)
+	require.Equal(t, cfg.KeyID, rec.ID)
+}
+
 func TestPublicBansosEndpoints(t *testing.T) {
 	s, _ := newBansosTestServer(t)
 	ctx := context.Background()

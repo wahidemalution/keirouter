@@ -447,6 +447,12 @@ func (s *Server) adminDeletePortalUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "portal user not found")
 		return
 	}
+	// Never delete the shared bansos key through a portal binding: it is managed
+	// from the Bansos page and the settings doc still references it.
+	if u.KeyID == s.bansosKeyID(r.Context()) {
+		writeError(w, http.StatusBadRequest, "the bansos key is managed from the Bansos page")
+		return
+	}
 	if err := s.identity.Delete(r.Context(), u.KeyID); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return

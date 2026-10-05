@@ -522,7 +522,47 @@ func (s *Server) adminBansosRotate(w http.ResponseWriter, r *http.Request) {
 	}
 	existing, err := s.identity.Get(r.Context(), cfg.KeyID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		if !errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		// The referenced key was deleted out from under the config (e.g. a
+		// portal binding on the bansos key was deleted). Recreate the row with
+		// the same id so the config, plan, and budget references stay valid.
+		existing = store.APIKey{
+			ID: cfg.KeyID, TenantID: adminTenant, Name: "bansos", Disabled: !cfg.Active,
+		}
+		issued, err := s.identity.Generate(existing.TenantID, existing.ProjectID, existing.Name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		existing.KeyHash = issued.Record.KeyHash
+		existing.LookupHash = issued.Record.LookupHash
+		existing.Display = issued.Record.Display
+		existing.PlanID = cfg.PlanID
+		if err := s.identity.Keys().Create(r.Context(), existing); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		if err := s.identity.Keys().SetAllowedModels(r.Context(), cfg.KeyID, cfg.AllowedModels); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		sealed, err := s.vault.Sealer().SealString(issued.Plaintext)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		cfg.SealedKey = sealed
+		cfg.MaskedDisplay = issued.Record.Display
+		cfg.UpdatedAt = time.Now()
+		if err := s.saveBansos(r.Context(), cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		s.identity.InvalidateAuthCacheForKey(cfg.KeyID)
+		writeJSON(w, http.StatusOK, map[string]any{"key_id": cfg.KeyID, "key": issued.Plaintext, "masked_display": cfg.MaskedDisplay})
 		return
 	}
 	issued, err := s.identity.Generate(existing.TenantID, existing.ProjectID, existing.Name)
