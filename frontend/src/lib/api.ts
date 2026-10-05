@@ -361,6 +361,7 @@ export interface Chain {
   id: string;
   name: string;
   strategy: string;
+  display_provider?: string;
   fallback_provider?: string;
   fallback_model?: string;
   input_per_m: number;
@@ -1542,6 +1543,14 @@ export const api = {
     request<CustomProvider>("PATCH", `/custom-providers/${id}`, patch),
   deleteCustomProvider: (id: string) =>
     request<{ id: string; deleted: boolean; accounts_disabled?: number }>("DELETE", `/custom-providers/${id}`),
+
+  // Display provider categories (public model catalog labels).
+  listProviderCategories: () =>
+    request<{ categories: { id: string; label: string }[] }>("GET", "/provider-categories"),
+  createProviderCategory: (input: { id?: string; label: string }) =>
+    request<{ id: string; label: string }>("POST", "/provider-categories", input),
+  deleteProviderCategory: (id: string) =>
+    request<{ id: string; deleted: boolean }>("DELETE", `/provider-categories/${id}`),
 
   importModels: (id: string) =>
     request<{ provider_id: string; imported: number; skipped: number; total: number }>(

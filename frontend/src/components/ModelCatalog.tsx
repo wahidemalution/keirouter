@@ -6,62 +6,9 @@ import { useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
 import { ModelCapabilityIcons } from "./ModelCapabilityIcons";
 import type { PublicModel } from "../lib/publicApi";
+import { familySlug, resolveProvider } from "../lib/providerResolve";
 
-// Family logo detection for models whose provider has no brand PNG of its own
-// (e.g. relay/custom providers). Each family slug maps to an existing PNG in
-// frontend/public/providers/.
-const FAMILY_RULES: [RegExp, string][] = [
-  [/claude|opus|sonnet|haiku/, "anthropic"],
-  [/gpt|dall-e|whisper|text-embedding|(^|[^a-z])o[134](-|$)/, "openai"],
-  [/gemini|gemma|palm|learnlm/, "gemini"],
-  [/deepseek/, "deepseek"],
-  [/kimi|moonshot/, "kimi"],
-  [/qwen/, "qwen"],
-  [/minimax/, "minimax"],
-  [/glm/, "glm"],
-  [/grok/, "xai"],
-  [/mistral|codestral|pixtral|mixtral/, "mistral"],
-  [/nemotron/, "nvidia"],
-  [/sonar/, "perplexity"],
-  [/qoder/, "qoder"],
-  [/mimo/, "xiaomi-mimo"],
-  [/command-[ra]/, "cohere"],
-];
-
-// Display names for the detected model family. Routing chains often expose
-// models from several vendors under one provider (e.g. a "combo" chain), so the
-// card and the provider filter follow the model family instead of the chain.
-const FAMILY_LABELS: Record<string, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  gemini: "Google",
-  deepseek: "DeepSeek",
-  kimi: "Kimi",
-  qwen: "Qwen",
-  minimax: "MiniMax",
-  glm: "GLM",
-  xai: "xAI",
-  mistral: "Mistral",
-  nvidia: "NVIDIA",
-  perplexity: "Perplexity",
-  qoder: "Qoder",
-  "xiaomi-mimo": "Xiaomi",
-  cohere: "Cohere",
-};
-
-export const familySlug = (modelId: string): string | null => {
-  const m = modelId.toLowerCase();
-  for (const [re, slug] of FAMILY_RULES) if (re.test(m)) return slug;
-  return null;
-};
-
-// The provider shown on a card / used to group the filter: the model family
-// when it can be detected from the model id, otherwise the chain's provider.
-export function resolveProvider(model: PublicModel): { id: string; label: string } {
-  const family = familySlug(model.model_id);
-  if (family) return { id: family, label: FAMILY_LABELS[family] ?? family };
-  return { id: model.provider_id, label: model.provider || model.provider_id };
-}
+export { familySlug, resolveProvider } from "../lib/providerResolve";
 
 // Provider facets in the order models arrive (already sorted by popularity), so
 // the busiest vendor leads. Deduplicated by resolved id.
