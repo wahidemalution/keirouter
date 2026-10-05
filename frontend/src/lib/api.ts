@@ -260,6 +260,7 @@ export interface APIKey {
   plan_name?: string;
   created_at: string;
   allowed_models?: string[];
+  models_source?: "key" | "plan" | "all";
 }
 
 export interface CreatedKey {
@@ -1220,6 +1221,7 @@ export interface KeyUsageData {
     alert: boolean;
   }[];
   allowed_models: string[];
+  models_source?: "key" | "plan" | "all";
   current_period: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -1303,6 +1305,8 @@ export interface PortalUserRecord {
   disabled?: boolean;
   last_used_at?: string | null;
   created_at: string;
+  allowed_models?: string[];
+  models_source?: "key" | "plan" | "all";
   budget?: {
     limit_micros: number;
     limit_tokens: number;

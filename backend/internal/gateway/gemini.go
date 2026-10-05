@@ -81,7 +81,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	req.Metadata.ChainID = resolved.PlanOpts.ChainID
 
 	if len(resolved.Targets) > 0 {
-		filtered, ferr := s.filterAllowedTargets(r.Context(), key.ID, req.Model, resolved.PlanOpts.ChainID != "", resolved.Targets)
+		filtered, ferr := s.filterAllowedTargets(r.Context(), key.ID, key.PlanID, req.Model, resolved.PlanOpts.ChainID != "", resolved.Targets)
 		if ferr != nil {
 			writeError(w, http.StatusInternalServerError, "model access check failed")
 			return

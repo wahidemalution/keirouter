@@ -336,11 +336,9 @@ func (s *Server) provisionPortalKey(ctx context.Context, plan store.Plan, sub, e
 		}
 	}
 
-	if models := store.GetPlanAllowedModels(plan); len(models) > 0 {
-		if err := s.identity.Keys().SetAllowedModelsOnTx(ctx, tx, issued.Record.ID, models); err != nil {
-			return identity.Issued{}, err
-		}
-	}
+	// Model access is not snapshotted: the key follows its plan's models live,
+	// so a later plan edit propagates automatically. Portal has no per-key
+	// model override today.
 
 	// Bind the new key to the user in the same transaction. The plaintext is
 	// sealed so the owner can reveal it again on /portal/key; a manually claimed
@@ -381,6 +379,11 @@ func (s *Server) portalUserView(ctx context.Context, u store.PortalUser) map[str
 		view["display"] = key.Display
 		view["disabled"] = key.Disabled
 		view["last_used_at"] = key.LastUsedAt
+	}
+	// Effective model access: per-key override wins, else the plan (live).
+	if models, source, merr := s.identity.Keys().EffectiveAllowedModels(ctx, u.KeyID, u.PlanID); merr == nil {
+		view["allowed_models"] = models
+		view["models_source"] = source
 	}
 	if budgets, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, u.KeyID); err == nil && len(budgets) > 0 {
 		b := budgets[0]
@@ -499,22 +502,30 @@ func (s *Server) adminSetPortalUserPlan(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"google_sub": sub, "plan_id": body.PlanID})
 }
 
-// applyPortalPlan re-syncs a key's budget and allowed models to a plan. When
-// plan is nil the key's budget is removed and models cleared.
+// applyPortalPlan re-syncs a key's budget to a plan. Model access stays live:
+// a per-key override is preserved, otherwise the key follows the plan's models
+// (no snapshot) so later plan edits propagate. When plan is nil the key's
+// budget is removed and the plan binding cleared.
 func (s *Server) applyPortalPlan(ctx context.Context, keyID string, plan *store.Plan) error {
 	var planID string
-	var models []string
 	var wantBudget bool
 	if plan != nil {
 		planID = plan.ID
-		models = store.GetPlanAllowedModels(*plan)
 		wantBudget = plan.LimitMicros > 0 || plan.LimitTokens > 0
 	}
 	if err := s.identity.Keys().SetPlanID(ctx, keyID, planID); err != nil {
 		return err
 	}
-	if err := s.identity.Keys().SetAllowedModels(ctx, keyID, models); err != nil {
+	// Preserve an explicit per-key override; otherwise clear rows so the key
+	// inherits the plan's models live.
+	override, err := s.identity.Keys().GetAllowedModels(ctx, keyID)
+	if err != nil {
 		return err
+	}
+	if len(override) == 0 {
+		if err := s.identity.Keys().SetAllowedModels(ctx, keyID, nil); err != nil {
+			return err
+		}
 	}
 
 	existing, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, keyID)

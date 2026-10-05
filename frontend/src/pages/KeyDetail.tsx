@@ -208,9 +208,12 @@ function ModelsTab({ apiKey, plan, plansLoading }: { apiKey: APIKey; plan?: Plan
   const qc = useQueryClient();
   const toast = useToast();
   const keyModels = apiKey.allowed_models ?? [];
-  const inheritedModels = plan?.allowed_models ?? [];
-  const effectiveModels = keyModels.length > 0 ? keyModels : inheritedModels;
-  const source = keyModels.length > 0 ? "key" : inheritedModels.length > 0 ? "plan" : "all";
+  // allowed_models is the effective access list (override, plan, or all) and
+  // models_source identifies where it came from. Fall back to inference for
+  // older payloads without models_source. "keyModels" here means "effective",
+  // not necessarily a per-key override.
+  const source = apiKey.models_source ?? (keyModels.length > 0 ? "key" : "all");
+  const effectiveModels = keyModels;
   const [models, setModels] = useState<string[]>(keyModels);
   const [editing, setEditing] = useState(false);
 
@@ -287,7 +290,7 @@ function ModelsTab({ apiKey, plan, plansLoading }: { apiKey: APIKey; plan?: Plan
             </div>
             <div className="flex flex-col-reverse gap-2 border-t border-[var(--border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                {keyModels.length > 0 && (
+                {source === "key" && (
                   <Button variant="ghost" onClick={() => update.mutate([])} disabled={update.isPending}>Use plan defaults</Button>
                 )}
               </div>

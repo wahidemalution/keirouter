@@ -248,8 +248,34 @@ func (r *APIKeyRepo) GetAllowedModels(ctx context.Context, keyID string) ([]stri
 	return out, rows.Err()
 }
 
+// EffectiveAllowedModels resolves the models a key may use. A per-key override
+// (explicit rows in api_key_model_access) always wins; otherwise the key
+// follows its assigned plan's allowed models, so later plan edits propagate
+// without touching each key. An empty result means no restriction (all models
+// permitted). Source is "key", "plan", or "all".
+func (r *APIKeyRepo) EffectiveAllowedModels(ctx context.Context, keyID, planID string) (models []string, source string, err error) {
+	own, err := r.GetAllowedModels(ctx, keyID)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(own) > 0 {
+		return own, "key", nil
+	}
+	if planID != "" {
+		plan, perr := r.db.Plans().Get(ctx, planID)
+		if perr == nil {
+			if pm := GetPlanAllowedModels(plan); len(pm) > 0 {
+				return pm, "plan", nil
+			}
+		} else if !errors.Is(perr, ErrNotFound) {
+			return nil, "", perr
+		}
+	}
+	return nil, "all", nil
+}
+
 // IsModelAllowed reports whether a model is permitted for the given key. When
-// no restriction rows exist, all models are allowed. Supports prefix wildcard
+// no restriction applies, all models are allowed. Supports prefix wildcard
 // matching: a stored pattern "claude-*" matches "claude-opus-4-6".
 func (r *APIKeyRepo) IsModelAllowed(ctx context.Context, keyID string, model string) (bool, error) {
 	allowed, err := r.GetAllowedModels(ctx, keyID)

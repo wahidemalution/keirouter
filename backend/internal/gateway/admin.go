@@ -414,9 +414,11 @@ func (s *Server) adminListKeys(w http.ResponseWriter, r *http.Request) {
 				entry["plan_name"] = plan.Name
 			}
 		}
-		// Attach allowed models (empty = all allowed).
-		if models, merr := s.identity.Keys().GetAllowedModels(r.Context(), k.ID); merr == nil {
+		// Attach effective allowed models: per-key override wins, else the plan
+		// (live), else all. Empty list = all allowed.
+		if models, source, merr := s.identity.Keys().EffectiveAllowedModels(r.Context(), k.ID, k.PlanID); merr == nil {
 			entry["allowed_models"] = models
+			entry["models_source"] = source
 		}
 		out = append(out, entry)
 	}
@@ -584,14 +586,11 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if hasModels {
-		// Per-key models take precedence over plan models.
-		effectiveModels := body.AllowedModels
-		if !hasPerKeyModels && plan != nil {
-			effectiveModels = store.GetPlanAllowedModels(*plan)
-		}
-		if len(effectiveModels) > 0 {
-			if err := s.identity.Keys().SetAllowedModelsOnTx(r.Context(), tx, issued.Record.ID, effectiveModels); err != nil {
+	if hasPerKeyModels {
+		// Persist only an explicit per-key override. Without one the key follows
+		// its plan's models live, so later plan edits propagate automatically.
+		if len(body.AllowedModels) > 0 {
+			if err := s.identity.Keys().SetAllowedModelsOnTx(r.Context(), tx, issued.Record.ID, body.AllowedModels); err != nil {
 				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 				return
 			}
@@ -2255,6 +2254,9 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 	if body.HardCutoff != nil {
 		existing.HardCutoff = *body.HardCutoff
 	}
+	// Capture the pre-edit model snapshot so keys that were pure plan-followers
+	// can be re-synced without clobbering genuine per-key overrides.
+	oldModels := store.GetPlanAllowedModels(existing)
 	if body.AllowedModels != nil {
 		existing.AllowedModels = store.SetPlanAllowedModels(body.AllowedModels)
 	}
@@ -2264,6 +2266,9 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
+	if body.AllowedModels != nil {
+		s.resyncPlanFollowerModels(r.Context(), existing.ID, oldModels, store.GetPlanAllowedModels(existing))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": existing.ID, "name": existing.Name, "description": existing.Description,
 		"limit_micros": existing.LimitMicros, "limit_tokens": existing.LimitTokens,
@@ -2271,6 +2276,52 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		"period": existing.Period, "alert_pct": existing.AlertPct, "hard_cutoff": existing.HardCutoff,
 		"allowed_models": store.GetPlanAllowedModels(existing),
 	})
+}
+
+// resyncPlanFollowerModels updates keys on a plan whose stored model rows
+// exactly match the plan's pre-edit snapshot, replacing them with the new plan
+// models. This migrates legacy snapshot rows to the new list while leaving
+// genuine per-key overrides untouched. Errors are logged, not fatal: model
+// access is enforced live from the plan, so a stale row is cosmetic.
+func (s *Server) resyncPlanFollowerModels(ctx context.Context, planID string, oldModels, newModels []string) {
+	keys, err := s.identity.List(ctx, adminTenant)
+	if err != nil {
+		s.log.Error("plan resync: list keys failed", "err", err)
+		return
+	}
+	for _, k := range keys {
+		if k.PlanID != planID {
+			continue
+		}
+		own, err := s.identity.Keys().GetAllowedModels(ctx, k.ID)
+		if err != nil {
+			s.log.Error("plan resync: get models failed", "key", k.ID, "err", err)
+			continue
+		}
+		if len(own) == 0 || !sameStringSet(own, oldModels) {
+			continue // already following live, or a genuine override
+		}
+		if err := s.identity.Keys().SetAllowedModels(ctx, k.ID, newModels); err != nil {
+			s.log.Error("plan resync: set models failed", "key", k.ID, "err", err)
+		}
+	}
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, v := range a {
+		seen[v]++
+	}
+	for _, v := range b {
+		seen[v]--
+		if seen[v] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) adminDeletePlan(w http.ResponseWriter, r *http.Request) {
@@ -2313,8 +2364,9 @@ func (s *Server) adminListPlanKeys(w http.ResponseWriter, r *http.Request) {
 				"id": k.ID, "name": k.Name, "display": k.Display,
 				"disabled": k.Disabled, "created_at": k.CreatedAt,
 			}
-			if models, merr := s.identity.Keys().GetAllowedModels(r.Context(), k.ID); merr == nil {
+			if models, source, merr := s.identity.Keys().EffectiveAllowedModels(r.Context(), k.ID, k.PlanID); merr == nil {
 				entry["allowed_models"] = models
+				entry["models_source"] = source
 			}
 			out = append(out, entry)
 		}

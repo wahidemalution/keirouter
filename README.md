@@ -294,7 +294,7 @@ Plans are reusable budget policies you can stamp onto any API key — write the 
 - **Token limit** — max token usage
 - **RPM / TPM / Concurrency limits** — per assigned key (`0` = unlimited)
 - **Reset period** — `daily`, `weekly`, `monthly`, or `total`
-- **Allowed models** — wildcard patterns like `claude-*`, `gpt-4*` (empty = everything's fair game)
+- **Allowed models** — wildcard patterns like `claude-*`, `gpt-4*` (empty = everything's fair game). Keys follow their plan's model list live, so editing a plan updates every key on it; set a per-key override only when a key needs a narrower list.
 - **Alert threshold** — get pinged at 1–100% of budget
 - **Hard cutoff** — block requests when the budget's gone, or just track and let it ride
 

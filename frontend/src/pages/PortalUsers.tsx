@@ -42,7 +42,7 @@ export function PortalUsersPage() {
 
   const planMutation = useMutation({
     mutationFn: ({ sub, planId }: { sub: string; planId: string }) => api.setPortalUserPlan(sub, planId),
-    onSuccess: () => { toast.success("Plan updated", "The key's budget and models were re-synced."); invalidate(); },
+    onSuccess: () => { toast.success("Plan updated", "The key now follows the plan's budget and models."); invalidate(); },
     onError: (e: Error) => toast.error("Plan change failed", e.message),
   });
 
@@ -193,6 +193,13 @@ function UserRow({
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </Select>
+        {u.plan_id && (
+          <div className="mt-1.5 text-[11px] text-[var(--text-muted)]">
+            {u.models_source === "all"
+              ? "All models"
+              : `${u.allowed_models?.length ?? 0} model${(u.allowed_models?.length ?? 0) === 1 ? "" : "s"}${u.models_source === "plan" ? " · plan defaults" : u.models_source === "key" ? " · key override" : ""}`}
+          </div>
+        )}
       </td>
       <td className="px-5 py-4 text-[var(--text-muted)]">
         {u.budget ? (

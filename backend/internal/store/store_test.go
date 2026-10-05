@@ -155,6 +155,62 @@ func TestAPIKeyRepo_CRUD(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestEffectiveAllowedModels exercises the live-inheritance rule: a per-key
+// override always wins; otherwise a key follows its plan's current models so
+// that later plan edits propagate without touching each key; with neither, all
+// models are allowed.
+func TestEffectiveAllowedModels(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, db.Plans().Create(ctx, Plan{
+		ID: "p1", TenantID: DefaultTenantID, Name: "Free",
+		AllowedModels: "gpt-4o,claude-*", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	for _, id := range []string{"follower", "override", "noplan"} {
+		require.NoError(t, db.APIKeys().Create(ctx, APIKey{
+			ID: id, TenantID: DefaultTenantID, Name: id, LookupHash: "lookup-" + id, CreatedAt: time.Now(),
+		}))
+	}
+	require.NoError(t, db.APIKeys().SetPlanID(ctx, "follower", "p1"))
+	require.NoError(t, db.APIKeys().SetPlanID(ctx, "override", "p1"))
+	require.NoError(t, db.APIKeys().SetAllowedModels(ctx, "override", []string{"gpt-4o-mini"}))
+
+	// Follower: no rows -> plan models, source "plan".
+	models, source, err := db.APIKeys().EffectiveAllowedModels(ctx, "follower", "p1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o", "claude-*"}, models)
+	require.Equal(t, "plan", source)
+
+	// Override: own rows win, source "key".
+	models, source, err = db.APIKeys().EffectiveAllowedModels(ctx, "override", "p1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o-mini"}, models)
+	require.Equal(t, "key", source)
+
+	// No plan, no rows: unrestricted, source "all".
+	models, source, err = db.APIKeys().EffectiveAllowedModels(ctx, "noplan", "")
+	require.NoError(t, err)
+	require.Empty(t, models)
+	require.Equal(t, "all", source)
+
+	// Plan edit propagates to the follower (live), not to the override.
+	plan, err := db.Plans().Get(ctx, "p1")
+	require.NoError(t, err)
+	plan.AllowedModels = "gpt-4o,claude-*,gemini-2.0-flash"
+	require.NoError(t, db.Plans().Update(ctx, plan))
+
+	models, source, err = db.APIKeys().EffectiveAllowedModels(ctx, "follower", "p1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o", "claude-*", "gemini-2.0-flash"}, models)
+	require.Equal(t, "plan", source)
+
+	models, source, err = db.APIKeys().EffectiveAllowedModels(ctx, "override", "p1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o-mini"}, models)
+	require.Equal(t, "key", source)
+}
+
 func TestAccountRepo_CRUDAndCooldown(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

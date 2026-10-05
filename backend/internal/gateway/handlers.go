@@ -222,7 +222,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	// Enforce per-key model access restrictions. Filter resolved targets to
 	// only include models the key is allowed to access.
 	if len(resolved.Targets) > 0 {
-		filtered, ferr := s.filterAllowedTargets(r.Context(), key.ID, req.Model, resolved.PlanOpts.ChainID != "", resolved.Targets)
+		filtered, ferr := s.filterAllowedTargets(r.Context(), key.ID, key.PlanID, req.Model, resolved.PlanOpts.ChainID != "", resolved.Targets)
 		if ferr != nil {
 			s.consoleLog.Log("ERROR", "Model access check failed", ferr.Error())
 			writeError(w, http.StatusInternalServerError, "model access check failed")
@@ -888,9 +888,11 @@ func isClientDisconnect(err error) bool {
 // isChain marks a request that resolved to a routing chain. A chain the key may
 // use by name (bare or "chain:") grants every step it resolves to, since the
 // key's grant is for the chain as a whole rather than its individual steps.
-func (s *Server) filterAllowedTargets(ctx context.Context, keyID, requestedModel string, isChain bool, targets []dispatch.Target) ([]dispatch.Target, error) {
+func (s *Server) filterAllowedTargets(ctx context.Context, keyID, planID, requestedModel string, isChain bool, targets []dispatch.Target) ([]dispatch.Target, error) {
 	keys := s.identity.Keys()
-	allowed, err := keys.GetAllowedModels(ctx, keyID)
+	// Effective models: per-key override wins, otherwise the key follows its
+	// plan's models live (so plan edits propagate without per-key writes).
+	allowed, _, err := keys.EffectiveAllowedModels(ctx, keyID, planID)
 	if err != nil {
 		return nil, err
 	}
@@ -1001,7 +1003,7 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get allowed models for this key.
-	allowedModels, err := s.identity.Keys().GetAllowedModels(ctx, key.ID)
+	allowedModels, modelsSource, err := s.identity.Keys().EffectiveAllowedModels(ctx, key.ID, key.PlanID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get model access")
 		return
@@ -1040,6 +1042,7 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		"key_name":       key.Name,
 		"budgets":        budgetOuts,
 		"allowed_models": allowedModels,
+		"models_source":  modelsSource,
 		"current_period": map[string]any{
 			"prompt_tokens":     summary.PromptTokens,
 			"completion_tokens": summary.CompletionTokens,
@@ -1111,7 +1114,7 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 		budgetOuts = append(budgetOuts, bo)
 	}
 
-	allowedModels, err := s.identity.Keys().GetAllowedModels(ctx, key.ID)
+	allowedModels, modelsSource, err := s.identity.Keys().EffectiveAllowedModels(ctx, key.ID, key.PlanID)
 	if err != nil {
 		return nil, err
 	}
@@ -1203,6 +1206,7 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 		"key_name":       key.Name,
 		"budgets":        budgetOuts,
 		"allowed_models": allowedModels,
+		"models_source":  modelsSource,
 		"current_period": map[string]any{
 			"prompt_tokens":     summary.PromptTokens,
 			"completion_tokens": summary.CompletionTokens,
