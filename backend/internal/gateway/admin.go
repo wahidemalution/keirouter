@@ -1849,14 +1849,16 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 		for _, st := range c.Steps {
 			steps = append(steps, map[string]any{
 				"provider": st.Provider, "model": st.Model, "position": st.Position,
+				"market_slug": st.MarketSlug,
 			})
 		}
 		entry := map[string]any{
 			"id": c.ID, "name": c.Name, "strategy": c.Strategy, "steps": steps,
 			"input_per_m": c.InputPerM, "output_per_m": c.OutputPerM,
 			"cache_write_per_m": c.CacheWritePerM, "cache_read_per_m": c.CacheReadPerM,
-			"market_slugs":     marketSlugsJSON(c.MarketSlugs),
-			"display_provider": c.DisplayProvider,
+			"market_slugs":      marketSlugsJSON(c.MarketSlugs),
+			"display_provider":  c.DisplayProvider,
+			"reorder_by_market": c.ReorderByMarket,
 		}
 		if c.FallbackProvider != "" && c.FallbackModel != "" {
 			entry["fallback_provider"] = c.FallbackProvider
@@ -1879,9 +1881,11 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		CacheWritePerM   float64  `json:"cache_write_per_m"`
 		CacheReadPerM    float64  `json:"cache_read_per_m"`
 		MarketSlugs      []string `json:"market_slugs"`
+		ReorderByMarket  bool     `json:"reorder_by_market"`
 		Steps            []struct {
-			Provider string `json:"provider"`
-			Model    string `json:"model"`
+			Provider   string `json:"provider"`
+			Model      string `json:"model"`
+			MarketSlug string `json:"market_slug"`
 		} `json:"steps"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -1933,6 +1937,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		CacheWritePerM:   body.CacheWritePerM,
 		CacheReadPerM:    body.CacheReadPerM,
 		MarketSlugs:      body.MarketSlugs,
+		ReorderByMarket:  body.ReorderByMarket,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -1944,6 +1949,7 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		chain.Steps = append(chain.Steps, store.ChainStep{
 			ID: uuid.NewString(), ChainID: chain.ID, Position: i,
 			Provider: st.Provider, Model: st.Model, CreatedAt: now,
+			MarketSlug: strings.TrimSpace(st.MarketSlug),
 		})
 	}
 	if err := s.chains.Create(r.Context(), chain); err != nil {
@@ -1980,9 +1986,11 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		CacheWritePerM   *float64  `json:"cache_write_per_m"`
 		CacheReadPerM    *float64  `json:"cache_read_per_m"`
 		MarketSlugs      *[]string `json:"market_slugs"`
+		ReorderByMarket  *bool     `json:"reorder_by_market"`
 		Steps            *[]struct {
-			Provider string `json:"provider"`
-			Model    string `json:"model"`
+			Provider   string `json:"provider"`
+			Model      string `json:"model"`
+			MarketSlug string `json:"market_slug"`
 		} `json:"steps"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -2010,6 +2018,9 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.MarketSlugs != nil {
 		existing.MarketSlugs = *body.MarketSlugs
+	}
+	if body.ReorderByMarket != nil {
+		existing.ReorderByMarket = *body.ReorderByMarket
 	}
 	if body.InputPerM != nil || body.OutputPerM != nil || body.CacheWritePerM != nil || body.CacheReadPerM != nil {
 		rates := []*float64{body.InputPerM, body.OutputPerM, body.CacheWritePerM, body.CacheReadPerM}
@@ -2042,12 +2053,13 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		existing.Steps = make([]store.ChainStep, len(*body.Steps))
 		for i, st := range *body.Steps {
 			existing.Steps[i] = store.ChainStep{
-				ID:        uuid.NewString(),
-				ChainID:   id,
-				Position:  i,
-				Provider:  st.Provider,
-				Model:     st.Model,
-				CreatedAt: now,
+				ID:         uuid.NewString(),
+				ChainID:    id,
+				Position:   i,
+				Provider:   st.Provider,
+				Model:      st.Model,
+				CreatedAt:  now,
+				MarketSlug: strings.TrimSpace(st.MarketSlug),
 			}
 		}
 	}

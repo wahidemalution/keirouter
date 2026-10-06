@@ -158,6 +158,19 @@ func TestAdminChainPricing_CreateAndListRoundTrip(t *testing.T) {
 	require.Equal(t, 0.25, chains[0]["cache_read_per_m"])
 }
 
+func TestAdminChainPersistsStepMarketSlugAndReorder(t *testing.T) {
+	s := newChainPricingTestServer(t)
+	code, body, _ := postChain(t, s, `{"name":"slug-chain","strategy":"fallback","reorder_by_market":true,"steps":[{"provider":"commandcode","model":"deepseek/deepseek-v4-pro","market_slug":"cmc/deepseek/deepseek-v4-pro"}]}`)
+	require.Equal(t, http.StatusCreated, code, body)
+
+	chains := listChains(t, s)
+	require.Len(t, chains, 1)
+	require.Equal(t, true, chains[0]["reorder_by_market"])
+	steps := chains[0]["steps"].([]any)
+	require.Len(t, steps, 1)
+	require.Equal(t, "cmc/deepseek/deepseek-v4-pro", steps[0].(map[string]any)["market_slug"])
+}
+
 func TestAdminChainPricing_UpdateRejectsNegative(t *testing.T) {
 	s := newChainPricingTestServer(t)
 	code, body, _ := postChain(t, s, `{"name":"priced","input_per_m":1,"output_per_m":2,"steps":[{"provider":"openai","model":"gpt-4o"}]}`)
