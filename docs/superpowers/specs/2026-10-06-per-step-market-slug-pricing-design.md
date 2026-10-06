@@ -106,14 +106,11 @@ func (c *SnapshotCache) Age() time.Duration
 - `runMarketSync` (`app/market_sync.go:61`) already fetches on interval; it will
   additionally call `cache.Replace(models)` on every successful fetch, even when
   `AutoRefresh` is off, by doing one fetch at startup and on each manual refresh.
-  If we want live ordering without auto-refresh, a low-frequency background fetch
-  is required; decision below.
 
-Authoritative decision needed on cache population frequency — see Open Questions.
-Default provided: extend `runMarketSync` to always fetch on its 1s ticker subject
-to `RefreshIntervalSeconds`, regardless of `AutoRefresh`, so the cache stays warm;
+Resolved: extend `runMarketSync` to always fetch on its 1s ticker subject to
+`RefreshIntervalSeconds`, regardless of `AutoRefresh`, so the cache stays warm;
 `AutoRefresh` continues to gate only the DB chain-rate writes. This keeps a single
-fetch path.
+fetch path (see Decisions).
 
 ### 3. Per-request cheapest-first ordering
 
@@ -152,8 +149,7 @@ MarketSlug string
 `TargetsFromChain` sets `MarketSlug: s.MarketSlug` (when reordering/ordering, the
 ordered slice is used).
 
-At record time the pipeline must resolve the winner's billable rate. Two options
-were considered; chosen option is recorded under Open Questions. Preferred:
+At record time the pipeline must resolve the winner's billable rate.
 
 - `Target` carries the resolved `Rate` and `MarketSlug` at ordering time (from the
   same snapshot used to order), so the rate billed equals the rate that drove
@@ -169,23 +165,20 @@ MarketRateIn   float64
 MarketRateOut  float64
 ```
 
+Markup is applied in the pipeline (see Decisions): it reads
+`market.Settings.MarkupPercent`, computes the final billable rates, and sets
+`MarketRateIn`/`MarketRateOut` to those final values. The meter therefore stores
+the billable rate directly and does not import the market package.
+
 `meter.Record` precedence becomes:
 
-1. If `MarketSlug != ""` and `MarketRateIn > 0` (or a positive rate exists):
-   `price = {InputPerM: MarketRateIn * mult, OutputPerM: MarketRateOut * mult,
-   CachedInputPerM: InputPerM*cacheReadMult, CacheWritePerM: InputPerM*cacheWriteMult,
-   Source: "market_slug"}` where `mult = 1 + MarkupPercent/100`.
-   Provenance: `PricingKey = MarketSlug`, `PricingMatchKind = "market_slug"`.
+1. If `MarketSlug != ""` and a positive market rate is present:
+   `price = {InputPerM: MarketRateIn, OutputPerM: MarketRateOut,
+   CachedInputPerM: MarketRateIn*cacheReadMult, CacheWritePerM: MarketRateIn*cacheWriteMult,
+   Source: "market_slug"}`. Provenance: `PricingKey = MarketSlug`,
+   `PricingMatchKind = "market_slug"`.
 2. Else if chain-level rates present: current `chainPrice` behavior.
 3. Else: per-model catalog `ResolvePrice` (unchanged).
-
-Open risk: `meter` does not currently know `MarkupPercent`. Two choices — apply
-markup in the pipeline before setting `MarketRate*` (keeps meter dumb), or inject
-markup into the meter. Preferred: **apply markup in the pipeline** (single source:
-settings already loaded there via the app), so the meter stores the final billable
-rate and stays free of market settings. Confirmed feasible because the pipeline
-already has access to app settings through its dispatcher/app wiring (to verify in
-implementation).
 
 ### 5. Markup consistency
 
@@ -251,19 +244,20 @@ under `frontend/src`).
 - Historical `usage_records` stay immutable (they snapshot pricing already).
 - Rollback: dropping the feature leaves the nullable column unused; no data loss.
 
-## Open questions
+## Decisions (resolved)
 
-1. **Where markup is applied** — pipeline (preferred) vs meter. Confirm during
-   implementation that the pipeline can read `market.Settings` without a new
-   dependency cycle.
-2. **Cache population when `AutoRefresh` is off** — proposal: always warm the
-   cache on the existing ticker; only DB writes are gated by `AutoRefresh`. This
-   means a background HTTP fetch even when the operator disabled auto-refresh.
-   Alternative: warm cache only while a chain has `ReorderByMarket` enabled.
-3. **Reorder flag default** — off (opt-in, safest) vs on for chains that already
-   declare `market_slugs`. Proposal: off; operator enables per chain.
-4. **Rate source snapshot** — carry the ordered rates on `Target` (preferred) vs
-   re-lookup in the meter.
+1. **Markup applied in the pipeline.** The pipeline reads
+   `market.Settings.MarkupPercent`, computes `rate * (1 + markup/100)`, and passes
+   the final billable rate to the meter. The meter stays unaware of market
+   settings and does not import the market package (no dependency cycle).
+2. **Cache always warmed.** `runMarketSync` warms `SnapshotCache` on its existing
+   ticker regardless of `AutoRefresh`; `AutoRefresh` gates only the DB chain-rate
+   writes. One fetch path for both.
+3. **`ReorderByMarket` defaults to OFF (opt-in).** Chains that already declare
+   `market_slugs` keep today's behavior until the operator enables the flag
+   per chain.
+4. **Rates carried on `Target`.** The rate used for routing is the same rate
+   stamped for billing; no second cache lookup during record.
 
 ## Acceptance criteria
 
