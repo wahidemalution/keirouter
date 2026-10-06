@@ -11,6 +11,7 @@ export interface DraftChainStep {
   id: string;
   provider: string;
   model: string;
+  marketSlug: string;
   inputPerM: number;
   outputPerM: number;
   cacheWritePerM: number;
@@ -70,10 +71,12 @@ export const providerIcon = (provider?: Provider, providerID?: string) =>
 export const makeDraftStep = (step?: {
   provider: string;
   model: string;
+  market_slug?: string;
 }): DraftChainStep => ({
   id: crypto.randomUUID(),
   provider: step?.provider ?? "",
   model: step?.model ?? "",
+  marketSlug: step?.market_slug ?? "",
   inputPerM: 0,
   outputPerM: 0,
   cacheWritePerM: 0,
