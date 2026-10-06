@@ -525,6 +525,7 @@ export interface RecentActivity {
   cache_write_rate_per_m: number;
   output_rate_per_m: number;
   reasoning_rate_per_m: number;
+  fallback_rate_per_m: number;
   cache_hit: boolean;
   latency_ms: number;
   upstream_latency_ms: number;

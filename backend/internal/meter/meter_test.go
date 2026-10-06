@@ -111,6 +111,27 @@ func TestRecordPrefersMarketSlugOverChainRate(t *testing.T) {
 	}
 }
 
+func TestCostForEventFlagsFallbackWhenSlugCostsMore(t *testing.T) {
+	m := New(nil, nil, map[string]Price{})
+	// Cheapest aggregate is 0.11; winning slug bills 0.30 -> fallback.
+	ev := Event{
+		Provider: "commandcode", Model: "deepseek-v4.1-flash",
+		InputPerM: 0.11, OutputPerM: 0.11,
+		MarketSlug: "cmc/deepseek/deepseek-v4.1-flash", MarketRateIn: 0.30, MarketRateOut: 0.30,
+		CheapestRateIn: 0.11,
+		Usage:          core.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000},
+	}
+	bd := m.costForEvent(ev)
+	if bd.FallbackRatePerM != 0.11 {
+		t.Fatalf("FallbackRatePerM = %v, want 0.11", bd.FallbackRatePerM)
+	}
+	// Same slug but priced at the cheapest rate -> not a fallback.
+	ev.MarketRateIn, ev.MarketRateOut = 0.11, 0.11
+	if bd := m.costForEvent(ev); bd.FallbackRatePerM != 0 {
+		t.Fatalf("FallbackRatePerM = %v, want 0 (at cheapest)", bd.FallbackRatePerM)
+	}
+}
+
 func TestRecordFallsBackToChainWhenNoSlug(t *testing.T) {
 	m := New(nil, nil, map[string]Price{})
 	ev := Event{Provider: "openai", Model: "gpt-4o", InputPerM: 2, OutputPerM: 4,

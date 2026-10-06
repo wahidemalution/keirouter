@@ -132,6 +132,10 @@ type Event struct {
 	// derives them from MarketRateIn using the default market multipliers.
 	MarketCacheReadRate  float64
 	MarketCacheWriteRate float64
+	// CheapestRateIn is the chain's cheapest aggregate input rate (pre-fallback).
+	// When the winning market slug costs more than this, the request is a
+	// fallback and this value is retained for the audit trail.
+	CheapestRateIn float64
 
 	Provider  string
 	Model     string
@@ -251,7 +255,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		PricingAsOf:   pricingAsOf,
 		InputRatePerM: cost.InputRatePerM, CachedRatePerM: cost.CachedRatePerM,
 		CacheWriteRatePerM: cost.CacheWriteRatePerM, OutputRatePerM: cost.OutputRatePerM,
-		ReasoningRatePerM: cost.ReasoningRatePerM,
+		ReasoningRatePerM: cost.ReasoningRatePerM, FallbackRatePerM: cost.FallbackRatePerM,
 		CacheHit:          ev.CacheHit, LatencyMS: int(endToEnd.Milliseconds()),
 		UpstreamLatencyMS: int(ev.Latency.Milliseconds()), EndToEndLatencyMS: int(endToEnd.Milliseconds()),
 		TTFTMS: int(ev.TTFT.Milliseconds()), CavemanActive: ev.CavemanActive,
@@ -289,7 +293,11 @@ func (m *Meter) costForEvent(ev Event) CostBreakdown {
 		return CostBreakdown{Pricing: PricingMatch{Status: "none", MatchKind: "none"}}
 	}
 	if price, ok := marketPrice(ev); ok {
-		return calculateCostFromPrice(pricingMatch(ev.MarketSlug, price, "market_slug", false), u, ev.CacheHit, savedTokens)
+		out := calculateCostFromPrice(pricingMatch(ev.MarketSlug, price, "market_slug", false), u, ev.CacheHit, savedTokens)
+		if ev.CheapestRateIn > 0 && price.InputPerM > ev.CheapestRateIn {
+			out.FallbackRatePerM = ev.CheapestRateIn
+		}
+		return out
 	}
 	if price, ok := chainPrice(ev); ok {
 		return calculateCostFromPrice(pricingMatch("chain", price, "chain", false), u, ev.CacheHit, savedTokens)

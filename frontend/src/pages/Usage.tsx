@@ -999,6 +999,11 @@ function RecentRequests({ records }: { records: RecentActivity[] }) {
                           <div className="min-w-0">
                             <div className="max-w-sm truncate font-mono text-[11px] font-semibold" title={record.model}>{record.model || "—"}</div>
                             <div className="truncate text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{record.provider_name || record.provider}</div>
+                            {record.fallback_rate_per_m > 0 && record.fallback_rate_per_m < record.input_rate_per_m && (
+                              <div className="mt-1" title={`Served by a fallback route. Cheapest available $${record.fallback_rate_per_m.toFixed(2)}/M · billed $${record.input_rate_per_m.toFixed(2)}/M`}>
+                                <Badge tone="warning">Fallback · ${record.fallback_rate_per_m.toFixed(2)}/M vs ${record.input_rate_per_m.toFixed(2)}/M</Badge>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1396,6 +1401,16 @@ function RequestDetail({ record }: { record: RecentActivity }) {
                     <DetailValueRow label="Cache write" value={fmtRate(record.cache_write_rate_per_m)} />
                     <DetailValueRow label="Regular output" value={fmtRate(record.output_rate_per_m)} />
                     <DetailValueRow label="Reasoning output" value={fmtRate(record.reasoning_rate_per_m)} />
+                    {record.fallback_rate_per_m > 0 && record.fallback_rate_per_m < record.input_rate_per_m && (
+                      <>
+                        <DetailValueRow label="Cheapest available" value={fmtRate(record.fallback_rate_per_m)} />
+                        <div className="px-1 py-2">
+                          <Badge tone="warning">
+                            Fallback route · billed {fmtRate(record.input_rate_per_m)} vs cheapest {fmtRate(record.fallback_rate_per_m)}
+                          </Badge>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </DetailPanel>

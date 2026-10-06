@@ -21,7 +21,7 @@ type AccurateRecentRecord struct {
 	PricingAsOf                                                    *time.Time
 	PricingBackfilled                                              bool
 	InputRatePerM, CachedRatePerM, CacheWriteRatePerM              float64
-	OutputRatePerM, ReasoningRatePerM                              float64
+	OutputRatePerM, ReasoningRatePerM, FallbackRatePerM            float64
 	CacheHit                                                       bool
 	LatencyMS, UpstreamLatencyMS, EndToEndLatencyMS, TTFTMS        int
 	SlimBytesSaved, SlimTokensSaved                                int
@@ -43,7 +43,7 @@ func (r *UsageRepo) RecentAccurate(ctx context.Context, tenantID string, since t
 			output_cost_nanos, reasoning_cost_nanos, avoided_cost_nanos, saved_cost_nanos,
 			pricing_status, pricing_source, pricing_key, pricing_match_kind, pricing_source_url,
 			pricing_as_of, pricing_backfilled, input_rate_per_m, cached_rate_per_m,
-			cache_write_rate_per_m, output_rate_per_m, reasoning_rate_per_m,
+			cache_write_rate_per_m, output_rate_per_m, reasoning_rate_per_m, fallback_rate_per_m,
 			cache_hit, latency_ms, upstream_latency_ms, end_to_end_latency_ms, ttft_ms,
 			slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
 			headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active, created_at
@@ -69,7 +69,7 @@ func (r *UsageRepo) RecentAccurate(ctx context.Context, tenantID string, since t
 			&rec.PricingStatus, &rec.PricingSource, &rec.PricingKey,
 			&rec.PricingMatchKind, &rec.PricingSourceURL, &pricingAsOf, &pricingBackfilled,
 			&rec.InputRatePerM, &rec.CachedRatePerM, &rec.CacheWriteRatePerM,
-			&rec.OutputRatePerM, &rec.ReasoningRatePerM,
+			&rec.OutputRatePerM, &rec.ReasoningRatePerM, &rec.FallbackRatePerM,
 			&cacheHit, &rec.LatencyMS, &rec.UpstreamLatencyMS, &rec.EndToEndLatencyMS, &rec.TTFTMS,
 			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &slim, &caveman, &terse,
 			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroom, &ponytail, &createdAt); err != nil {
@@ -192,7 +192,7 @@ type UsagePricingUpdate struct {
 	PricingAsOf                                           *time.Time
 	PricingBackfilled                                     bool
 	InputRatePerM, CachedRatePerM, CacheWriteRatePerM     float64
-	OutputRatePerM, ReasoningRatePerM                     float64
+	OutputRatePerM, ReasoningRatePerM, FallbackRatePerM   float64
 }
 
 func (r *UsageRepo) UpdateUsagePricing(ctx context.Context, id string, p UsagePricingUpdate) error {

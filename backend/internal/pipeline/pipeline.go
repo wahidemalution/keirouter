@@ -1678,6 +1678,7 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 		MarketRateOut:        attempt.Target.MarketRateOut,
 		MarketCacheReadRate:  attempt.Target.MarketCacheReadRate,
 		MarketCacheWriteRate: attempt.Target.MarketCacheWriteRate,
+		CheapestRateIn:       attempt.Target.InputPerM,
 		Provider:        attempt.Target.Provider,
 		Model:           attempt.Target.Model,
 		AccountID:       attempt.Account.ID,

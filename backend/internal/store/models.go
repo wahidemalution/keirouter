@@ -217,6 +217,9 @@ type UsageRecord struct {
 	CacheWriteRatePerM float64
 	OutputRatePerM     float64
 	ReasoningRatePerM  float64
+	// FallbackRatePerM is the cheapest available input rate when the request was
+	// served by a costlier fallback slug. Zero means not a fallback.
+	FallbackRatePerM float64
 
 	CacheHit          bool
 	LatencyMS         int // retained compatibility alias for end-to-end latency

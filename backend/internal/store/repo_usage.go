@@ -68,7 +68,7 @@ const usageColumns = `id, request_id, tenant_id, project_id, api_key_id, provide
 	cache_write_cost_nanos, output_cost_nanos, reasoning_cost_nanos, avoided_cost_nanos, saved_cost_nanos,
 	pricing_status, pricing_source, pricing_key, pricing_match_kind, pricing_source_url,
 	pricing_as_of, pricing_backfilled, input_rate_per_m, cached_rate_per_m,
-	cache_write_rate_per_m, output_rate_per_m, reasoning_rate_per_m, cache_hit, latency_ms,
+	cache_write_rate_per_m, output_rate_per_m, reasoning_rate_per_m, fallback_rate_per_m, cache_hit, latency_ms,
 	upstream_latency_ms, end_to_end_latency_ms, ttft_ms, slim_bytes_saved, slim_tokens_saved,
 	slim_rules, slim_active, caveman_active, terse_active, headroom_tokens_saved,
 	headroom_bytes_saved, headroom_active, ponytail_active, chain_id, created_at`
@@ -122,7 +122,7 @@ func usageArgs(u UsageRecord) []any {
 		u.ReasoningCostNanos, u.AvoidedCostNanos, u.SavedCostNanos,
 		u.PricingStatus, u.PricingSource, u.PricingKey, u.PricingMatchKind, u.PricingSourceURL,
 		nullTime(u.PricingAsOf), boolToInt(u.PricingBackfilled),
-		u.InputRatePerM, u.CachedRatePerM, u.CacheWriteRatePerM, u.OutputRatePerM, u.ReasoningRatePerM,
+		u.InputRatePerM, u.CachedRatePerM, u.CacheWriteRatePerM, u.OutputRatePerM, u.ReasoningRatePerM, u.FallbackRatePerM,
 		boolToInt(u.CacheHit), u.LatencyMS, u.UpstreamLatencyMS, u.EndToEndLatencyMS, u.TTFTMS,
 		u.SlimBytesSaved, u.SlimTokensSaved, u.SlimRules,
 		boolToInt(u.SlimActive), boolToInt(u.CavemanActive), boolToInt(u.TerseActive),

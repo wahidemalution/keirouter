@@ -41,6 +41,10 @@ type CostBreakdown struct {
 	CacheWriteRatePerM float64
 	OutputRatePerM     float64
 	ReasoningRatePerM  float64
+
+	// FallbackRatePerM is the cheapest available input rate when the request
+	// was served by a more expensive fallback slug. Zero means not a fallback.
+	FallbackRatePerM float64
 }
 
 func normalizeProvider(provider string) string {

@@ -160,6 +160,7 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 			"cache_write_rate_per_m": record.CacheWriteRatePerM,
 			"output_rate_per_m":      record.OutputRatePerM,
 			"reasoning_rate_per_m":   record.ReasoningRatePerM,
+			"fallback_rate_per_m":    record.FallbackRatePerM,
 			"cache_hit":              record.CacheHit,
 			"latency_ms":             record.EndToEndLatencyMS,
 			"upstream_latency_ms":    record.UpstreamLatencyMS,
