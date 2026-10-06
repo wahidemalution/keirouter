@@ -123,6 +123,12 @@ type Event struct {
 	CacheWritePerM float64
 	CacheReadPerM  float64
 
+	// Winning step's bound market slug and its billable (post-markup) rates.
+	// When set, these take precedence over the chain-level rates above.
+	MarketSlug    string
+	MarketRateIn  float64
+	MarketRateOut float64
+
 	Provider  string
 	Model     string
 	AccountID string
@@ -210,10 +216,8 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		// including a nominally successful response whose provider omitted usage.
 		// Do not inflate coverage merely because the target exists in the catalog.
 		cost.Pricing = PricingMatch{Status: "none", MatchKind: "none"}
-	} else if price, ok := chainPrice(ev); ok {
-		cost = calculateCostFromPrice(pricingMatch("chain", price, "chain", false), u, ev.CacheHit, savedTokens)
 	} else {
-		cost = m.CalculateCost(ev.Provider, ev.Model, u, ev.CacheHit, savedTokens)
+		cost = m.costForEvent(ev)
 	}
 	endToEnd := ev.EndToEndLatency
 	if endToEnd <= 0 {
@@ -264,6 +268,29 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 			Tokens: u.PromptTokens + u.CompletionTokens})
 	}
 	return cost.CostMicros, nil
+}
+
+// costForEvent resolves the terminal cost for an event, preferring the winning
+// step's market slug, then the chain aggregate, then the catalog.
+func (m *Meter) costForEvent(ev Event) CostBreakdown {
+	u := clampUsage(ev.Usage)
+	savedTokens := 0
+	if ev.SlimStats != nil {
+		savedTokens += ev.SlimStats.TokensSaved
+	}
+	if ev.HeadroomStats != nil {
+		savedTokens += ev.HeadroomStats.TokensSaved
+	}
+	if u.PromptTokens+u.CompletionTokens == 0 && !ev.CacheHit {
+		return CostBreakdown{Pricing: PricingMatch{Status: "none", MatchKind: "none"}}
+	}
+	if price, ok := marketPrice(ev); ok {
+		return calculateCostFromPrice(pricingMatch(ev.MarketSlug, price, "market_slug", false), u, ev.CacheHit, savedTokens)
+	}
+	if price, ok := chainPrice(ev); ok {
+		return calculateCostFromPrice(pricingMatch("chain", price, "chain", false), u, ev.CacheHit, savedTokens)
+	}
+	return m.CalculateCost(ev.Provider, ev.Model, u, ev.CacheHit, savedTokens)
 }
 
 func (m *Meter) recordUsage(ctx context.Context, rec store.UsageRecord) error {

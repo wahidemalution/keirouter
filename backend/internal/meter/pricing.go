@@ -274,6 +274,19 @@ func chainPrice(ev Event) (Price, bool) {
 	}, true
 }
 
+// marketPrice returns the billable price for a winning step's market slug. The
+// rates are already markup-adjusted by the caller; all-zero rates mean unset.
+func marketPrice(ev Event) (Price, bool) {
+	if ev.MarketSlug == "" || (ev.MarketRateIn <= 0 && ev.MarketRateOut <= 0) {
+		return Price{}, false
+	}
+	return Price{
+		InputPerM: ev.MarketRateIn, OutputPerM: ev.MarketRateOut,
+		CachedInputPerM: ev.MarketRateIn, CacheWritePerM: ev.MarketRateIn,
+		ReasoningPerM: ev.MarketRateOut, Source: "market_slug",
+	}, true
+}
+
 // calculateCostFromPrice runs the same token math as CalculateCost but with an
 // already-resolved price match. It takes the full match so the catalog path
 // keeps its provenance (key, match kind, estimated status) instead of both

@@ -84,3 +84,51 @@ func TestCostMicrosCacheHitIsFree(t *testing.T) {
 		t.Fatalf("CostMicros() = %d, want 0", cost)
 	}
 }
+
+func TestRecordPrefersMarketSlugOverChainRate(t *testing.T) {
+	// Chain aggregate is cheap (1/1); winning step's market slug is pricier.
+	m := New(nil, nil, map[string]Price{})
+	ev := Event{
+		Provider: "commandcode", Model: "deepseek/deepseek-v4-pro",
+		InputPerM: 1, OutputPerM: 1, // chain aggregate
+		MarketSlug:   "cmc/deepseek/deepseek-v4-pro",
+		MarketRateIn: 0.15, MarketRateOut: 0.45, // already post-markup
+		Usage: core.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000},
+	}
+	bd := m.costForEvent(ev)
+	if bd.Pricing.Source != "market_slug" {
+		t.Fatalf("source = %q, want market_slug", bd.Pricing.Source)
+	}
+	if bd.Pricing.Key != "cmc/deepseek/deepseek-v4-pro" {
+		t.Fatalf("key = %q", bd.Pricing.Key)
+	}
+	if bd.Pricing.MatchKind != "market_slug" {
+		t.Fatalf("match kind = %q, want market_slug", bd.Pricing.MatchKind)
+	}
+	// cost = 0.15 + 0.45 = 0.60 USD = 600_000_000 nanos
+	if bd.CostNanos != 600_000_000 {
+		t.Fatalf("CostNanos = %d, want 600000000", bd.CostNanos)
+	}
+}
+
+func TestRecordFallsBackToChainWhenNoSlug(t *testing.T) {
+	m := New(nil, nil, map[string]Price{})
+	ev := Event{Provider: "openai", Model: "gpt-4o", InputPerM: 2, OutputPerM: 4,
+		Usage: core.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000}}
+	bd := m.costForEvent(ev)
+	if bd.Pricing.Source != "chain" {
+		t.Fatalf("source = %q, want chain", bd.Pricing.Source)
+	}
+}
+
+func TestMarketPriceUnsetWhenSlugEmptyOrRatesZero(t *testing.T) {
+	if _, ok := marketPrice(Event{MarketRateIn: 1, MarketRateOut: 1}); ok {
+		t.Fatalf("empty slug should not be billable")
+	}
+	if _, ok := marketPrice(Event{MarketSlug: "x/y"}); ok {
+		t.Fatalf("zero rates should not be billable")
+	}
+	if _, ok := marketPrice(Event{MarketSlug: "x/y", MarketRateIn: 0.1}); !ok {
+		t.Fatalf("positive input rate should be billable")
+	}
+}
