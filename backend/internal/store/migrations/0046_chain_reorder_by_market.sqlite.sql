@@ -1,0 +1,1 @@
+ALTER TABLE chains ADD COLUMN reorder_by_market INTEGER NOT NULL DEFAULT 0;

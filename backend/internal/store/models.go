@@ -139,9 +139,12 @@ type Chain struct {
 	CacheWritePerM float64
 	CacheReadPerM  float64
 	MarketSlugs    []string
-	Steps          []ChainStep
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// ReorderByMarket orders steps cheapest-first by live market slug rate at
+	// request time. Off by default; requires per-step market slugs to be useful.
+	ReorderByMarket bool
+	Steps           []ChainStep
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // ChainStep is one candidate target within a chain.

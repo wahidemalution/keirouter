@@ -174,6 +174,56 @@ func TestChainStepMarketSlugRoundTrip(t *testing.T) {
 	require.Equal(t, "ocg/kimi-k2.6", got.Steps[1].MarketSlug)
 }
 
+func TestChainReorderByMarketRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := db.Chains()
+
+	c := Chain{ID: "r1", TenantID: DefaultTenantID, Name: "reorder", Strategy: "fallback",
+		ReorderByMarket: true,
+		Steps:           []ChainStep{{ID: "s1", Position: 0, Provider: "opencode-go", Model: "kimi-k2.6"}}}
+	require.NoError(t, repo.Create(ctx, c))
+	got, err := repo.Get(ctx, "r1")
+	require.NoError(t, err)
+	require.True(t, got.ReorderByMarket)
+
+	// Default stays false for a normal chain.
+	c2 := Chain{ID: "r2", TenantID: DefaultTenantID, Name: "plain", Strategy: "fallback",
+		Steps: []ChainStep{{ID: "s2", Position: 0, Provider: "openai", Model: "gpt-4o"}}}
+	require.NoError(t, repo.Create(ctx, c2))
+	got2, err := repo.Get(ctx, "r2")
+	require.NoError(t, err)
+	require.False(t, got2.ReorderByMarket)
+
+	// Update persists the flag both ways.
+	c.ReorderByMarket = false
+	require.NoError(t, repo.Update(ctx, c))
+	got, err = repo.Get(ctx, "r1")
+	require.NoError(t, err)
+	require.False(t, got.ReorderByMarket)
+	c2.ReorderByMarket = true
+	require.NoError(t, repo.Update(ctx, c2))
+	got2, err = repo.Get(ctx, "r2")
+	require.NoError(t, err)
+	require.True(t, got2.ReorderByMarket)
+
+	// ListByTenant surfaces the flag too.
+	list, err := repo.ListByTenant(ctx, DefaultTenantID)
+	require.NoError(t, err)
+	byID := map[string]bool{}
+	for _, ch := range list {
+		byID[ch.ID] = ch.ReorderByMarket
+	}
+	require.True(t, byID["r2"])
+	require.False(t, byID["r1"])
+
+	// UpdateRates must leave the flag untouched.
+	require.NoError(t, repo.UpdateRates(ctx, "r1", 1, 1, 1, 1))
+	got, err = repo.Get(ctx, "r1")
+	require.NoError(t, err)
+	require.False(t, got.ReorderByMarket)
+}
+
 func TestBudgetRepo_IncrementLimitOnTx_Overflow(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
