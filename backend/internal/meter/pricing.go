@@ -280,9 +280,17 @@ func marketPrice(ev Event) (Price, bool) {
 	if ev.MarketSlug == "" || (ev.MarketRateIn <= 0 && ev.MarketRateOut <= 0) {
 		return Price{}, false
 	}
+	cacheRead := ev.MarketCacheReadRate
+	cacheWrite := ev.MarketCacheWriteRate
+	if cacheRead <= 0 {
+		cacheRead = ev.MarketRateIn
+	}
+	if cacheWrite <= 0 {
+		cacheWrite = ev.MarketRateIn
+	}
 	return Price{
 		InputPerM: ev.MarketRateIn, OutputPerM: ev.MarketRateOut,
-		CachedInputPerM: ev.MarketRateIn, CacheWritePerM: ev.MarketRateIn,
+		CachedInputPerM: cacheRead, CacheWritePerM: cacheWrite,
 		ReasoningPerM: ev.MarketRateOut, Source: "market_slug",
 	}, true
 }

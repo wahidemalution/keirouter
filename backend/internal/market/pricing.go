@@ -12,6 +12,14 @@ type Rate struct {
 // ComputeChainRate derives a chain's rates from its bound slugs, taking the
 // cheapest input and the cheapest output independently. It returns false when
 // none of the slugs are present so the caller keeps the existing price.
+// Cache multipliers applied to a market input rate to derive cached-input and
+// cache-write rates. Shared by chain-rate computation and per-step routing so
+// the billed cache rates stay identical on both paths.
+const (
+	CacheReadMult  = 0.1
+	CacheWriteMult = 1.25
+)
+
 func ComputeChainRate(slugs []string, models []Model, markupPercent, cacheReadMult, cacheWriteMult float64) (Rate, bool) {
 	bySlug := make(map[string]Model, len(models))
 	for _, m := range models {

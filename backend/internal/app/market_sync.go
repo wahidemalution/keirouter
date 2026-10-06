@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	marketCacheReadMult  = 0.1
-	marketCacheWriteMult = 1.25
+	marketCacheReadMult  = market.CacheReadMult
+	marketCacheWriteMult = market.CacheWriteMult
 )
 
 // MarketCache exposes the live market snapshot for routing decisions.

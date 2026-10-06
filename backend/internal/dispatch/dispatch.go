@@ -97,6 +97,10 @@ type Target struct {
 	// Zero when unbound; the meter falls back to the chain/catalog price.
 	MarketRateIn  float64
 	MarketRateOut float64
+	// MarketCacheReadRate/MarketCacheWriteRate are the cache-aware derived rates
+	// for MarketSlug. Zero when unbound; the meter derives them if absent.
+	MarketCacheReadRate  float64
+	MarketCacheWriteRate float64
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the

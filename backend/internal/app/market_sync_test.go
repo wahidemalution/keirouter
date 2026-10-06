@@ -61,6 +61,36 @@ func TestSyncChainMarketPricesPopulatesCache(t *testing.T) {
 	}
 }
 
+// TestBuiltAppSharesOneMarketCache guards the wiring bug where Build created a
+// separate SnapshotCache for the gateway-bound App and for the returned App, so
+// runMarketSync warmed a cache the gateway never read. The sync loop's writer
+// and MarketCache()'s reader must be the same instance.
+func TestBuiltAppSharesOneMarketCache(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"slug":"ocg/kimi-k2.6","minAskIn":1,"minAskOut":2}]}`))
+	}))
+	defer srv.Close()
+
+	a := newSyncTestApp(t, db)
+	a.marketURL = srv.URL
+
+	// Capture the cache the gateway would bind to before warming, then confirm
+	// the sync loop populates that exact instance.
+	bound := a.MarketCache()
+	if _, err := a.syncChainMarketPrices(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if bound != a.marketCache {
+		t.Fatalf("MarketCache() returned a different instance than a.marketCache")
+	}
+	if _, ok := bound.Rate("ocg/kimi-k2.6"); !ok {
+		t.Fatalf("gateway-bound cache was not warmed by the sync loop")
+	}
+}
+
 func TestSyncChainMarketPricesWritesCheapest(t *testing.T) {
 	db := newSyncTestDB(t)
 	ctx := context.Background()

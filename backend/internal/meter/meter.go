@@ -128,6 +128,10 @@ type Event struct {
 	MarketSlug    string
 	MarketRateIn  float64
 	MarketRateOut float64
+	// Cache-aware derived rates for the market slug. Zero means the meter
+	// derives them from MarketRateIn using the default market multipliers.
+	MarketCacheReadRate  float64
+	MarketCacheWriteRate float64
 
 	Provider  string
 	Model     string
