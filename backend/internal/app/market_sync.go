@@ -14,6 +14,9 @@ const (
 	marketCacheWriteMult = 1.25
 )
 
+// MarketCache exposes the live market snapshot for routing decisions.
+func (a *App) MarketCache() *market.SnapshotCache { return a.marketCache }
+
 // syncChainMarketPrices recomputes every chain that has market slugs and
 // writes the derived rates onto the chain row. Chains whose slugs are all
 // absent from the snapshot keep their existing price. Returns the number of
@@ -23,7 +26,14 @@ func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	a.marketCache.Replace(models)
 	settings := market.LoadSettings(ctx, a.db.Settings().Get)
+	return a.syncChainMarketPricesWithModels(ctx, models, settings)
+}
+
+// syncChainMarketPricesWithModels applies an already-fetched snapshot to the
+// stored chains, writing derived rates for any chain whose price changed.
+func (a *App) syncChainMarketPricesWithModels(ctx context.Context, models []market.Model, settings market.Settings) (int, error) {
 	chains, err := a.db.Chains().ListByTenant(ctx, store.DefaultTenantID)
 	if err != nil {
 		return 0, err
@@ -56,8 +66,10 @@ func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
 	return changed, nil
 }
 
-// runMarketSync polls the market feed and refreshes chain prices on the
-// configured interval while auto-refresh is enabled.
+// runMarketSync polls the market feed on the configured interval. The live
+// snapshot cache is warmed on every successful fetch regardless of the
+// AutoRefresh setting; AutoRefresh only gates whether derived rates are
+// written back to the chain rows.
 func (a *App) runMarketSync(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -68,15 +80,21 @@ func (a *App) runMarketSync(ctx context.Context) {
 			return
 		case <-ticker.C:
 			settings := market.LoadSettings(ctx, a.db.Settings().Get)
-			if !settings.AutoRefresh {
-				continue
-			}
 			interval := time.Duration(settings.RefreshIntervalSeconds) * time.Second
 			if time.Since(lastRun) < interval {
 				continue
 			}
 			lastRun = time.Now()
-			if n, err := a.syncChainMarketPrices(ctx); err != nil {
+			models, err := market.Fetch(ctx, a.marketURL)
+			if err != nil {
+				a.log.Debug("market fetch failed", "err", err)
+				continue
+			}
+			a.marketCache.Replace(models)
+			if !settings.AutoRefresh {
+				continue
+			}
+			if n, err := a.syncChainMarketPricesWithModels(ctx, models, settings); err != nil {
 				settings.LastFetchError = err.Error()
 				_ = market.SaveSettings(ctx, a.db.Settings().Set, settings)
 				a.log.Debug("market sync failed", "err", err)

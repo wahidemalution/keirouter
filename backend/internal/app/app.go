@@ -37,6 +37,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/limits"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
@@ -67,6 +68,7 @@ type App struct {
 	probeRunner        *health.ProbeRunner
 	reloadPricing      func(context.Context) error
 	marketURL          string
+	marketCache        *market.SnapshotCache
 
 	// bg tracks long-lived background workers that touch the DB (oauth
 	// keepalive, health checker, cooldown sweeper) so shutdown can wait for
@@ -384,7 +386,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return nil
 	}
 
-	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}
+	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", marketCache: market.NewSnapshotCache()}
 
 	gw := gateway.New(gateway.Deps{
 		Config:               cfg,
@@ -442,7 +444,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: ""}
+	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", marketCache: market.NewSnapshotCache()}
 
 	return app, nil
 }

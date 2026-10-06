@@ -15,7 +15,7 @@ import (
 
 func newSyncTestApp(t *testing.T, db *store.DB) *App {
 	t.Helper()
-	return &App{db: db, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return &App{db: db, log: slog.New(slog.NewTextHandler(io.Discard, nil)), marketCache: market.NewSnapshotCache()}
 }
 
 func newSyncTestDB(t *testing.T) *store.DB {
@@ -33,6 +33,32 @@ func newSyncTestDB(t *testing.T) *store.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func TestSyncChainMarketPricesPopulatesCache(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+
+	if err := market.SaveSettings(ctx, db.Settings().Set, market.Settings{
+		RefreshIntervalSeconds: 2, MarkupPercent: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"slug":"ocg/kimi-k2.6","minAskIn":1,"minAskOut":2},{"slug":"cmc/deepseek/deepseek-v4-pro","minAskIn":3,"minAskOut":4}]}`))
+	}))
+	defer srv.Close()
+
+	a := newSyncTestApp(t, db)
+	a.marketURL = srv.URL
+	if _, err := a.syncChainMarketPrices(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	r, ok := a.MarketCache().Rate("ocg/kimi-k2.6")
+	if !ok || r.InputPerM != 1 || r.OutputPerM != 2 {
+		t.Fatalf("cache rate = %+v ok=%v", r, ok)
+	}
 }
 
 func TestSyncChainMarketPricesWritesCheapest(t *testing.T) {
