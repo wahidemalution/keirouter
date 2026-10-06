@@ -146,12 +146,13 @@ type Chain struct {
 
 // ChainStep is one candidate target within a chain.
 type ChainStep struct {
-	ID        string
-	ChainID   string
-	Position  int
-	Provider  string
-	Model     string
-	CreatedAt time.Time
+	ID         string
+	ChainID    string
+	Position   int
+	Provider   string
+	Model      string
+	MarketSlug string
+	CreatedAt  time.Time
 }
 
 // ProviderCategory is an operator-managed display provider label used by the

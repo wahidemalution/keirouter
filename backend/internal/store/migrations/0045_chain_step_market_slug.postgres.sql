@@ -1,0 +1,1 @@
+ALTER TABLE chain_steps ADD COLUMN IF NOT EXISTS market_slug TEXT NOT NULL DEFAULT '';

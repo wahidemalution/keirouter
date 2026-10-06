@@ -147,6 +147,33 @@ func TestChainRepo_UpdateRatesOnlyTouchesPrices(t *testing.T) {
 	require.Equal(t, "cs-1", got.Steps[0].ID)
 }
 
+func TestChainStepMarketSlugRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := db.Chains()
+
+	c := Chain{
+		ID: "c1", TenantID: DefaultTenantID, Name: "slug-chain", Strategy: "fallback",
+		Steps: []ChainStep{
+			{ID: "s1", Position: 0, Provider: "commandcode", Model: "deepseek/deepseek-v4-pro", MarketSlug: "cmc/deepseek/deepseek-v4-pro"},
+			{ID: "s2", Position: 1, Provider: "opencode-go", Model: "kimi-k2.6", MarketSlug: ""},
+		},
+	}
+	require.NoError(t, repo.Create(ctx, c))
+
+	got, err := repo.Get(ctx, "c1")
+	require.NoError(t, err)
+	require.Len(t, got.Steps, 2)
+	require.Equal(t, "cmc/deepseek/deepseek-v4-pro", got.Steps[0].MarketSlug)
+	require.Equal(t, "", got.Steps[1].MarketSlug)
+
+	c.Steps[1].MarketSlug = "ocg/kimi-k2.6"
+	require.NoError(t, repo.Update(ctx, c))
+	got, err = repo.Get(ctx, "c1")
+	require.NoError(t, err)
+	require.Equal(t, "ocg/kimi-k2.6", got.Steps[1].MarketSlug)
+}
+
 func TestBudgetRepo_IncrementLimitOnTx_Overflow(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

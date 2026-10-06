@@ -293,11 +293,11 @@ func (r *ChainRepo) Create(ctx context.Context, c Chain) error {
 		return fmt.Errorf("store: create chain: %w", err)
 	}
 
-	sq := r.db.rebind(`INSERT INTO chain_steps (id, chain_id, position, provider, model, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`)
+	sq := r.db.rebind(`INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	for _, s := range c.Steps {
 		if _, err := tx.ExecContext(ctx, sq, s.ID, c.ID, s.Position, s.Provider, s.Model,
-			formatTime(s.CreatedAt)); err != nil {
+			s.MarketSlug, formatTime(s.CreatedAt)); err != nil {
 			return fmt.Errorf("store: create chain step: %w", err)
 		}
 	}
@@ -415,11 +415,11 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 		return fmt.Errorf("store: delete chain steps: %w", err)
 	}
 
-	sq := r.db.rebind(`INSERT INTO chain_steps (id, chain_id, position, provider, model, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`)
+	sq := r.db.rebind(`INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	for _, s := range c.Steps {
 		if _, err := tx.ExecContext(ctx, sq, s.ID, c.ID, s.Position, s.Provider, s.Model,
-			formatTime(time.Now())); err != nil {
+			s.MarketSlug, formatTime(time.Now())); err != nil {
 			return fmt.Errorf("store: create chain step: %w", err)
 		}
 	}
@@ -427,7 +427,7 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 }
 
 func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, error) {
-	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, created_at FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
+	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, market_slug, created_at FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
 	rows, err := r.db.sql.QueryContext(ctx, q, chainID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list chain steps: %w", err)
@@ -440,7 +440,7 @@ func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, err
 			s       ChainStep
 			created string
 		)
-		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &created); err != nil {
+		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &s.MarketSlug, &created); err != nil {
 			return nil, err
 		}
 		s.CreatedAt = parseTime(created)

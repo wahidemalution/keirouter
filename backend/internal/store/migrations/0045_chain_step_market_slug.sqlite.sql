@@ -1,0 +1,1 @@
+ALTER TABLE chain_steps ADD COLUMN market_slug TEXT NOT NULL DEFAULT '';
