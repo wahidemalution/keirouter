@@ -421,6 +421,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Refresher:            tokenRefresher,
 		ReloadPricing:        reloadPricing,
 		SyncMarketPrices:     app.syncChainMarketPrices,
+		MarketCache:          app.MarketCache(),
 		Guardrails:           guardrailEngine,
 		GuardrailRepo:        db.Guardrails(),
 		GuardrailLogs:        db.GuardrailLogs(),

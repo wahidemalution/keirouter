@@ -197,7 +197,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		fmt.Sprintf("Model:    %s\nMessages: %d\nStream:   %v\nTenant:   %s\nKey:      %s (%s)",
 			req.Model, len(req.Messages), req.Stream, tenantID, key.Name, key.ID))
 
-	resolved, err := resolveTargets(r.Context(), s.chains, s.aliases, s.latencyReader(), tenantID, req.Model)
+	resolved, err := s.resolveTargets(r.Context(), tenantID, req.Model)
 	if err != nil {
 		var bad badModelError
 		if errors.As(err, &bad) {

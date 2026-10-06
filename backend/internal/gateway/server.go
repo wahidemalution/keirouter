@@ -31,6 +31,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/identity"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
 	"github.com/mydisha/keirouter/backend/internal/payment"
@@ -91,6 +92,7 @@ type Server struct {
 	refresher           dispatch.TokenRefresher
 	reloadPricing       func(context.Context) error
 	syncMarketPrices    func(context.Context) (int, error)
+	marketCache         *market.SnapshotCache
 	version             string
 	updates             *update.Checker
 	insightsCache       *ttlCache
@@ -147,6 +149,7 @@ type Deps struct {
 	Refresher            dispatch.TokenRefresher
 	ReloadPricing        func(context.Context) error
 	SyncMarketPrices     func(context.Context) (int, error)
+	MarketCache          *market.SnapshotCache
 	Guardrails           *guardrails.Engine
 	GuardrailRepo        *store.GuardrailRepo
 	GuardrailLogs        *store.GuardrailLogRepo
@@ -212,6 +215,7 @@ func New(d Deps) *Server {
 		refresher:           d.Refresher,
 		reloadPricing:       d.ReloadPricing,
 		syncMarketPrices:    d.SyncMarketPrices,
+		marketCache:         d.MarketCache,
 		version:             d.Version,
 		updates:             d.Updates,
 		insightsCache:       newTTLCache(insightsCacheTTL),

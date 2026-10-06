@@ -8,6 +8,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
@@ -58,6 +59,21 @@ type LatencyReader interface {
 // When a chain is resolved, the returned resolveResult carries the chain ID
 // and strategy so the dispatcher can apply round-robin rotation.
 func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource, latency LatencyReader, tenantID, model string) (resolveResult, error) {
+	return resolveTargetsWith(ctx, chains, aliases, latency, nil, 0, tenantID, model)
+}
+
+// resolveTargets is the Server-bound entry point. It supplies the live market
+// snapshot cache and the configured markup so chains with ReorderByMarket set
+// are ordered by their bound slugs' current rates.
+func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (resolveResult, error) {
+	var markup float64
+	if s.settings != nil {
+		markup = market.LoadSettings(ctx, s.settings.Get).MarkupPercent
+	}
+	return resolveTargetsWith(ctx, s.chains, s.aliases, s.latencyReader(), s.marketCache, markup, tenantID, model)
+}
+
+func resolveTargetsWith(ctx context.Context, chains ChainSource, aliases AliasSource, latency LatencyReader, cache *market.SnapshotCache, markupPercent float64, tenantID, model string) (resolveResult, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return resolveResult{}, errBadModel("model is required")
@@ -65,7 +81,7 @@ func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource
 
 	// chain:<name>
 	if name, ok := strings.CutPrefix(model, "chain:"); ok {
-		return chainResult(ctx, chains, latency, tenantID, name)
+		return chainResultWith(ctx, chains, latency, cache, markupPercent, tenantID, name)
 	}
 
 	// provider/model — resolve provider alias (e.g. "mmtp" -> "xiaomi-tokenplan").
@@ -77,7 +93,7 @@ func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource
 	}
 
 	// bare name -> try a chain first
-	res, err := chainResult(ctx, chains, latency, tenantID, model)
+	res, err := chainResultWith(ctx, chains, latency, cache, markupPercent, tenantID, model)
 	if err == nil {
 		return res, nil
 	}
@@ -97,6 +113,10 @@ func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource
 
 // chainResult resolves a chain by name and extracts its strategy metadata.
 func chainResult(ctx context.Context, chains ChainSource, latency LatencyReader, tenantID, name string) (resolveResult, error) {
+	return chainResultWith(ctx, chains, latency, nil, 0, tenantID, name)
+}
+
+func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyReader, cache *market.SnapshotCache, markupPercent float64, tenantID, name string) (resolveResult, error) {
 	list, err := chains.ListByTenant(ctx, tenantID)
 	if err != nil {
 		return resolveResult{}, err
@@ -109,6 +129,13 @@ func chainResult(ctx context.Context, chains ChainSource, latency LatencyReader,
 			}
 
 			opts := dispatch.PlanOptions{ChainID: c.ID}
+			// A chain marked ReorderByMarket is ordered cheapest-first by the
+			// live rate of each step's bound slug. Unresolvable/slugless steps
+			// sink last. Runs before the declared strategy switch so it
+			// composes with the fallback/round-robin handling below.
+			if c.ReorderByMarket {
+				steps = orderStepsByMarket(steps, cache, markupPercent)
+			}
 			// Ordering strategies reorder the chain steps before the optional
 			// fallback model is appended, so the explicit last-resort target
 			// always stays last. round-robin rotates at dispatch time; the
@@ -180,6 +207,47 @@ func orderStepsByLatency(ctx context.Context, latency LatencyReader, tenantID st
 	}
 	out := append([]dispatch.Target(nil), steps...)
 	sort.SliceStable(out, func(i, j int) bool { return key(out[i]) < key(out[j]) })
+	return out
+}
+
+// orderStepsByMarket orders steps cheapest-first by the live market rate of each
+// step's bound slug and stamps the billable (post-markup) rates onto each slugged
+// target. Steps without a resolvable slug keep their relative order and sink
+// behind priced steps. When no step has a resolvable slug the input order is
+// returned unchanged.
+func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
+	out := append([]dispatch.Target(nil), steps...)
+	if cache == nil {
+		return out
+	}
+	mult := 1 + markupPercent/100
+	type key struct {
+		sum float64
+		ok  bool
+	}
+	keys := make([]key, len(out))
+	for i := range out {
+		if out[i].MarketSlug == "" {
+			continue
+		}
+		r, ok := cache.Rate(out[i].MarketSlug)
+		if !ok {
+			continue
+		}
+		out[i].MarketRateIn = r.InputPerM * mult
+		out[i].MarketRateOut = r.OutputPerM * mult
+		keys[i] = key{sum: r.InputPerM + r.OutputPerM, ok: true}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ki, kj := keys[i], keys[j]
+		if ki.ok != kj.ok {
+			return ki.ok // priced before unpriced
+		}
+		if !ki.ok {
+			return false // both unpriced: preserve order
+		}
+		return ki.sum < kj.sum
+	})
 	return out
 }
 

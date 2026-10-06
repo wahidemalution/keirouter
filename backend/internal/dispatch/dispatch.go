@@ -90,6 +90,13 @@ type Target struct {
 	OutputPerM     float64
 	CacheWritePerM float64
 	CacheReadPerM  float64
+
+	// MarketSlug is the inferhub slug bound to this step (empty = unbound).
+	MarketSlug string
+	// MarketRateIn/Out are the billable (post-markup) rates for MarketSlug.
+	// Zero when unbound; the meter falls back to the chain/catalog price.
+	MarketRateIn  float64
+	MarketRateOut float64
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the
@@ -1030,7 +1037,7 @@ func TargetsFromChain(chain store.Chain) []Target {
 	out := make([]Target, 0, len(chain.Steps))
 	for _, s := range chain.Steps {
 		out = append(out, Target{
-			Provider: s.Provider, Model: s.Model,
+			Provider: s.Provider, Model: s.Model, MarketSlug: s.MarketSlug,
 			InputPerM: chain.InputPerM, OutputPerM: chain.OutputPerM,
 			CacheWritePerM: chain.CacheWritePerM, CacheReadPerM: chain.CacheReadPerM,
 		})
