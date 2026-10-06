@@ -225,7 +225,16 @@ func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, ma
 		sum float64
 		ok  bool
 	}
-	keys := make([]key, len(out))
+	keyFor := func(t dispatch.Target) key {
+		if t.MarketSlug == "" {
+			return key{}
+		}
+		r, ok := cache.Rate(t.MarketSlug)
+		if !ok {
+			return key{}
+		}
+		return key{sum: r.InputPerM + r.OutputPerM, ok: true}
+	}
 	for i := range out {
 		if out[i].MarketSlug == "" {
 			continue
@@ -236,10 +245,9 @@ func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, ma
 		}
 		out[i].MarketRateIn = r.InputPerM * mult
 		out[i].MarketRateOut = r.OutputPerM * mult
-		keys[i] = key{sum: r.InputPerM + r.OutputPerM, ok: true}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		ki, kj := keys[i], keys[j]
+		ki, kj := keyFor(out[i]), keyFor(out[j])
 		if ki.ok != kj.ok {
 			return ki.ok // priced before unpriced
 		}
