@@ -1026,11 +1026,12 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
-			"provider": m.Provider, "model": m.Model,
+			"provider": m.Provider, "model": displayModel(m.Model, m.ChainID, chainNames),
 			"total_requests": m.TotalRequests,
 			"prompt_tokens":  m.PromptTokens, "completion_tokens": m.CompletionTokens,
 			"cost_usd": float64(m.CostMicros) / 1_000_000,
@@ -1055,6 +1056,30 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildKeyUsageMap assembles the portal usage payload for one key.
+// chainNamesByTenant returns a chain-id to user-facing-name map for a tenant.
+// Callers degrade gracefully to the recorded model when this is empty.
+func (s *Server) chainNamesByTenant(ctx context.Context, tenantID string) map[string]string {
+	names := map[string]string{}
+	chains, err := s.chains.ListByTenant(ctx, tenantID)
+	if err != nil {
+		s.log.Error("usage: chain lookup failed", "err", err)
+		return names
+	}
+	for _, c := range chains {
+		names[c.ID] = c.Name
+	}
+	return names
+}
+
+// displayModel resolves the label shown to a portal user: the chain name when
+// the request ran through a known chain, otherwise the recorded model.
+func displayModel(model, chainID string, chainNames map[string]string) string {
+	if name, ok := chainNames[chainID]; ok && name != "" {
+		return name
+	}
+	return model
+}
+
 func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days int) (map[string]any, error) {
 	// Get budgets scoped to this key.
 	budgets, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, key.ID)
@@ -1140,13 +1165,15 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 		})
 	}
 
-	// Per-model breakdown for this key.
+	// Per-model breakdown for this key. Chain-routed requests are shown under
+	// the user-facing chain name, not the upstream sub-model that served them.
+	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -days))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
 			"provider":          m.Provider,
-			"model":             m.Model,
+			"model":             displayModel(m.Model, m.ChainID, chainNames),
 			"total_requests":    m.TotalRequests,
 			"prompt_tokens":     m.PromptTokens,
 			"completion_tokens": m.CompletionTokens,
@@ -1158,25 +1185,13 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// Requests that ran through a chain are shown under the user-facing chain
 	// name, not the upstream sub-model the request happened to land on. A
 	// missing/unknown chain id falls back to the recorded model.
-	chainNames := map[string]string{}
-	if chains, cerr := s.chains.ListByTenant(ctx, key.TenantID); cerr == nil {
-		for _, c := range chains {
-			chainNames[c.ID] = c.Name
-		}
-	} else {
-		s.log.Error("key usage: chain lookup failed", "err", cerr)
-	}
 	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
 	recentOut := make([]map[string]any, 0, len(recent))
 	for _, rec := range recent {
-		displayModel := rec.Model
-		if name, ok := chainNames[rec.ChainID]; ok && name != "" {
-			displayModel = name
-		}
 		entry := map[string]any{
 			"id":                rec.ID,
 			"provider":          rec.Provider,
-			"model":             displayModel,
+			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,
 			"completion_tokens": rec.CompletionTokens,
 			"cost_usd":          float64(rec.CostMicros) / 1_000_000,

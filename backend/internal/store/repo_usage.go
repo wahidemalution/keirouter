@@ -511,6 +511,7 @@ func (r *UsageRepo) ByAccount(ctx context.Context, tenantID string, since time.T
 type ModelUsage struct {
 	Provider         string
 	Model            string
+	ChainID          string
 	TotalRequests    int64
 	PromptTokens     int64
 	CompletionTokens int64
@@ -557,13 +558,14 @@ func (r *UsageRepo) ByModelByKey(ctx context.Context, keyID string, since time.T
 		SELECT
 			provider,
 			model,
+			chain_id,
 			COUNT(*),
 			COALESCE(SUM(prompt_tokens), 0),
 			COALESCE(SUM(completion_tokens), 0),
 			(CAST(COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000
 		FROM usage_records
 		WHERE api_key_id = ? AND created_at >= ?
-		GROUP BY provider, model
+		GROUP BY provider, model, chain_id
 		ORDER BY COUNT(*) DESC`)
 	rows, err := r.db.sql.QueryContext(ctx, q, keyID, formatTime(since))
 	if err != nil {
@@ -574,9 +576,11 @@ func (r *UsageRepo) ByModelByKey(ctx context.Context, keyID string, since time.T
 	var out []ModelUsage
 	for rows.Next() {
 		var m ModelUsage
-		if err := rows.Scan(&m.Provider, &m.Model, &m.TotalRequests, &m.PromptTokens, &m.CompletionTokens, &m.CostMicros); err != nil {
+		var chainID string
+		if err := rows.Scan(&m.Provider, &m.Model, &chainID, &m.TotalRequests, &m.PromptTokens, &m.CompletionTokens, &m.CostMicros); err != nil {
 			return nil, err
 		}
+		m.ChainID = chainID
 		out = append(out, m)
 	}
 	return out, rows.Err()

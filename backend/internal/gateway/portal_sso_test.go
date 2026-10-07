@@ -275,6 +275,11 @@ func TestPortalUsageShowsChainNameNotSubModel(t *testing.T) {
 	require.True(t, ok, "recent list present")
 	require.Len(t, recent, 1)
 	require.Equal(t, "gpt-6-luna", recent[0]["model"], "request log must show the chain name")
+
+	models, ok := payload["models"].([]map[string]any)
+	require.True(t, ok, "model breakdown present")
+	require.Len(t, models, 1)
+	require.Equal(t, "gpt-6-luna", models[0]["model"], "model breakdown must show the chain name")
 }
 
 // TestPortalUsageShowsModelWhenNotAChain keeps direct (non-chain) requests
