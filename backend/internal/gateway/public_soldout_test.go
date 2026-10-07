@@ -60,8 +60,9 @@ func TestPublicModelsAvailableWhenOneMarketSlugResolves(t *testing.T) {
 		ID: "c-partial", TenantID: store.DefaultTenantID, Name: "partial-combo",
 		Strategy:    "priority",
 		MarketSlugs: []string{"cc/claude-fable-5-1", "ocg/deepseek-v4.1-flash"},
-		Steps:       []store.ChainStep{{Provider: "custom-openai-inf", Model: "deepseek-v4.1-flash", Position: 0}},
-		CreatedAt:   time.Now(), UpdatedAt: time.Now(),
+		InputPerM:   1.25, OutputPerM: 5.5,
+		Steps:     []store.ChainStep{{Provider: "custom-openai-inf", Model: "deepseek-v4.1-flash", Position: 0}},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
 	cache := market.NewSnapshotCache()
 	cache.Replace([]market.Model{{Slug: "ocg/deepseek-v4.1-flash", MinAskIn: 0.042, MinAskOut: 0.168}})
@@ -70,6 +71,10 @@ func TestPublicModelsAvailableWhenOneMarketSlugResolves(t *testing.T) {
 	models := getPublicModels(t, gw)
 	require.Len(t, models, 1)
 	require.False(t, models[0].SoldOut, "one resolving slug => not sold out")
+	// Available chain keeps the existing precedence: the configured chain rate
+	// is surfaced (not suppressed to 0 as a sold-out chain would be).
+	require.Equal(t, 1.25, models[0].InputPerM, "available chain keeps its configured rate")
+	require.Equal(t, 5.5, models[0].OutputPerM)
 }
 
 // No market slugs -> never sold out; catalog price shown as today.
