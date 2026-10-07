@@ -33,6 +33,7 @@ export interface PublicModel {
   output_per_m: number;
   cached_per_m: number;
   cache_write_per_m: number;
+  sold_out: boolean;
   capabilities: PublicCapabilities;
   usage: PublicUsage;
 }

@@ -69,24 +69,30 @@ export function ModelCard({ model }: { model: PublicModel }) {
       </div>
       <ModelCapabilityIcons capabilities={model.capabilities} className="my-2" bare />
       <p className="break-all font-mono text-[10px] text-[var(--muted)]">{model.model_id}</p>
-      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-[var(--line)] pt-3 text-xs">
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Input / 1M</p>
-          <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.input_per_m)}</p>
+      {model.sold_out ? (
+        <div className="mt-3 inline-flex items-center gap-1 rounded-full border border-[var(--muted)] px-2.5 py-1 text-xs font-medium text-[var(--muted)]">
+          Sold out
         </div>
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Output / 1M</p>
-          <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.output_per_m)}</p>
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-[var(--line)] pt-3 text-xs">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Input / 1M</p>
+            <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.input_per_m)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Output / 1M</p>
+            <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.output_per_m)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Cache Read / 1M</p>
+            <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.cached_per_m)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Cache Write / 1M</p>
+            <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.cache_write_per_m)}</p>
+          </div>
         </div>
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Cache Read / 1M</p>
-          <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.cached_per_m)}</p>
-        </div>
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.5px] text-[var(--muted)]">Cache Write / 1M</p>
-          <p className="tabular-nums font-[650] text-[var(--ink)]">{fmtRate(model.cache_write_per_m)}</p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
