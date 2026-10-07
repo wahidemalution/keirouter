@@ -101,6 +101,13 @@ type Target struct {
 	// for MarketSlug. Zero when unbound; the meter derives them if absent.
 	MarketCacheReadRate  float64
 	MarketCacheWriteRate float64
+	// UpstreamRateIn/Out are the pre-markup market rates for MarketSlug: what the
+	// operator pays the upstream provider. Used only for operator cost accounting
+	// (profit = billable - upstream); never charged to the user.
+	UpstreamRateIn         float64
+	UpstreamRateOut        float64
+	UpstreamCacheReadRate  float64
+	UpstreamCacheWriteRate float64
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the

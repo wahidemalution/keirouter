@@ -66,6 +66,7 @@ const usageColumns = `id, request_id, tenant_id, project_id, api_key_id, provide
 	status, error_kind, prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
 	reasoning_tokens, usage_source, cost_micros, cost_nanos, input_cost_nanos, cached_cost_nanos,
 	cache_write_cost_nanos, output_cost_nanos, reasoning_cost_nanos, avoided_cost_nanos, saved_cost_nanos,
+	upstream_cost_nanos, upstream_cost_micros,
 	pricing_status, pricing_source, pricing_key, pricing_match_kind, pricing_source_url,
 	pricing_as_of, pricing_backfilled, input_rate_per_m, cached_rate_per_m,
 	cache_write_rate_per_m, output_rate_per_m, reasoning_rate_per_m, fallback_rate_per_m, cache_hit, latency_ms,
@@ -113,6 +114,12 @@ func usageArgs(u UsageRecord) []any {
 	if u.CostMicros == 0 && u.CostNanos != 0 {
 		u.CostMicros = (u.CostNanos + 500) / 1000
 	}
+	if u.UpstreamCostNanos == 0 && u.UpstreamCostMicros != 0 {
+		u.UpstreamCostNanos = u.UpstreamCostMicros * 1000
+	}
+	if u.UpstreamCostMicros == 0 && u.UpstreamCostNanos != 0 {
+		u.UpstreamCostMicros = (u.UpstreamCostNanos + 500) / 1000
+	}
 	return []any{
 		u.ID, u.RequestID, u.TenantID, nullString(u.ProjectID), nullString(u.APIKeyID),
 		u.Provider, u.Model, nullString(u.AccountID), u.Client, u.Status, u.ErrorKind,
@@ -120,6 +127,7 @@ func usageArgs(u UsageRecord) []any {
 		u.ReasoningTokens, u.UsageSource, u.CostMicros, u.CostNanos,
 		u.InputCostNanos, u.CachedCostNanos, u.CacheWriteCostNanos, u.OutputCostNanos,
 		u.ReasoningCostNanos, u.AvoidedCostNanos, u.SavedCostNanos,
+		u.UpstreamCostNanos, u.UpstreamCostMicros,
 		u.PricingStatus, u.PricingSource, u.PricingKey, u.PricingMatchKind, u.PricingSourceURL,
 		nullTime(u.PricingAsOf), boolToInt(u.PricingBackfilled),
 		u.InputRatePerM, u.CachedRatePerM, u.CacheWriteRatePerM, u.OutputRatePerM, u.ReasoningRatePerM, u.FallbackRatePerM,
@@ -862,4 +870,36 @@ func splitRules(s string) []string {
 		}
 	}
 	return out
+}
+
+// ProfitSummary aggregates operator economics from usage over a time window.
+// BilledNanos is what users were charged (post-markup); UpstreamNanos is the
+// pre-markup market cost the operator pays providers. Covered is the subset of
+// billed cost from requests that had a known upstream cost, so an accurate
+// margin can be derived without letting unpriced requests distort it.
+type ProfitSummary struct {
+	BilledNanos    int64
+	UpstreamNanos  int64
+	CoveredNanos   int64
+	Requests       int64
+	PricedRequests int64
+}
+
+// ProfitSince returns operator economics for a tenant since the given time.
+func (r *UsageRepo) ProfitSince(ctx context.Context, tenantID string, since time.Time) (ProfitSummary, error) {
+	q := r.db.rebind(`
+		SELECT
+			COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0),
+			COALESCE(SUM(upstream_cost_nanos), 0),
+			COALESCE(SUM(CASE WHEN upstream_cost_nanos > 0 THEN CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END ELSE 0 END), 0),
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN upstream_cost_nanos > 0 THEN 1 ELSE 0 END), 0)
+		FROM usage_records
+		WHERE tenant_id = ? AND created_at >= ?`)
+	var s ProfitSummary
+	if err := r.db.sql.QueryRowContext(ctx, q, tenantID, formatTime(since)).Scan(
+		&s.BilledNanos, &s.UpstreamNanos, &s.CoveredNanos, &s.Requests, &s.PricedRequests); err != nil {
+		return ProfitSummary{}, fmt.Errorf("store: profit since: %w", err)
+	}
+	return s, nil
 }

@@ -1448,6 +1448,16 @@ export interface PaymentSummary {
   count_by_status: Record<string, number>;
 }
 
+export interface UsageEconomics {
+  billed_usd: number;
+  upstream_usd: number;
+  profit_usd: number;
+  margin_pct: number;
+  requests: number;
+  priced_requests: number;
+  unpriced_usd: number;
+}
+
 /** Masked metadata for the signed-in portal user's key. */
 export async function fetchPortalKey(): Promise<PortalKeyInfo> {
   const resp = await fetch("/portal/api/key");
@@ -1623,6 +1633,7 @@ export const api = {
   // Payment orders (admin): revenue summary and manual credit approval.
   paymentOrders: () => request<{ orders: PaymentOrderAdmin[] }>("GET", "/payments/orders"),
   paymentSummary: () => request<PaymentSummary>("GET", "/payments/summary"),
+  paymentEconomics: () => request<UsageEconomics>("GET", "/payments/economics"),
   approvePaymentOrder: (id: string, reason: string) =>
     request<PaymentOrderAdmin>("POST", `/payments/orders/${id}/approve`, { reason }),
 

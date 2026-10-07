@@ -299,6 +299,39 @@ func marketPrice(ev Event) (Price, bool) {
 	}, true
 }
 
+// providerPrice returns the pre-markup market cost basis for a winning step's
+// slug: what the operator pays the upstream provider. It returns false when the
+// request carried no market slug, meaning upstream cost is unknown (not zero).
+func providerPrice(ev Event) (Price, bool) {
+	if ev.MarketSlug == "" || (ev.UpstreamRateIn <= 0 && ev.UpstreamRateOut <= 0) {
+		return Price{}, false
+	}
+	return Price{
+		InputPerM: ev.UpstreamRateIn, OutputPerM: ev.UpstreamRateOut,
+		CachedInputPerM: ev.UpstreamCacheReadRate, CacheWritePerM: ev.UpstreamCacheWriteRate,
+		ReasoningPerM: ev.UpstreamRateOut, Source: "market_slug",
+	}, true
+}
+
+// upstreamCostForEvent computes the operator's pre-markup cost for a request.
+// It returns zero when no market slug is bound because the true upstream cost is
+// then unknown; charging zero is the safe default for a profit view.
+func upstreamCostForEvent(ev Event) CostBreakdown {
+	price, ok := providerPrice(ev)
+	if !ok {
+		return CostBreakdown{}
+	}
+	u := clampUsage(ev.Usage)
+	savedTokens := 0
+	if ev.SlimStats != nil {
+		savedTokens += ev.SlimStats.TokensSaved
+	}
+	if ev.HeadroomStats != nil {
+		savedTokens += ev.HeadroomStats.TokensSaved
+	}
+	return calculateCostFromPrice(pricingMatch(ev.MarketSlug, price, "market_slug", false), u, ev.CacheHit, savedTokens)
+}
+
 // calculateCostFromPrice runs the same token math as CalculateCost but with an
 // already-resolved price match. It takes the full match so the catalog path
 // keeps its provenance (key, match kind, estimated status) instead of both

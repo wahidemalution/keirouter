@@ -27,6 +27,7 @@ export function PaymentsPage() {
 
   const ordersQuery = useQuery({ queryKey: ["payment-orders"], queryFn: api.paymentOrders });
   const summaryQuery = useQuery({ queryKey: ["payment-summary"], queryFn: api.paymentSummary });
+  const economicsQuery = useQuery({ queryKey: ["payment-economics"], queryFn: api.paymentEconomics });
 
   const approve = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => api.approvePaymentOrder(id, reason),
@@ -42,6 +43,7 @@ export function PaymentsPage() {
 
   const orders = ordersQuery.data?.orders ?? [];
   const summary = summaryQuery.data;
+  const econ = economicsQuery.data;
 
   return (
     <div className="space-y-6">
@@ -60,6 +62,36 @@ export function PaymentsPage() {
           <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Pending</p>
           <p className="mt-1 text-2xl font-display font-semibold tabular-nums">{summary?.count_by_status?.pending ?? 0}</p>
         </Card>
+      </div>
+
+      <div>
+        <h2 className="text-sm font-semibold text-[var(--text)]">Usage economics</h2>
+        <p className="mt-0.5 text-[12px] text-[var(--text-muted)]">
+          Upstream is your pre-markup cost to providers; profit is what users were charged minus that cost.
+        </p>
+        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card className="p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Charged (billed)</p>
+            <p className="mt-1 text-2xl font-display font-semibold tabular-nums">{econ ? formatUSD(econ.billed_usd) : "—"}</p>
+          </Card>
+          <Card className="p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Upstream cost (pre-markup)</p>
+            <p className="mt-1 text-2xl font-display font-semibold tabular-nums">{econ ? formatUSD(econ.upstream_usd) : "—"}</p>
+          </Card>
+          <Card className="p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Profit</p>
+            <p className="mt-1 text-2xl font-display font-semibold tabular-nums">{econ ? formatUSD(econ.profit_usd) : "—"}</p>
+          </Card>
+          <Card className="p-5">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Margin</p>
+            <p className="mt-1 text-2xl font-display font-semibold tabular-nums">{econ ? `${econ.margin_pct.toFixed(1)}%` : "—"}</p>
+          </Card>
+        </div>
+        {econ && econ.unpriced_usd > 0 && (
+          <p className="mt-2 text-[12px] text-[var(--text-muted)]">
+            {formatUSD(econ.unpriced_usd)} of billed usage has no known upstream cost (non-market routes) and is excluded from profit/margin.
+          </p>
+        )}
       </div>
 
       {ordersQuery.isError && <ErrorBanner message={(ordersQuery.error as Error).message} />}

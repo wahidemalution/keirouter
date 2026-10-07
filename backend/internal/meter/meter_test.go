@@ -111,6 +111,30 @@ func TestRecordPrefersMarketSlugOverChainRate(t *testing.T) {
 	}
 }
 
+func TestUpstreamCostUsesPreMarkupRate(t *testing.T) {
+	ev := Event{
+		Provider: "commandcode", Model: "deepseek/deepseek-v4.1-flash",
+		MarketSlug:     "cmc/deepseek/deepseek-v4.1-flash",
+		MarketRateIn:   0.14, MarketRateOut: 0.42,
+		UpstreamRateIn: 0.10, UpstreamRateOut: 0.30,
+		Usage:          core.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000},
+	}
+	if up := upstreamCostForEvent(ev); up.CostNanos != 400_000_000 {
+		t.Fatalf("upstream CostNanos = %d, want 400000000", up.CostNanos)
+	}
+}
+
+func TestUpstreamCostZeroWithoutSlug(t *testing.T) {
+	ev := Event{
+		Provider: "openai", Model: "gpt-4o",
+		InputPerM: 1, OutputPerM: 1,
+		Usage: core.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000},
+	}
+	if up := upstreamCostForEvent(ev); up.CostNanos != 0 {
+		t.Fatalf("upstream CostNanos = %d, want 0 (unknown upstream)", up.CostNanos)
+	}
+}
+
 func TestCostForEventFlagsFallbackWhenSlugCostsMore(t *testing.T) {
 	m := New(nil, nil, map[string]Price{})
 	// Cheapest aggregate is 0.11; winning slug bills 0.30 -> fallback.

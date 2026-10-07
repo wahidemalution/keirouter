@@ -247,6 +247,10 @@ func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, ma
 		out[i].MarketRateOut = r.OutputPerM * mult
 		out[i].MarketCacheReadRate = out[i].MarketRateIn * market.CacheReadMult
 		out[i].MarketCacheWriteRate = out[i].MarketRateIn * market.CacheWriteMult
+		out[i].UpstreamRateIn = r.InputPerM
+		out[i].UpstreamRateOut = r.OutputPerM
+		out[i].UpstreamCacheReadRate = r.InputPerM * market.CacheReadMult
+		out[i].UpstreamCacheWriteRate = r.InputPerM * market.CacheWriteMult
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		ki, kj := keyFor(out[i]), keyFor(out[j])

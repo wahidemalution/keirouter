@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/mydisha/keirouter/backend/internal/store"
@@ -35,7 +36,9 @@ func (s *Server) adminListPaymentOrders(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"orders": out})
 }
 
-// adminPaymentSummary aggregates revenue and credit totals.
+// adminPaymentSummary aggregates revenue and credit totals, plus operator
+// economics derived from usage: the pre-markup upstream cost (what the operator
+// pays providers) and the resulting profit on what users were charged.
 func (s *Server) adminPaymentSummary(w http.ResponseWriter, r *http.Request) {
 	orders, err := s.db.PaymentOrders().ListAll(r.Context())
 	if err != nil {
@@ -55,6 +58,34 @@ func (s *Server) adminPaymentSummary(w http.ResponseWriter, r *http.Request) {
 		"total_idr":        totalIDR,
 		"total_credit_usd": float64(totalCredit) / 1_000_000,
 		"count_by_status":  counts,
+	})
+}
+
+// adminUsageEconomics returns lifetime operator economics computed from usage:
+// charged revenue, pre-markup upstream cost, and profit. Only requests with a
+// known upstream cost contribute to the margin so missing prices cannot inflate
+// profit.
+func (s *Server) adminUsageEconomics(w http.ResponseWriter, r *http.Request) {
+	profit, err := s.usage.ProfitSince(r.Context(), store.DefaultTenantID, time.Time{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	billed := float64(profit.BilledNanos) / 1_000_000_000
+	upstream := float64(profit.UpstreamNanos) / 1_000_000_000
+	covered := float64(profit.CoveredNanos) / 1_000_000_000
+	marginPct := 0.0
+	if covered > 0 {
+		marginPct = (covered - upstream) / covered * 100
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"billed_usd":      billed,
+		"upstream_usd":    upstream,
+		"profit_usd":      covered - upstream,
+		"margin_pct":      marginPct,
+		"requests":        profit.Requests,
+		"priced_requests": profit.PricedRequests,
+		"unpriced_usd":    billed - covered,
 	})
 }
 

@@ -132,6 +132,12 @@ type Event struct {
 	// derives them from MarketRateIn using the default market multipliers.
 	MarketCacheReadRate  float64
 	MarketCacheWriteRate float64
+	// UpstreamRateIn/Out are the pre-markup market rates for the slug: the
+	// operator's cost. Used for profit accounting only, never charged to users.
+	UpstreamRateIn         float64
+	UpstreamRateOut        float64
+	UpstreamCacheReadRate  float64
+	UpstreamCacheWriteRate float64
 	// CheapestRateIn is the chain's cheapest aggregate input rate (pre-fallback).
 	// When the winning market slug costs more than this, the request is a
 	// fallback and this value is retained for the audit trail.
@@ -227,6 +233,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	} else {
 		cost = m.costForEvent(ev)
 	}
+	upstream := upstreamCostForEvent(ev)
 	endToEnd := ev.EndToEndLatency
 	if endToEnd <= 0 {
 		endToEnd = ev.Latency
@@ -249,14 +256,15 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		InputCostNanos: cost.InputCostNanos, CachedCostNanos: cost.CachedCostNanos,
 		CacheWriteCostNanos: cost.CacheWriteCostNanos, OutputCostNanos: cost.OutputCostNanos,
 		ReasoningCostNanos: cost.ReasoningCostNanos, AvoidedCostNanos: cost.AvoidedCostNanos,
-		SavedCostNanos: cost.SavedCostNanos,
-		PricingStatus:  cost.Pricing.Status, PricingSource: cost.Pricing.Source, PricingKey: cost.Pricing.Key,
+		SavedCostNanos:    cost.SavedCostNanos,
+		UpstreamCostNanos: upstream.CostNanos, UpstreamCostMicros: upstream.CostMicros,
+		PricingStatus: cost.Pricing.Status, PricingSource: cost.Pricing.Source, PricingKey: cost.Pricing.Key,
 		PricingMatchKind: cost.Pricing.MatchKind, PricingSourceURL: cost.Pricing.SourceURL,
 		PricingAsOf:   pricingAsOf,
 		InputRatePerM: cost.InputRatePerM, CachedRatePerM: cost.CachedRatePerM,
 		CacheWriteRatePerM: cost.CacheWriteRatePerM, OutputRatePerM: cost.OutputRatePerM,
 		ReasoningRatePerM: cost.ReasoningRatePerM, FallbackRatePerM: cost.FallbackRatePerM,
-		CacheHit:          ev.CacheHit, LatencyMS: int(endToEnd.Milliseconds()),
+		CacheHit: ev.CacheHit, LatencyMS: int(endToEnd.Milliseconds()),
 		UpstreamLatencyMS: int(ev.Latency.Milliseconds()), EndToEndLatencyMS: int(endToEnd.Milliseconds()),
 		TTFTMS: int(ev.TTFT.Milliseconds()), CavemanActive: ev.CavemanActive,
 		SlimActive: ev.SlimActive, TerseActive: ev.TerseActive, PonytailActive: ev.PonytailActive,

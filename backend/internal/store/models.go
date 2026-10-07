@@ -205,6 +205,12 @@ type UsageRecord struct {
 	AvoidedCostNanos    int64 // semantic-cache retail-equivalent cost avoided
 	SavedCostNanos      int64 // input compression retail-equivalent saving
 
+	// Upstream cost is the pre-markup market rate cost: what the operator pays
+	// the upstream provider. Zero when the request had no market slug (the
+	// upstream cost is unknown, not free).
+	UpstreamCostNanos  int64
+	UpstreamCostMicros int64
+
 	PricingStatus      string // priced | estimated | free | missing | legacy | none
 	PricingSource      string // official | custom | retail_equivalent | legacy
 	PricingKey         string

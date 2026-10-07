@@ -1,0 +1,2 @@
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS upstream_cost_nanos BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS upstream_cost_micros BIGINT NOT NULL DEFAULT 0;
