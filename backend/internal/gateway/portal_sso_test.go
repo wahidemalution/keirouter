@@ -48,6 +48,7 @@ func newPortalTestServer(t *testing.T) *Server {
 		budgets:  db.Budgets(),
 		usage:    db.Usage(),
 		settings: db.Settings(),
+		chains:   db.Chains(),
 		vault:    vault.New(sealer),
 		log:      slog.Default(),
 		cfg:      config.Default(),
@@ -241,6 +242,62 @@ func seedPlan(t *testing.T, srv *Server, id string, limitMicros int64, models st
 		LimitMicros: limitMicros, Period: "monthly", AlertPct: 80, HardCutoff: true,
 		AllowedModels: models, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
+}
+
+// TestPortalUsageShowsChainNameNotSubModel verifies the portal request log
+// displays the user-facing chain name rather than the upstream sub-model the
+// request happened to land on. A user who calls chain "gpt-6-luna" (whose step
+// upstreams "cb/gpt-6-luna") must see "gpt-6-luna" in the log.
+func TestPortalUsageShowsChainNameNotSubModel(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+
+	require.NoError(t, srv.db.Chains().Create(ctx, store.Chain{
+		ID: "chain-1", TenantID: store.DefaultTenantID, Name: "gpt-6-luna",
+		Strategy: "priority",
+		Steps:    []store.ChainStep{{Provider: "custom-openai-inf", Model: "cb/gpt-6-luna", Position: 0}},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+
+	issued, err := srv.identity.Create(ctx, store.DefaultTenantID, "", "portal-key")
+	require.NoError(t, err)
+
+	require.NoError(t, srv.usage.Record(ctx, store.UsageRecord{
+		ID: "r1", TenantID: store.DefaultTenantID, APIKeyID: issued.Record.ID,
+		Provider: "custom-openai-inf", Model: "cb/gpt-6-luna", ChainID: "chain-1",
+		Status: "success", PromptTokens: 1, CompletionTokens: 11, CreatedAt: time.Now().UTC(),
+	}))
+
+	payload, err := srv.buildKeyUsageMap(ctx, issued.Record, 30)
+	require.NoError(t, err)
+
+	recent, ok := payload["recent"].([]map[string]any)
+	require.True(t, ok, "recent list present")
+	require.Len(t, recent, 1)
+	require.Equal(t, "gpt-6-luna", recent[0]["model"], "request log must show the chain name")
+}
+
+// TestPortalUsageShowsModelWhenNotAChain keeps direct (non-chain) requests
+// displaying the model the user actually called.
+func TestPortalUsageShowsModelWhenNotAChain(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+
+	issued, err := srv.identity.Create(ctx, store.DefaultTenantID, "", "portal-key")
+	require.NoError(t, err)
+
+	require.NoError(t, srv.usage.Record(ctx, store.UsageRecord{
+		ID: "r1", TenantID: store.DefaultTenantID, APIKeyID: issued.Record.ID,
+		Provider: "openai", Model: "gpt-4o", Status: "success",
+		PromptTokens: 1, CompletionTokens: 11, CreatedAt: time.Now().UTC(),
+	}))
+
+	payload, err := srv.buildKeyUsageMap(ctx, issued.Record, 30)
+	require.NoError(t, err)
+
+	recent := payload["recent"].([]map[string]any)
+	require.Len(t, recent, 1)
+	require.Equal(t, "gpt-4o", recent[0]["model"])
 }
 
 func TestPortalCreateKeyDisabledWithoutDefaultPlan(t *testing.T) {

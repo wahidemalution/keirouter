@@ -1155,13 +1155,28 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	}
 
 	// Recent per-request records with token in/out and optimization flags.
+	// Requests that ran through a chain are shown under the user-facing chain
+	// name, not the upstream sub-model the request happened to land on. A
+	// missing/unknown chain id falls back to the recorded model.
+	chainNames := map[string]string{}
+	if chains, cerr := s.chains.ListByTenant(ctx, key.TenantID); cerr == nil {
+		for _, c := range chains {
+			chainNames[c.ID] = c.Name
+		}
+	} else {
+		s.log.Error("key usage: chain lookup failed", "err", cerr)
+	}
 	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
 	recentOut := make([]map[string]any, 0, len(recent))
 	for _, rec := range recent {
+		displayModel := rec.Model
+		if name, ok := chainNames[rec.ChainID]; ok && name != "" {
+			displayModel = name
+		}
 		entry := map[string]any{
 			"id":                rec.ID,
 			"provider":          rec.Provider,
-			"model":             rec.Model,
+			"model":             displayModel,
 			"prompt_tokens":     rec.PromptTokens,
 			"completion_tokens": rec.CompletionTokens,
 			"cost_usd":          float64(rec.CostMicros) / 1_000_000,
