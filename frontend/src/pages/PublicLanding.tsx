@@ -16,8 +16,6 @@ import {
   ModelCard, ProviderFilterButton, MODEL_PAGE, fmtCount, fmtShort, buildProviders, resolveProvider,
 } from "../components/ModelCatalog";
 
-const WA_URL = "https://wa.me/62";
-
 // Smoothly counts a displayed metric toward its latest value. Formatting stays
 // with the callers' fmt helpers; this only animates the raw number.
 function useCountUp(target: number, duration = 900): number {
@@ -221,12 +219,10 @@ export default function PublicLanding() {
             pembayaran. Setelah pembayaran dikonfirmasi, saldo langsung aktif.
           </p>
           <a
-            href={WA_URL}
-            target="_blank"
-            rel="noreferrer"
+            href="/portal"
             className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-[var(--green)] px-4 py-3 text-sm font-[650] text-[var(--on-accent)] no-underline hover:opacity-90"
           >
-            Hubungi WhatsApp ↗
+            Buka portal ↗
           </a>
         </section>
 
@@ -238,12 +234,10 @@ export default function PublicLanding() {
             saldo tidak sesuai setelah top up.
           </p>
           <a
-            href={WA_URL}
-            target="_blank"
-            rel="noreferrer"
+            href="/portal"
             className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-[var(--line)] px-4 py-3 text-sm font-[650] text-[var(--green)] no-underline hover:bg-[var(--soft)]"
           >
-            Tanya saldo ↗
+            Cek saldo di portal ↗
           </a>
         </section>
       </div>

@@ -9,8 +9,6 @@ import { Cpu, Eye, EyeOff, Gift, Gauge, Copy, Check, Globe } from "lucide-react"
 import { fetchPublicBansos, fetchPublicBansosKey } from "../lib/publicApi";
 import { PublicLayout } from "../components/PublicLayout";
 
-const WA_URL = "https://wa.me/62";
-
 const fmtUSD = (n: number) => `$${n.toLocaleString("id-ID", { maximumFractionDigits: 4 })}`;
 
 function StatusBadge({ active }: { active: boolean }) {
@@ -215,7 +213,7 @@ export default function PublicBansos() {
           <p className="mt-2 text-sm text-[var(--muted)]">
             Lihat daftar lengkap model dan harga per 1 juta token. Banyak model lebih murah dari yang ada di bansos.
           </p>
-          <a href="/#models" className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-[var(--line)] px-4 py-3 text-sm font-[650] text-[var(--green)] no-underline hover:bg-[var(--soft)]">
+          <a href="/model" className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-[var(--line)] px-4 py-3 text-sm font-[650] text-[var(--green)] no-underline hover:bg-[var(--soft)]">
             Lihat harga model ↗
           </a>
         </section>
@@ -226,8 +224,8 @@ export default function PublicBansos() {
           <p className="mt-2 text-sm text-[var(--muted)]">
             Bansos terbatas. Hubungi kami untuk saldo PAYG dan akses semua model tanpa limit bansos.
           </p>
-          <a href={WA_URL} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-[var(--green)] px-4 py-3 text-sm font-[650] text-[var(--on-accent)] no-underline hover:opacity-90">
-            Hubungi WhatsApp ↗
+          <a href="/portal" className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-[var(--green)] px-4 py-3 text-sm font-[650] text-[var(--on-accent)] no-underline hover:opacity-90">
+            Buka portal ↗
           </a>
         </section>
       </div>
