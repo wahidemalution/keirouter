@@ -51,9 +51,25 @@ type publicModelRow struct {
 	OutputPerM  float64
 	CachedPerM  float64
 	CacheWrite  float64
+	SoldOut     bool
 	Requests    int64
 	Tokens      int64
 	Users       int
+}
+
+// anyMarketSlugResolves reports whether at least one of the chain's bound
+// market slugs currently resolves in the live snapshot. A nil cache (tests
+// that do not wire one) resolves nothing.
+func (s *Server) anyMarketSlugResolves(slugs []string) bool {
+	if s.marketCache == nil {
+		return false
+	}
+	for _, slug := range slugs {
+		if _, ok := s.marketCache.Rate(slug); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // publicModelRows lists one entry per routing chain, with all-time usage
@@ -85,10 +101,15 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			continue
 		}
 		first := c.Steps[0]
-		// Chain-configured rates take precedence; all-zero means unset and the
-		// catalog price of the first step is shown instead.
+		// Chain-configured rates take precedence; all-zero means unset.
 		inputPerM, outputPerM, cachedPerM, cacheWritePerM := c.InputPerM, c.OutputPerM, c.CacheReadPerM, c.CacheWritePerM
-		if inputPerM <= 0 && outputPerM <= 0 && cachedPerM <= 0 && cacheWritePerM <= 0 {
+		soldOut := false
+		if len(c.MarketSlugs) > 0 && !s.anyMarketSlugResolves(c.MarketSlugs) {
+			// Every bound market slug is missing: the model is sold out.
+			// Do not surface a catalog price the market cannot honour.
+			soldOut = true
+			inputPerM, outputPerM, cachedPerM, cacheWritePerM = 0, 0, 0, 0
+		} else if inputPerM <= 0 && outputPerM <= 0 && cachedPerM <= 0 && cacheWritePerM <= 0 {
 			price, _ := connectors.ModelPriceByProviderModel(first.Provider, first.Model)
 			inputPerM, outputPerM, cachedPerM, cacheWritePerM = price.InputPerM, price.OutputPerM, price.CachedInputPerM, price.CacheWritePerM
 		}
@@ -111,6 +132,7 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			OutputPerM:  outputPerM,
 			CachedPerM:  cachedPerM,
 			CacheWrite:  cacheWritePerM,
+			SoldOut:     soldOut,
 			Requests:    u.TotalRequests,
 			Tokens:      u.PromptTokens + u.CompletionTokens,
 			Users:       u.DistinctKeys,
@@ -150,6 +172,7 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 			"output_per_m":      m.OutputPerM,
 			"cached_per_m":      m.CachedPerM,
 			"cache_write_per_m": m.CacheWrite,
+			"sold_out":          m.SoldOut,
 			"capabilities":      caps,
 			"usage": map[string]any{
 				"users":    m.Users,
