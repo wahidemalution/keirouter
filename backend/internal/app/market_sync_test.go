@@ -15,7 +15,16 @@ import (
 
 func newSyncTestApp(t *testing.T, db *store.DB) *App {
 	t.Helper()
-	return &App{db: db, log: slog.New(slog.NewTextHandler(io.Discard, nil)), marketCache: market.NewSnapshotCache()}
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(dead.Close)
+	return &App{
+		db:          db,
+		log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		marketCache: market.NewSnapshotCache(),
+		surplusURL:  dead.URL,
+	}
 }
 
 func newSyncTestDB(t *testing.T) *store.DB {
@@ -234,6 +243,29 @@ func TestSyncMergesSurplusIntoCache(t *testing.T) {
 	}
 	if _, ok := a.MarketCache().Rate("surplus:deepseek-v4.1-flash"); !ok {
 		t.Fatal("surplus model missing from cache")
+	}
+}
+
+func TestSyncBothSourcesDownLeavesCacheUnchanged(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+
+	a := newSyncTestApp(t, db)
+	a.marketCache.Replace([]market.Model{{Slug: "seeded/x", MinAskIn: 5, MinAskOut: 6}})
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer down.Close()
+	a.marketURL = down.URL
+	a.surplusURL = down.URL
+
+	if _, err := a.syncChainMarketPrices(ctx); err == nil {
+		t.Fatal("sync with both sources down: want error, got nil")
+	}
+	r, ok := a.MarketCache().Rate("seeded/x")
+	if !ok || r.InputPerM != 5 || r.OutputPerM != 6 {
+		t.Fatalf("pre-seeded cache entry = %+v ok=%v, want (5,6) untouched", r, ok)
 	}
 }
 
