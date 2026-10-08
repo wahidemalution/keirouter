@@ -23,6 +23,11 @@ type Model struct {
 	// them (Surplus). Zero means "not published": callers derive from input.
 	CacheRead  float64 `json:"-"`
 	CacheWrite float64 `json:"-"`
+	// FailoverIn/FailoverOut are the next-best available ask for a source whose
+	// cheapest offer may go dark (Surplus). Zero means "not known": the safety
+	// margin then cannot floor against them.
+	FailoverIn  float64 `json:"-"`
+	FailoverOut float64 `json:"-"`
 }
 
 func ParseSnapshot(r io.Reader) ([]Model, error) {

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -12,6 +14,9 @@ import (
 const (
 	marketCacheReadMult  = market.CacheReadMult
 	marketCacheWriteMult = market.CacheWriteMult
+	// maxSurplusBooksPerSync bounds order-book fetches per sync when the safety
+	// margin is on, so a large slug set cannot fan out unboundedly.
+	maxSurplusBooksPerSync = 50
 )
 
 // MarketCache exposes the live market snapshot for routing decisions.
@@ -44,6 +49,45 @@ func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
 	return out, nil
 }
 
+// enrichSurplusFailover fetches the order book for each Surplus model actually
+// bound by a chain and stamps the next-best ask onto the snapshot model, so the
+// safety margin can floor against the fallback cost. It is only called when the
+// safety margin is enabled, and best-effort: a failed book leaves the model's
+// failover unknown (the floor then stays inert for it).
+func (a *App) enrichSurplusFailover(ctx context.Context, models []market.Model, slugs map[string]bool) []market.Model {
+	if len(slugs) == 0 {
+		return models
+	}
+	bySlug := make(map[string]int, len(models))
+	for i, m := range models {
+		bySlug[m.Slug] = i
+	}
+	checked := 0
+	for slug := range slugs {
+		idx, ok := bySlug[slug]
+		if !ok || !strings.HasPrefix(slug, market.SurplusPrefix) {
+			continue
+		}
+		if checked >= maxSurplusBooksPerSync {
+			a.log.Warn("safety margin: order-book fetch capped", "cap", maxSurplusBooksPerSync)
+			break
+		}
+		checked++
+		name := strings.TrimPrefix(slug, market.SurplusPrefix)
+		url := strings.TrimSuffix(a.surplusURL, "/") + "/" + url.PathEscape(name)
+		_, _, nextIn, nextOut, found, err := market.FetchSurplusBook(ctx, url)
+		if err != nil || !found {
+			if err != nil {
+				a.log.Debug("surplus book fetch failed", "model", name, "err", err)
+			}
+			continue
+		}
+		models[idx].FailoverIn = nextIn
+		models[idx].FailoverOut = nextOut
+	}
+	return models
+}
+
 // syncChainMarketPrices recomputes every chain that has market slugs and
 // writes the derived rates onto the chain row. Chains whose slugs are all
 // absent from the snapshot keep their existing price. Returns the number of
@@ -66,13 +110,23 @@ func (a *App) syncChainMarketPricesWithModels(ctx context.Context, models []mark
 		return 0, err
 	}
 
+	if settings.SafetyMarginEnabled {
+		bound := make(map[string]bool)
+		for _, c := range chains {
+			for _, slug := range c.MarketSlugs {
+				bound[slug] = true
+			}
+		}
+		models = a.enrichSurplusFailover(ctx, models, bound)
+	}
+
 	changed := 0
 	failed := 0
 	for _, c := range chains {
 		if len(c.MarketSlugs) == 0 {
 			continue
 		}
-		rate, ok := market.ComputeChainRate(c.MarketSlugs, models, settings.MarkupPercent, marketCacheReadMult, marketCacheWriteMult)
+		rate, ok := market.ComputeChainRateWithSafety(c.MarketSlugs, models, settings.MarkupPercent, marketCacheReadMult, marketCacheWriteMult, settings.SafetyMarginEnabled, settings.SafetyMarginPercent)
 		if !ok {
 			continue
 		}

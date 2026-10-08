@@ -11,13 +11,18 @@ type Settings struct {
 	AutoRefresh            bool    `json:"auto_refresh"`
 	RefreshIntervalSeconds int     `json:"refresh_interval_seconds"`
 	MarkupPercent          float64 `json:"markup_percent"`
-	LastFetchedAt          string  `json:"last_fetched_at"`
-	LastFetchError         string  `json:"last_fetch_error,omitempty"`
-	LastSyncedCount        int     `json:"last_synced_count"`
+	// SafetyMarginEnabled floors the derived rate at the next-best (failover)
+	// market price × (1 + SafetyMarginPercent/100), so a cheaper offer going
+	// dark cannot make a chain sell below its fallback cost.
+	SafetyMarginEnabled bool    `json:"safety_margin_enabled"`
+	SafetyMarginPercent float64 `json:"safety_margin_percent"`
+	LastFetchedAt       string  `json:"last_fetched_at"`
+	LastFetchError      string  `json:"last_fetch_error,omitempty"`
+	LastSyncedCount     int     `json:"last_synced_count"`
 }
 
 func DefaultSettings() Settings {
-	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10}
+	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10, SafetyMarginEnabled: false, SafetyMarginPercent: 10}
 }
 
 func LoadSettings(ctx context.Context, get func(context.Context, string) (string, error)) Settings {
@@ -35,6 +40,9 @@ func LoadSettings(ctx context.Context, get func(context.Context, string) (string
 	}
 	if s.MarkupPercent < 0 {
 		s.MarkupPercent = def.MarkupPercent
+	}
+	if s.SafetyMarginPercent < 0 {
+		s.SafetyMarginPercent = def.SafetyMarginPercent
 	}
 	return s
 }

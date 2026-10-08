@@ -26,6 +26,8 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 		AutoRefresh            *bool    `json:"auto_refresh"`
 		RefreshIntervalSeconds *int     `json:"refresh_interval_seconds"`
 		MarkupPercent          *float64 `json:"markup_percent"`
+		SafetyMarginEnabled    *bool    `json:"safety_margin_enabled"`
+		SafetyMarginPercent    *float64 `json:"safety_margin_percent"`
 	}
 	if !decodeJSON(w, r, &patch) {
 		return
@@ -47,6 +49,17 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 			return
 		}
 		current.MarkupPercent = v
+	}
+	if patch.SafetyMarginEnabled != nil {
+		current.SafetyMarginEnabled = *patch.SafetyMarginEnabled
+	}
+	if patch.SafetyMarginPercent != nil {
+		v := *patch.SafetyMarginPercent
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1000 {
+			writeError(w, http.StatusBadRequest, "safety_margin_percent must be between 0 and 1000")
+			return
+		}
+		current.SafetyMarginPercent = v
 	}
 	if err := market.SaveSettings(r.Context(), s.settings.Set, current); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

@@ -125,3 +125,50 @@ func TestComputeChainRateMixedSurplusAndInferhub(t *testing.T) {
 		t.Fatalf("rates = (%v,%v), want cheapest (0.12,0.48)", rate.InputPerM, rate.OutputPerM)
 	}
 }
+
+func TestComputeChainRateSafetyFloorsToFailover(t *testing.T) {
+	// Cheapest ask $0.10 but fallback offer at $0.30: with a 10% safety floor,
+	// the billed rate must rise to 0.30*1.1 = 0.33, not stay at 0.10.
+	models := []Model{{Slug: "surplus:m", MinAskIn: 0.10, MinAskOut: 0.40, FailoverIn: 0.30, FailoverOut: 0.60}}
+	rate, ok := ComputeChainRateWithSafety([]string{"surplus:m"}, models, 0, 0.1, 1.25, true, 10)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.InputPerM != 0.33 || rate.OutputPerM != 0.66 {
+		t.Fatalf("rates = (%v,%v), want (0.33,0.66)", rate.InputPerM, rate.OutputPerM)
+	}
+}
+
+func TestComputeChainRateSafetyDisabledIgnoresFailover(t *testing.T) {
+	models := []Model{{Slug: "surplus:m", MinAskIn: 0.10, MinAskOut: 0.40, FailoverIn: 0.30, FailoverOut: 0.60}}
+	rate, ok := ComputeChainRateWithSafety([]string{"surplus:m"}, models, 0, 0.1, 1.25, false, 10)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.InputPerM != 0.10 || rate.OutputPerM != 0.40 {
+		t.Fatalf("rates = (%v,%v), want best-ask (0.10,0.40)", rate.InputPerM, rate.OutputPerM)
+	}
+}
+
+func TestComputeChainRateSafetyKeepsHigherMarkup(t *testing.T) {
+	// Markup produces 0.10*5 = 0.50 > failover floor 0.30*1.1 = 0.33: keep 0.50.
+	models := []Model{{Slug: "surplus:m", MinAskIn: 0.10, MinAskOut: 0.40, FailoverIn: 0.30, FailoverOut: 0.60}}
+	rate, ok := ComputeChainRateWithSafety([]string{"surplus:m"}, models, 400, 0.1, 1.25, true, 10)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.InputPerM != 0.50 || rate.OutputPerM != 2.00 {
+		t.Fatalf("rates = (%v,%v), want markup (0.50,2.00)", rate.InputPerM, rate.OutputPerM)
+	}
+}
+
+func TestComputeChainRateSafetyInertWhenFailoverUnknown(t *testing.T) {
+	models := []Model{{Slug: "surplus:m", MinAskIn: 0.10, MinAskOut: 0.40}}
+	rate, ok := ComputeChainRateWithSafety([]string{"surplus:m"}, models, 0, 0.1, 1.25, true, 10)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.InputPerM != 0.10 || rate.OutputPerM != 0.40 {
+		t.Fatalf("rates = (%v,%v), want best-ask (0.10,0.40)", rate.InputPerM, rate.OutputPerM)
+	}
+}

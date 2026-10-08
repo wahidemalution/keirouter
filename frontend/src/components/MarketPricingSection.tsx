@@ -11,15 +11,17 @@ export function MarketPricingSection() {
   const settings = useQuery({ queryKey: ["market-pricing-settings"], queryFn: () => api.marketPricingSettings() });
   const [markup, setMarkup] = useState("");
   const [intervalSec, setIntervalSec] = useState("");
+  const [safetyPct, setSafetyPct] = useState("");
   useEffect(() => {
     if (settings.data) {
       setMarkup(String(settings.data.markup_percent));
       setIntervalSec(String(settings.data.refresh_interval_seconds));
+      setSafetyPct(String(settings.data.safety_margin_percent));
     }
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent">>) =>
+    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent">>) =>
       api.updateMarketPricingSettings(patch),
     onSuccess: (data) => {
       qc.setQueryData(["market-pricing-settings"], data);
@@ -48,6 +50,9 @@ export function MarketPricingSection() {
   const intervalTrim = intervalSec.trim();
   const intervalInvalid =
     intervalTrim === "" || !Number.isInteger(Number(intervalSec)) || Number(intervalSec) < 1;
+  const safetyTrim = safetyPct.trim();
+  const safetyInvalid =
+    safetyTrim === "" || !Number.isFinite(Number(safetyPct)) || Number(safetyPct) < 0 || Number(safetyPct) > 1000;
 
   return (
     <div className="space-y-4">
@@ -67,6 +72,17 @@ export function MarketPricingSection() {
               </p>
             </div>
             <Toggle checked={data.auto_refresh} onChange={(v) => save.mutate({ auto_refresh: v })} />
+          </div>
+
+          <div className="flex items-center justify-between gap-4 px-6 py-4">
+            <div>
+              <p className="text-sm font-medium">Safety margin</p>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                Floor the price at the next-best (failover) market offer plus this margin, so a
+                cheaper offer going down cannot sell below its fallback cost. Off = use markup only.
+              </p>
+            </div>
+            <Toggle checked={data.safety_margin_enabled} onChange={(v) => save.mutate({ safety_margin_enabled: v })} />
           </div>
 
           <div className="px-6 py-5">
@@ -93,6 +109,20 @@ export function MarketPricingSection() {
                   className="w-24"
                 />
               </Field>
+              <Field label="Safety margin %">
+                <Input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={safetyPct}
+                  onChange={(e) => setSafetyPct(e.target.value)}
+                  className="w-28"
+                  disabled={!data.safety_margin_enabled}
+                />
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  Applied over the next-best offer when safety margin is on.
+                </p>
+              </Field>
             </div>
           </div>
 
@@ -102,9 +132,10 @@ export function MarketPricingSection() {
                 save.mutate({
                   markup_percent: Number(markup),
                   refresh_interval_seconds: Number(intervalSec),
+                  safety_margin_percent: Number(safetyPct),
                 })
               }
-              disabled={save.isPending || markupInvalid || intervalInvalid}
+              disabled={save.isPending || markupInvalid || intervalInvalid || safetyInvalid}
             >
               {save.isPending ? "Saving…" : "Save"}
             </Button>

@@ -228,7 +228,7 @@ func TestSyncMergesSurplusIntoCache(t *testing.T) {
 	}))
 	defer inferhub.Close()
 	surplus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"models":[{"model":"deepseek-v4.1-flash","providers":[{"pricing":{"input":0.12,"output":0.48,"cacheRead":0.02}}]}]}`))
+		_, _ = w.Write([]byte(`{"markets":[{"model":"deepseek-v4.1-flash","best_input_per_1m":120000,"best_output_per_1m":480000,"best_cache_read_per_1m":20000}]}`))
 	}))
 	defer surplus.Close()
 
