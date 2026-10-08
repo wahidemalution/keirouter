@@ -89,3 +89,39 @@ func TestComputeChainRateSkipsZeroOrNegativeAsk(t *testing.T) {
 		t.Fatalf("price = (%v,%v), want (2,3)", rate.InputPerM, rate.OutputPerM)
 	}
 }
+
+func TestComputeChainRateUsesPublishedCacheRates(t *testing.T) {
+	models := []Model{{Slug: "surplus:m", MinAskIn: 0.12, MinAskOut: 0.48, CacheRead: 0.02, CacheWrite: 0.15}}
+	rate, ok := ComputeChainRate([]string{"surplus:m"}, models, 0, 0.1, 1.25)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.CachedInputPerM != 0.02 || rate.CacheWritePerM != 0.15 {
+		t.Fatalf("cache = (%v,%v), want published (0.02,0.15)", rate.CachedInputPerM, rate.CacheWritePerM)
+	}
+}
+
+func TestComputeChainRateDerivesCacheWhenUnpublished(t *testing.T) {
+	models := []Model{{Slug: "a", MinAskIn: 1, MinAskOut: 2}}
+	rate, ok := ComputeChainRate([]string{"a"}, models, 0, 0.1, 1.25)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.CachedInputPerM != 0.1 || rate.CacheWritePerM != 1.25 {
+		t.Fatalf("cache = (%v,%v), want derived (0.1,1.25)", rate.CachedInputPerM, rate.CacheWritePerM)
+	}
+}
+
+func TestComputeChainRateMixedSurplusAndInferhub(t *testing.T) {
+	models := []Model{
+		{Slug: "cbcn/x", MinAskIn: 0.20, MinAskOut: 0.50},
+		{Slug: "surplus:m", MinAskIn: 0.12, MinAskOut: 0.48, CacheRead: 0.02, CacheWrite: 0.15},
+	}
+	rate, ok := ComputeChainRate([]string{"cbcn/x", "surplus:m"}, models, 0, 0.1, 1.25)
+	if !ok {
+		t.Fatal("expected match")
+	}
+	if rate.InputPerM != 0.12 || rate.OutputPerM != 0.48 {
+		t.Fatalf("rates = (%v,%v), want cheapest (0.12,0.48)", rate.InputPerM, rate.OutputPerM)
+	}
+}

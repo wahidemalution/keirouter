@@ -48,8 +48,30 @@ func ComputeChainRate(slugs []string, models []Model, markupPercent, cacheReadMu
 	if !validRate(effectiveInput) || !validRate(effectiveOutput) {
 		return Rate{}, false
 	}
+	cacheReadBase, cacheWriteBase := 0.0, 0.0
+	for _, slug := range slugs {
+		m, ok := bySlug[slug]
+		if !ok || m.MinAskIn <= 0 || m.MinAskOut <= 0 {
+			continue
+		}
+		if m.MinAskIn == minIn {
+			if m.CacheRead > 0 {
+				cacheReadBase = m.CacheRead
+			}
+			if m.CacheWrite > 0 {
+				cacheWriteBase = m.CacheWrite
+			}
+			break
+		}
+	}
 	cachedInput := effectiveInput * cacheReadMult
+	if cacheReadBase > 0 {
+		cachedInput = cacheReadBase * mult
+	}
 	cacheWrite := effectiveInput * cacheWriteMult
+	if cacheWriteBase > 0 {
+		cacheWrite = cacheWriteBase * mult
+	}
 	if !validRate(cachedInput) || !validRate(cacheWrite) {
 		return Rate{}, false
 	}
