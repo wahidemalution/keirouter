@@ -209,3 +209,54 @@ func TestSyncChainMarketPricesSkipsZeroAskButUpdatesValid(t *testing.T) {
 		t.Fatalf("valid chain price = (%v,%v), want (1,5)", gotValid.InputPerM, gotValid.OutputPerM)
 	}
 }
+
+func TestSyncMergesSurplusIntoCache(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+
+	inferhub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"slug":"cbcn/x","minAskIn":1,"minAskOut":2}]}`))
+	}))
+	defer inferhub.Close()
+	surplus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"model":"deepseek-v4.1-flash","providers":[{"pricing":{"input":0.12,"output":0.48,"cacheRead":0.02}}]}]}`))
+	}))
+	defer surplus.Close()
+
+	a := newSyncTestApp(t, db)
+	a.marketURL = inferhub.URL
+	a.surplusURL = surplus.URL
+	if _, err := a.syncChainMarketPrices(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, ok := a.MarketCache().Rate("cbcn/x"); !ok {
+		t.Fatal("inferhub slug missing from cache")
+	}
+	if _, ok := a.MarketCache().Rate("surplus:deepseek-v4.1-flash"); !ok {
+		t.Fatal("surplus model missing from cache")
+	}
+}
+
+func TestSyncSurplusDownKeepsInferhub(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+
+	inferhub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"models":[{"slug":"cbcn/x","minAskIn":1,"minAskOut":2}]}`))
+	}))
+	defer inferhub.Close()
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer down.Close()
+
+	a := newSyncTestApp(t, db)
+	a.marketURL = inferhub.URL
+	a.surplusURL = down.URL
+	if _, err := a.syncChainMarketPrices(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, ok := a.MarketCache().Rate("cbcn/x"); !ok {
+		t.Fatal("inferhub source must survive a surplus outage")
+	}
+}

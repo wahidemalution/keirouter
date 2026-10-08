@@ -17,12 +17,39 @@ const (
 // MarketCache exposes the live market snapshot for routing decisions.
 func (a *App) MarketCache() *market.SnapshotCache { return a.marketCache }
 
+// fetchMergedModels fetches inferhub and Surplus independently and concatenates
+// whatever succeeded. A single-source outage leaves the other source usable; if
+// both fail an error is returned and the caller keeps the previous snapshot.
+func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
+	var out []market.Model
+	var firstErr error
+
+	if models, err := market.Fetch(ctx, a.marketURL); err != nil {
+		firstErr = err
+	} else {
+		out = append(out, models...)
+	}
+	if models, err := market.FetchSurplus(ctx, a.surplusURL); err != nil {
+		a.log.Debug("surplus fetch failed", "err", err)
+		if firstErr == nil {
+			firstErr = err
+		}
+	} else {
+		out = append(out, models...)
+	}
+
+	if len(out) == 0 {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
 // syncChainMarketPrices recomputes every chain that has market slugs and
 // writes the derived rates onto the chain row. Chains whose slugs are all
 // absent from the snapshot keep their existing price. Returns the number of
 // chains whose price changed and a non-nil error when any write failed.
 func (a *App) syncChainMarketPrices(ctx context.Context) (int, error) {
-	models, err := market.Fetch(ctx, a.marketURL)
+	models, err := a.fetchMergedModels(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -85,7 +112,7 @@ func (a *App) runMarketSync(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
-			models, err := market.Fetch(ctx, a.marketURL)
+			models, err := a.fetchMergedModels(ctx)
 			if err != nil {
 				a.log.Debug("market fetch failed", "err", err)
 				continue
