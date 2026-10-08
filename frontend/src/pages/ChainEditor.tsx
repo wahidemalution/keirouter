@@ -161,7 +161,7 @@ export function ChainEditorPage() {
         <Card className="p-5 sm:p-6">
           <div className="mb-3">
             <h2 className="text-base font-semibold">Market slugs</h2>
-            <p className="mt-1 text-sm text-[var(--text-muted)]">One inferhub.dev slug per line. KeiRouter prices this chain from the cheapest of these slugs plus markup. Leave empty to set the price manually.</p>
+            <p className="mt-1 text-sm text-[var(--text-muted)]">One slug per line. Use an inferhub.dev slug (e.g. <span className="font-mono">cbcn/deepseek-v4.1-flash</span>) or a Surplus Intelligence model as <span className="font-mono">surplus:&lt;model&gt;</span>. KeiRouter prices this chain from the cheapest of these plus markup. Leave empty to set the price manually.</p>
           </div>
           <Field label="Slugs">
             <textarea
@@ -169,7 +169,7 @@ export function ChainEditorPage() {
               onChange={(event) => { setMarketSlugs(event.target.value); setDirty(true); }}
               rows={4}
               spellCheck={false}
-              placeholder={"cbcn/deepseek-v4.1-flash\nali/deepseek-v4.1-flash\ncb/deepseek-v4.1-flash"}
+              placeholder={"cbcn/deepseek-v4.1-flash\nali/deepseek-v4.1-flash\nsurplus:deepseek-v4.1-flash"}
               className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3 font-mono text-sm text-[var(--text)] outline-none focus:border-accent-500"
             />
           </Field>

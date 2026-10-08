@@ -54,7 +54,7 @@ export function MarketPricingSection() {
       <Card>
         <SectionHeader
           title="Market Pricing"
-          description="Auto-update chain prices from inferhub.dev. Markup is applied over the cheapest slug bound on each chain."
+          description="Auto-update chain prices from inferhub.dev and surplusintelligence.ai. Markup is applied over the cheapest slug bound on each chain."
           icon={LineChart}
           iconTone="neutral"
         />
