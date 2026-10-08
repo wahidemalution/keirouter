@@ -94,6 +94,29 @@ func TestPublicModelsNoMarketSlugsNeverSoldOut(t *testing.T) {
 	require.Greater(t, models[0].InputPerM, 0.0, "catalog price still shown")
 }
 
+// A chain bound only to a resolvable surplus: model is not sold out and keeps
+// its configured rate (the rate the sync writes from Surplus).
+func TestPublicModelsSurplusSlugResolves(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	require.NoError(t, db.Chains().Create(context.Background(), store.Chain{
+		ID: "c-surplus", TenantID: store.DefaultTenantID, Name: "surplus-flash",
+		Strategy:    "priority",
+		MarketSlugs: []string{"surplus:deepseek-v4.1-flash"},
+		InputPerM:   0.132, OutputPerM: 0.528,
+		Steps:     []store.ChainStep{{Provider: "surplus", Model: "deepseek-v4.1-flash", Position: 0}},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{{Slug: "surplus:deepseek-v4.1-flash", MinAskIn: 0.12, MinAskOut: 0.48, CacheRead: 0.02, CacheWrite: 0.15}})
+	gw.marketCache = cache
+
+	models := getPublicModels(t, gw)
+	require.Len(t, models, 1)
+	require.False(t, models[0].SoldOut, "resolvable surplus slug => not sold out")
+	require.Equal(t, 0.132, models[0].InputPerM)
+	require.Equal(t, 0.528, models[0].OutputPerM)
+}
+
 // nil cache must not panic and must not mark a no-slug chain sold out.
 func TestPublicModelsNilMarketCacheNoSlugs(t *testing.T) {
 	db, gw := newPublicTestGatewayWithDB(t)
