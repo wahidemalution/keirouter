@@ -20,6 +20,7 @@ const TABS = [
   { id: "overview", label: "Home", href: "/", d: "M3 11l9-8 9 8M5 10v10h14V10" },
   { id: "models", label: "Model", href: "/model", d: "M3 3h7v7H3V3Zm11 0h7v7h-7V3ZM3 14h7v7H3v-7Zm11 0h7v7h-7v-7" },
   { id: "bansos", label: "Bansos", href: "/bansos", d: "M4 8h16a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1zM12 8v13M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5" },
+  { id: "telegram", label: "Telegram", href: "https://t.me/+F2C4PaeMgv1hYjE1", d: "M21.5 3.5 2.8 10.8c-1 .4-1 1 0 1.3l4.6 1.4 1.8 5.4c.2.6.5.7 1 .3l2.6-2.1 4.7 3.5c.7.4 1.2.2 1.4-.7l2.6-13.5c.2-.9-.3-1.3-1-.9ZM8.5 13.4l9.5-5.9-7.6 7-.3 3.2-1.6-4.3Z" },
 ] as const;
 
 const BELL_D = "M6 17h12l-1.5-3V9a4.5 4.5 0 0 0-9 0v5L6 17Zm4 3h4";
@@ -214,6 +215,10 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         <div className="flex flex-wrap items-center justify-center gap-2">
           <strong className="text-[var(--ink)]">Tokenizer</strong>
           <span className="uppercase tracking-[1.5px]">PAYG AI Frontier</span>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+          <a href="/model" className="no-underline hover:underline hover:underline-offset-2">Model &amp; harga</a>
+          <a href="/ketentuan" className="no-underline hover:underline hover:underline-offset-2">Ketentuan Layanan</a>
         </div>
       </footer>
 
