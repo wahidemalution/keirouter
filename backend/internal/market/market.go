@@ -19,6 +19,10 @@ type Model struct {
 	MaxAskIn  float64 `json:"maxAskIn"`
 	MaxAskOut float64 `json:"maxAskOut"`
 	LastRate  float64 `json:"lastRate"`
+	// CacheRead/CacheWrite are published cache rates when a source provides
+	// them (Surplus). Zero means "not published": callers derive from input.
+	CacheRead  float64 `json:"-"`
+	CacheWrite float64 `json:"-"`
 }
 
 func ParseSnapshot(r io.Reader) ([]Model, error) {
