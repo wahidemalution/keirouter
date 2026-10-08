@@ -36,6 +36,11 @@ type budgetCacheEntry struct {
 // lookup without making admin changes feel sluggish.
 const budgetCacheTTL = 10 * time.Second
 
+// minKeyBalanceMicros is the minimum API-key balance required to use the
+// service. A key holding less cannot make requests, which prevents abuse of
+// near-zero starter credit.
+const minKeyBalanceMicros int64 = 50_000 // $0.05
+
 // Engine evaluates budgets against recorded usage.
 type Engine struct {
 	budgets *store.BudgetRepo
@@ -269,6 +274,20 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 		return &core.ProviderError{
 			Kind:    core.ErrBudgetBlocked,
 			Message: fmt.Sprintf("budget %q exhausted for %s", dec.Blocking.ID, dec.Blocking.ScopeKind),
+		}
+	}
+
+	// Minimum-balance gate: an API key must hold at least minKeyBalanceMicros
+	// to make a metered (debiting) request. This stops abuse of near-zero
+	// starter credit. Read-only checks that never reserve (e.g. the media
+	// endpoint) are intentionally unaffected. Applies only to API-key budgets.
+	for _, bu := range dec.BudgetUsage {
+		if bu.Budget.ScopeKind == store.ScopeAPIKey && bu.Budget.HardCutoff &&
+			bu.Budget.LimitMicros < minKeyBalanceMicros {
+			return &core.ProviderError{
+				Kind:    core.ErrBudgetBlocked,
+				Message: fmt.Sprintf("minimum API key balance is $%.2f", float64(minKeyBalanceMicros)/1_000_000),
+			}
 		}
 	}
 
