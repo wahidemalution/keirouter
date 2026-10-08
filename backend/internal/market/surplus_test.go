@@ -37,6 +37,24 @@ func TestParseSurplusPicksCheapestOutput(t *testing.T) {
 	}
 }
 
+func TestParseSurplusOutputOnlyWinner(t *testing.T) {
+	const fixture = `{"models":[{"model":"free-input","providers":[
+	  {"provider":"paid","pricing":{"input":0.50,"output":0.40}},
+	  {"provider":"zero-input","pricing":{"input":0,"output":0.10}}
+	]}]}`
+	models, err := ParseSurplus(strings.NewReader(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	m := models[0]
+	if m.MinAskIn != 0 || m.MinAskOut != 0.10 {
+		t.Fatalf("rates = (%v,%v), want (0,0.10) from zero-input winner", m.MinAskIn, m.MinAskOut)
+	}
+}
+
 func TestFetchSurplusNon200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

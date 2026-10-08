@@ -40,7 +40,7 @@ func ParseSurplus(r io.Reader) ([]Model, error) {
 	for _, m := range body.Models {
 		best := -1
 		for i, p := range m.Providers {
-			if p.Pricing.Output <= 0 || p.Pricing.Input <= 0 {
+			if p.Pricing.Output <= 0 {
 				continue
 			}
 			if !validRate(p.Pricing.Input) || !validRate(p.Pricing.Output) {
