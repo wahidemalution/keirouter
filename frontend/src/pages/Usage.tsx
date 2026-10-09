@@ -1707,10 +1707,7 @@ function fmtCompact(value: number) {
 
 function fmtUSD(value: number) {
   if (!Number.isFinite(value)) return "—";
-  if (value === 0) return "$0.00";
-  const absolute = Math.abs(value);
-  if (absolute < 0.01) return `$${value.toFixed(6)}`;
-  return `$${value.toFixed(2)}`;
+  return `$${value.toFixed(6)}`;
 }
 
 function fmtUSDCompact(value: number) {

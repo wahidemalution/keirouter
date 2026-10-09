@@ -9,13 +9,11 @@ export function formatUSD(usd: number, decimals = 2): string {
   return `$${usd.toFixed(decimals)}`;
 }
 
-// Picks a decimal count that keeps small spend amounts legible: sub-cent values
-// show micro-USD precision (6 decimals, matching the DB column) so a $0.0042
-// charge doesn't collapse to "$0.00". Amounts at or above $0.01 stay at 2.
+// Spend amounts always show micro-USD precision (6 decimals, matching the DB
+// column) so every recorded charge is fully auditable — no sub-cent value
+// collapses to "$0.00".
 export function formatSpendUSD(usd: number): string {
-  if (usd === 0) return "$0.00";
-  if (usd < 0.01) return `$${usd.toFixed(6)}`;
-  return `$${usd.toFixed(2)}`;
+  return `$${usd.toFixed(6)}`;
 }
 
 export function formatTokens(n: number): string {

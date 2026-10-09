@@ -83,10 +83,10 @@ func (s *Server) logRequest(keyName, provider, model string, tokens int, costMic
 	if cacheHit {
 		cacheNote = " · cache hit"
 	}
-	msg := fmt.Sprintf("Request completed · %s · %s tokens · $%.4f · %s%s",
+	msg := fmt.Sprintf("Request completed · %s · %s tokens · $%.6f · %s%s",
 		model, humanInt(tokens), cost, humanDuration(latencyMs), cacheNote)
 	detail := fmt.Sprintf(
-		"Key:      %s\nProvider: %s\nModel:    %s\nTokens:   %s\nCost:     $%.4f\nLatency:  %dms\nCache:    %v",
+		"Key:      %s\nProvider: %s\nModel:    %s\nTokens:   %s\nCost:     $%.6f\nLatency:  %dms\nCache:    %v",
 		keyName, provider, model, humanInt(tokens), cost, latencyMs, cacheHit)
 	s.consoleLog.Log(level, msg, detail)
 }
