@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,4 +192,41 @@ func TestAdminChainPricing_UpdateRejectsZeroOutput(t *testing.T) {
 	code, respBody := patchChain(t, s, id, `{"input_per_m":1,"output_per_m":0}`)
 	require.Equal(t, http.StatusBadRequest, code)
 	require.Contains(t, respBody, "greater than 0")
+}
+
+func TestAdminChainCapabilityOverridesValidation(t *testing.T) {
+	s := newChainPricingTestServer(t)
+	s.identity = identity.New(s.db.APIKeys())
+	s.budgets = s.db.Budgets()
+	s.pools = s.db.ProxyPools()
+	s.aliases = s.db.Aliases()
+	s.settings = s.db.Settings()
+
+	base := `{"name":"luna","steps":[{"provider":"openai","model":"gpt-4o"}],"capability_overrides":%s}`
+
+	// Unknown key is rejected.
+	code, _, _ := postChain(t, s, fmt.Sprintf(base, `"{\"bogus\":true}"`))
+	require.Equal(t, http.StatusBadRequest, code)
+
+	// Malformed JSON is rejected.
+	code, _, _ = postChain(t, s, fmt.Sprintf(base, `"not-json"`))
+	require.Equal(t, http.StatusBadRequest, code)
+
+	// Valid override is accepted and echoed by list.
+	code, _, body := postChain(t, s, fmt.Sprintf(base, `"{\"vision\":true}"`))
+	require.Equal(t, http.StatusCreated, code, body)
+	chains := listChains(t, s)
+	require.Len(t, chains, 1)
+	require.Equal(t, `{"vision":true}`, chains[0]["capability_overrides"])
+
+	// Patch with unknown key is rejected.
+	id, _ := chains[0]["id"].(string)
+	code, _ = patchChain(t, s, id, `{"capability_overrides":"{\"nope\":false}"}`)
+	require.Equal(t, http.StatusBadRequest, code)
+
+	// Patch with valid override round-trips.
+	code, _ = patchChain(t, s, id, `{"capability_overrides":"{\"tools\":false}"}`)
+	require.Equal(t, http.StatusOK, code)
+	chains = listChains(t, s)
+	require.Equal(t, `{"tools":false}`, chains[0]["capability_overrides"])
 }

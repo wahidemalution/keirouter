@@ -1857,9 +1857,10 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 			"id": c.ID, "name": c.Name, "strategy": c.Strategy, "steps": steps,
 			"input_per_m": c.InputPerM, "output_per_m": c.OutputPerM,
 			"cache_write_per_m": c.CacheWritePerM, "cache_read_per_m": c.CacheReadPerM,
-			"market_slugs":      marketSlugsJSON(c.MarketSlugs),
-			"display_provider":  c.DisplayProvider,
-			"reorder_by_market": c.ReorderByMarket,
+			"market_slugs":         marketSlugsJSON(c.MarketSlugs),
+			"display_provider":     c.DisplayProvider,
+			"reorder_by_market":    c.ReorderByMarket,
+			"capability_overrides": c.CapabilityOverrides,
 		}
 		if c.FallbackProvider != "" && c.FallbackModel != "" {
 			entry["fallback_provider"] = c.FallbackProvider
@@ -1872,18 +1873,19 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name             string   `json:"name"`
-		Strategy         string   `json:"strategy"`
-		FallbackProvider string   `json:"fallback_provider"`
-		FallbackModel    string   `json:"fallback_model"`
-		DisplayProvider  string   `json:"display_provider"`
-		InputPerM        float64  `json:"input_per_m"`
-		OutputPerM       float64  `json:"output_per_m"`
-		CacheWritePerM   float64  `json:"cache_write_per_m"`
-		CacheReadPerM    float64  `json:"cache_read_per_m"`
-		MarketSlugs      []string `json:"market_slugs"`
-		ReorderByMarket  bool     `json:"reorder_by_market"`
-		Steps            []struct {
+		Name                string   `json:"name"`
+		Strategy            string   `json:"strategy"`
+		FallbackProvider    string   `json:"fallback_provider"`
+		FallbackModel       string   `json:"fallback_model"`
+		DisplayProvider     string   `json:"display_provider"`
+		CapabilityOverrides string   `json:"capability_overrides"`
+		InputPerM           float64  `json:"input_per_m"`
+		OutputPerM          float64  `json:"output_per_m"`
+		CacheWritePerM      float64  `json:"cache_write_per_m"`
+		CacheReadPerM       float64  `json:"cache_read_per_m"`
+		MarketSlugs         []string `json:"market_slugs"`
+		ReorderByMarket     bool     `json:"reorder_by_market"`
+		Steps               []struct {
 			Provider   string `json:"provider"`
 			Model      string `json:"model"`
 			MarketSlug string `json:"market_slug"`
@@ -1894,6 +1896,10 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Name == "" || len(body.Steps) == 0 {
 		writeError(w, http.StatusBadRequest, "name and at least one step are required")
+		return
+	}
+	if err := validateCapabilityOverrides(body.CapabilityOverrides); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateChainName(body.Name); err != nil {
@@ -1926,21 +1932,22 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	chain := store.Chain{
-		ID:               uuid.NewString(),
-		TenantID:         adminTenant,
-		Name:             body.Name,
-		Strategy:         defaultStr(body.Strategy, "priority"),
-		FallbackProvider: body.FallbackProvider,
-		FallbackModel:    body.FallbackModel,
-		DisplayProvider:  body.DisplayProvider,
-		InputPerM:        body.InputPerM,
-		OutputPerM:       body.OutputPerM,
-		CacheWritePerM:   body.CacheWritePerM,
-		CacheReadPerM:    body.CacheReadPerM,
-		MarketSlugs:      body.MarketSlugs,
-		ReorderByMarket:  body.ReorderByMarket,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                  uuid.NewString(),
+		TenantID:            adminTenant,
+		Name:                body.Name,
+		Strategy:            defaultStr(body.Strategy, "priority"),
+		FallbackProvider:    body.FallbackProvider,
+		FallbackModel:       body.FallbackModel,
+		DisplayProvider:     body.DisplayProvider,
+		CapabilityOverrides: body.CapabilityOverrides,
+		InputPerM:           body.InputPerM,
+		OutputPerM:          body.OutputPerM,
+		CacheWritePerM:      body.CacheWritePerM,
+		CacheReadPerM:       body.CacheReadPerM,
+		MarketSlugs:         body.MarketSlugs,
+		ReorderByMarket:     body.ReorderByMarket,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	for i, st := range body.Steps {
 		if _, ok := connectors.SpecByID(st.Provider); !ok {
@@ -1977,18 +1984,19 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name             *string   `json:"name"`
-		Strategy         *string   `json:"strategy"`
-		FallbackProvider *string   `json:"fallback_provider"`
-		FallbackModel    *string   `json:"fallback_model"`
-		DisplayProvider  *string   `json:"display_provider"`
-		InputPerM        *float64  `json:"input_per_m"`
-		OutputPerM       *float64  `json:"output_per_m"`
-		CacheWritePerM   *float64  `json:"cache_write_per_m"`
-		CacheReadPerM    *float64  `json:"cache_read_per_m"`
-		MarketSlugs      *[]string `json:"market_slugs"`
-		ReorderByMarket  *bool     `json:"reorder_by_market"`
-		Steps            *[]struct {
+		Name                *string   `json:"name"`
+		Strategy            *string   `json:"strategy"`
+		FallbackProvider    *string   `json:"fallback_provider"`
+		FallbackModel       *string   `json:"fallback_model"`
+		DisplayProvider     *string   `json:"display_provider"`
+		CapabilityOverrides *string   `json:"capability_overrides"`
+		InputPerM           *float64  `json:"input_per_m"`
+		OutputPerM          *float64  `json:"output_per_m"`
+		CacheWritePerM      *float64  `json:"cache_write_per_m"`
+		CacheReadPerM       *float64  `json:"cache_read_per_m"`
+		MarketSlugs         *[]string `json:"market_slugs"`
+		ReorderByMarket     *bool     `json:"reorder_by_market"`
+		Steps               *[]struct {
 			Provider   string `json:"provider"`
 			Model      string `json:"model"`
 			MarketSlug string `json:"market_slug"`
@@ -2016,6 +2024,13 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.DisplayProvider != nil {
 		existing.DisplayProvider = *body.DisplayProvider
+	}
+	if body.CapabilityOverrides != nil {
+		if err := validateCapabilityOverrides(*body.CapabilityOverrides); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		existing.CapabilityOverrides = *body.CapabilityOverrides
 	}
 	if body.MarketSlugs != nil {
 		existing.MarketSlugs = *body.MarketSlugs
@@ -3527,4 +3542,25 @@ func validateChainName(name string) error {
 // rejected so a malformed rate can never poison cost math.
 func validRate(r float64) bool {
 	return r >= 0 && !math.IsNaN(r) && !math.IsInf(r, 0)
+}
+
+// validateCapabilityOverrides rejects a malformed JSON blob or one carrying an
+// unknown key or non-boolean value. Empty string means "no override" (auto) and
+// is always accepted.
+func validateCapabilityOverrides(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var m map[string]bool
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return fmt.Errorf("capability_overrides must be a JSON object of booleans")
+	}
+	for k := range m {
+		switch k {
+		case "vision", "reasoning", "tools":
+		default:
+			return fmt.Errorf("capability_overrides has unknown key: %s", k)
+		}
+	}
+	return nil
 }

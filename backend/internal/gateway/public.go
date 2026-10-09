@@ -2,13 +2,37 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
+
+// applyCapabilityOverrides forces the operator-configured vision/reasoning/tools
+// flags onto a resolved capability payload. Only keys present in the JSON are
+// applied; an empty or unparseable blob leaves the heuristic result untouched.
+func applyCapabilityOverrides(caps *modelCapabilities, raw string) {
+	if strings.TrimSpace(raw) == "" {
+		return
+	}
+	var m map[string]bool
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return
+	}
+	if v, ok := m["vision"]; ok {
+		caps.Vision = v
+	}
+	if v, ok := m["reasoning"]; ok {
+		caps.Reasoning = v
+	}
+	if v, ok := m["tools"]; ok {
+		caps.Tools = v
+	}
+}
 
 // publicOverview serves GET /v1/public/overview. Aggregate-only all-time totals
 // plus the number of published routing chains. No caller input, no identifiers,
@@ -47,14 +71,17 @@ type publicModelRow struct {
 	ProviderID  string
 	CapProvider string
 	CapModel    string
-	InputPerM   float64
-	OutputPerM  float64
-	CachedPerM  float64
-	CacheWrite  float64
-	SoldOut     bool
-	Requests    int64
-	Tokens      int64
-	Users       int
+	// CapOverrides is the operator JSON forcing public capability badges for
+	// this chain (empty = heuristic only).
+	CapOverrides string
+	InputPerM    float64
+	OutputPerM   float64
+	CachedPerM   float64
+	CacheWrite   float64
+	SoldOut      bool
+	Requests     int64
+	Tokens       int64
+	Users        int
 }
 
 // anyMarketSlugResolves reports whether at least one of the chain's bound
@@ -122,20 +149,21 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 		}
 		u := usage[c.ID]
 		rows = append(rows, publicModelRow{
-			Name:        c.Name,
-			ModelID:     c.Name,
-			Provider:    provider,
-			ProviderID:  providerID,
-			CapProvider: first.Provider,
-			CapModel:    first.Model,
-			InputPerM:   inputPerM,
-			OutputPerM:  outputPerM,
-			CachedPerM:  cachedPerM,
-			CacheWrite:  cacheWritePerM,
-			SoldOut:     soldOut,
-			Requests:    u.TotalRequests,
-			Tokens:      u.PromptTokens + u.CompletionTokens,
-			Users:       u.DistinctKeys,
+			Name:         c.Name,
+			ModelID:      c.Name,
+			Provider:     provider,
+			ProviderID:   providerID,
+			CapProvider:  first.Provider,
+			CapModel:     first.Model,
+			CapOverrides: c.CapabilityOverrides,
+			InputPerM:    inputPerM,
+			OutputPerM:   outputPerM,
+			CachedPerM:   cachedPerM,
+			CacheWrite:   cacheWritePerM,
+			SoldOut:      soldOut,
+			Requests:     u.TotalRequests,
+			Tokens:       u.PromptTokens + u.CompletionTokens,
+			Users:        u.DistinctKeys,
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -163,6 +191,7 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(rows))
 	for _, m := range rows {
 		caps, _ := capabilityPayload(m.CapProvider, m.CapModel, core.ServiceLLM)
+		applyCapabilityOverrides(&caps, m.CapOverrides)
 		out = append(out, map[string]any{
 			"name":              m.Name,
 			"model_id":          m.ModelID,

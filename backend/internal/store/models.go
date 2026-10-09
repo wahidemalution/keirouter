@@ -133,6 +133,9 @@ type Chain struct {
 	// DisplayProvider is the operator-chosen category shown in the public model
 	// catalog. Empty means the legacy "combo" sentinel.
 	DisplayProvider string
+	// CapabilityOverrides is operator JSON (`{"vision":true,"reasoning":false}`)
+	// forcing the public capability badges for this chain. Empty = heuristic.
+	CapabilityOverrides string
 	// Operator price for the chain model. All zero = fall back to catalog.
 	InputPerM      float64
 	OutputPerM     float64

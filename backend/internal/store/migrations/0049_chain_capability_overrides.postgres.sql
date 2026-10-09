@@ -1,0 +1,1 @@
+ALTER TABLE chains ADD COLUMN IF NOT EXISTS capability_overrides TEXT NOT NULL DEFAULT '';

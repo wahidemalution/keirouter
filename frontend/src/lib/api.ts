@@ -366,6 +366,7 @@ export interface Chain {
   name: string;
   strategy: string;
   display_provider?: string;
+  capability_overrides?: string;
   fallback_provider?: string;
   fallback_model?: string;
   input_per_m: number;

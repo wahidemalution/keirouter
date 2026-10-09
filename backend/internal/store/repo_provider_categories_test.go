@@ -68,3 +68,34 @@ func TestChainDisplayProviderRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "openai", got.DisplayProvider)
 }
+
+func TestChainCapabilityOverridesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	repo := db.Chains()
+
+	overrides := `{"vision":true,"reasoning":true}`
+	c := Chain{
+		ID: "c2", TenantID: "default", Name: "luna", Strategy: "priority",
+		CapabilityOverrides: overrides,
+		Steps:               []ChainStep{{ID: "s1", ChainID: "c2", Position: 0, Provider: "custom-openai-x", Model: "gpt-6-luna"}},
+		CreatedAt:           time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, repo.Create(ctx, c))
+
+	got, err := repo.Get(ctx, "c2")
+	require.NoError(t, err)
+	require.Equal(t, overrides, got.CapabilityOverrides)
+
+	list, err := repo.ListByTenant(ctx, "default")
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, overrides, list[0].CapabilityOverrides)
+
+	// Empty override clears back to auto.
+	c.CapabilityOverrides = ""
+	require.NoError(t, repo.Update(ctx, c))
+	got, err = repo.Get(ctx, "c2")
+	require.NoError(t, err)
+	require.Equal(t, "", got.CapabilityOverrides)
+}

@@ -30,6 +30,34 @@ const strategyOptions: { value: ChainStrategy; label: string; icon: typeof Zap }
   { value: "cost", label: "Cost", icon: DollarSign },
 ];
 
+// Tri-state capability override: "auto" keeps the heuristic, "on"/"off" force
+// the public badge.
+export type CapState = "auto" | "on" | "off";
+type CapKey = "reasoning" | "vision" | "tools";
+const CAP_KEYS: CapKey[] = ["reasoning", "vision", "tools"];
+
+const parseCapOverrides = (raw?: string): Record<CapKey, CapState> => {
+  const out: Record<CapKey, CapState> = { reasoning: "auto", vision: "auto", tools: "auto" };
+  if (!raw) return out;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    for (const key of CAP_KEYS) {
+      if (typeof parsed[key] === "boolean") out[key] = parsed[key] ? "on" : "off";
+    }
+  } catch {
+    /* malformed override: fall back to auto */
+  }
+  return out;
+};
+
+const serializeCapOverrides = (state: Record<CapKey, CapState>): string => {
+  const out: Record<string, boolean> = {};
+  for (const key of CAP_KEYS) {
+    if (state[key] !== "auto") out[key] = state[key] === "on";
+  }
+  return Object.keys(out).length > 0 ? JSON.stringify(out) : "";
+};
+
 export function ChainEditorPage() {
   const { id } = useParams();
   const isEdit = Boolean(id);
@@ -45,6 +73,7 @@ export function ChainEditorPage() {
   const [confirmExit, setConfirmExit] = useState(false);
   const [name, setName] = useState("");
   const [displayProvider, setDisplayProvider] = useState("");
+  const [capOverrides, setCapOverrides] = useState<Record<CapKey, CapState>>({ reasoning: "auto", vision: "auto", tools: "auto" });
   const [newProviderOpen, setNewProviderOpen] = useState(false);
   const [strategy, setStrategy] = useState<ChainStrategy>("priority");
   const [steps, setSteps] = useState<DraftChainStep[]>(() => [makeDraftStep()]);
@@ -61,6 +90,7 @@ export function ChainEditorPage() {
     if (!existing || hydrated) return;
     setName(existing.name);
     setDisplayProvider(existing.display_provider ?? "");
+    setCapOverrides(parseCapOverrides(existing.capability_overrides));
     setStrategy(normalizeChainStrategy(existing.strategy));
     setSteps(toDraftSteps(existing));
     setFallbackEnabled(Boolean(existing.fallback_provider && existing.fallback_model));
@@ -90,7 +120,7 @@ export function ChainEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model, market_slug: step.marketSlug ?? "" })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider };
+      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model, market_slug: step.marketSlug ?? "" })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
       return isEdit ? api.updateChain(id!, payload) : api.createChain(payload);
     },
     onSuccess: () => {
@@ -188,6 +218,7 @@ export function ChainEditorPage() {
           </div>}
         </Card>
         <Card className="overflow-visible p-5 sm:p-6"><div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-base font-semibold">Model route</h2><p className="mt-1 text-sm text-[var(--text-muted)]">Each completed row is an eligible target. Reorder the path to set its declared priority.</p></div><Badge tone="neutral">{completeSteps.length} configured</Badge></div><div className="mb-3 flex items-center gap-2"><label className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center"><input type="checkbox" checked={reorderByMarket} onChange={(event) => { setReorderByMarket(event.target.checked); setDirty(true); }} className="peer sr-only" aria-label="Order by market price" /><span className="absolute inset-0 rounded-full bg-ink-300 transition-colors peer-checked:bg-accent-600 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-400/50 dark:bg-ink-700" /><span className="relative ml-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" /></label><div><p className="text-sm font-medium">Order by market price</p><p className="text-xs text-[var(--text-muted)]">Tries the cheapest bound slug first. Requires steps to have market slugs.</p></div></div><div className="space-y-2">{steps.map((step, index) => { return <div key={step.id} className="flex flex-col gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)]/35 p-3"><div className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"><div className="flex items-center gap-2"><GripVertical className="h-4 w-4 text-[var(--text-muted)]" aria-hidden="true" /><span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--bg-elevated)] text-xs font-semibold text-[var(--text-muted)]">{index + 1}</span></div><ChainModelPicker value={step} providers={providersQuery.data?.providers ?? []} onChange={(next) => updateStep(step.id, next)} autoFocus={!isEdit && index === 0 && !step.model} /><div className="flex items-center justify-end gap-1"><button type="button" disabled={index === 0} onClick={() => moveStep(index, -1)} className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] disabled:cursor-not-allowed disabled:opacity-30" aria-label={`Move step ${index + 1} up`}><ArrowUp className="h-4 w-4" /></button><button type="button" disabled={index === steps.length - 1} onClick={() => moveStep(index, 1)} className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] disabled:cursor-not-allowed disabled:opacity-30" aria-label={`Move step ${index + 1} down`}><ArrowDown className="h-4 w-4" /></button><button type="button" disabled={steps.length === 1} onClick={() => removeStep(step.id)} className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)] disabled:cursor-not-allowed disabled:opacity-30" aria-label={`Remove step ${index + 1}`}><X className="h-4 w-4" /></button></div></div><Field label="Market slug"><Input value={step.marketSlug} onChange={(event) => updateStep(step.id, { marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" /><p className="mt-1 text-xs text-[var(--text-muted)]">Inferhub market slug for this step (optional)</p></Field></div>; })}</div><Button variant="ghost" className="mt-3 w-full border-dashed" onClick={() => { setSteps((current) => [...current, makeDraftStep()]); setDirty(true); }}><Plus className="h-4 w-4" />Add model</Button></Card>
+        <Card className="overflow-visible p-5 sm:p-6"><div className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-base font-semibold">Capability badges</h2><p className="mt-1 text-sm text-[var(--text-muted)]">Force the reasoning, vision, and tools badges shown on the public model page. Auto keeps the detected value.</p></div></div><div className="space-y-3">{CAP_KEYS.map((key) => (<div key={key} className="flex items-center justify-between gap-3"><span className="text-sm font-medium capitalize">{key}</span><div className="inline-flex overflow-hidden rounded-lg border border-[var(--border)]">{(['auto', 'on', 'off'] as CapState[]).map((state) => (<button key={state} type="button" onClick={() => { setCapOverrides((current) => ({ ...current, [key]: state })); setDirty(true); }} className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${capOverrides[key] === state ? 'bg-accent-600 text-white' : 'text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]'}`}>{state}</button>))}</div></div>))}</div></Card>
         <Card className="overflow-visible p-5 sm:p-6"><div className="flex items-start justify-between gap-4"><div className="flex gap-3"><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[color:var(--color-warning)]/10 text-[color:var(--color-warning)]"><Shield className="h-4.5 w-4.5" /></div><div><h2 className="text-base font-semibold">Final fallback</h2><p className="mt-1 text-sm text-[var(--text-muted)]">Optional. This model is always tried last after every route step fails.</p></div></div><label className="relative mt-1 inline-flex h-6 w-11 shrink-0 cursor-pointer items-center"><input type="checkbox" checked={fallbackEnabled} onChange={(event) => { setFallbackEnabled(event.target.checked); setDirty(true); }} className="peer sr-only" aria-label="Enable final fallback" /><span className="absolute inset-0 rounded-full bg-ink-300 transition-colors peer-checked:bg-accent-600 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-400/50 dark:bg-ink-700" /><span className="relative ml-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" /></label></div>{fallbackEnabled && <div className="mt-4 border-t border-[var(--border)] pt-4"><ChainModelPicker value={fallback} providers={providersQuery.data?.providers ?? []} onChange={(next) => { setFallback((current) => ({ ...current, ...next })); setDirty(true); }} /></div>}</Card>
         {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/10 px-3.5 py-3 text-sm text-[color:var(--color-danger)]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</div>}
       </div>

@@ -224,7 +224,7 @@ func TestPublicModelsUsesChainConfiguredPrice(t *testing.T) {
 	db, gw := newPublicTestGatewayWithDB(t)
 	require.NoError(t, db.Chains().Create(context.Background(), store.Chain{
 		ID: "chain-priced", TenantID: store.DefaultTenantID, Name: "my-priced-combo",
-		Strategy: "priority",
+		Strategy:  "priority",
 		InputPerM: 1.25, OutputPerM: 5.5, CacheWritePerM: 1.5625, CacheReadPerM: 0.125,
 		Steps:     []store.ChainStep{{Provider: "openai", Model: "gpt-4o", Position: 0}},
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
@@ -487,4 +487,65 @@ func newPublicTestGatewayWithDB(t *testing.T) (*store.DB, *Server) {
 	require.NoError(t, db.Tenants().EnsureDefault(context.Background()))
 	t.Cleanup(func() { _ = db.Close() })
 	return db, New(Deps{Config: config.Default(), DB: db, Usage: db.Usage(), Settings: db.Settings(), Chains: db.Chains()})
+}
+
+// TestPublicModelsCapabilityOverrides proves the operator JSON forces the
+// public vision/reasoning/tools badges for a chain, and that a chain without an
+// override keeps the heuristic result.
+func TestPublicModelsCapabilityOverrides(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "luna", TenantID: store.DefaultTenantID, Name: "luna", Strategy: "priority",
+		CapabilityOverrides: `{"vision":true,"reasoning":true,"tools":false}`,
+		Steps:               []store.ChainStep{{ID: "luna-s1", Provider: "openai", Model: "gpt-4o", Position: 0}},
+		CreatedAt:           now, UpdatedAt: now,
+	}))
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "plain", TenantID: store.DefaultTenantID, Name: "plain", Strategy: "priority",
+		Steps:     []store.ChainStep{{ID: "plain-s1", Provider: "openai", Model: "gpt-4o", Position: 0}},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	rec := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/public/models", nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var payload struct {
+		Models []struct {
+			ModelID      string `json:"model_id"`
+			Capabilities struct {
+				Vision    bool `json:"vision"`
+				Reasoning bool `json:"reasoning"`
+				Tools     bool `json:"tools"`
+			} `json:"capabilities"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+
+	var luna, plain *struct {
+		ModelID      string `json:"model_id"`
+		Capabilities struct {
+			Vision    bool `json:"vision"`
+			Reasoning bool `json:"reasoning"`
+			Tools     bool `json:"tools"`
+		} `json:"capabilities"`
+	}
+	for i := range payload.Models {
+		switch payload.Models[i].ModelID {
+		case "luna":
+			luna = &payload.Models[i]
+		case "plain":
+			plain = &payload.Models[i]
+		}
+	}
+	require.NotNil(t, luna)
+	require.NotNil(t, plain)
+	require.True(t, luna.Capabilities.Vision, "override forces vision on")
+	require.True(t, luna.Capabilities.Reasoning, "override forces reasoning on")
+	require.False(t, luna.Capabilities.Tools, "override forces tools off")
+	// The plain chain has no override, so its tools badge keeps the heuristic
+	// value (true for gpt-4o) instead of the forced off used by luna.
+	require.True(t, plain.Capabilities.Tools, "no override keeps heuristic tools")
+	require.NotEqual(t, luna.Capabilities.Tools, plain.Capabilities.Tools)
 }
