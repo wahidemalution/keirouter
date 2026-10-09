@@ -426,7 +426,6 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
                         <ProviderIcon provider={r.provider} className="h-8 w-8" />
                         <div className="flex min-w-0 flex-col">
                           <span className="font-semibold text-[var(--text)] text-[13px] truncate">{r.model}</span>
-                          <span className="text-[11px] text-[var(--text-muted)] capitalize truncate">{r.provider}</span>
                         </div>
                       </div>
                     </td>
