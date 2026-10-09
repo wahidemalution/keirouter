@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Plus, Copy, Check, ToggleLeft, ToggleRight, ArrowLeft, ArrowRight, Trash2, Wallet, Wrench, DollarSign, Gauge, Link2, Activity, Ban, ListFilter, Search, X } from "lucide-react";
 import { api, type APIKey, type BudgetStatus, type CreatedKey, type Plan } from "../lib/api";
 import { dashboard } from "../lib/dashboardRoutes";
-import { microsToUSD, formatTokens } from "../lib/format";
+import { microsToUSD, formatTokens, formatSpendUSD } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
 import { formatTokenLimit, FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
@@ -220,10 +220,10 @@ function KeyRow({
           const pct = Math.min((spent / limit) * 100, 100);
           const tone = pct >= 100 ? "bg-red-500" : pct >= (budget.alert_pct || 100) ? "bg-amber-500" : "bg-emerald-500";
           return (
-            <div className="mt-2 min-w-[160px]" title={`$${spent.toFixed(2)} of $${limit.toFixed(2)}`}>
+            <div className="mt-2 min-w-[160px]" title={`${formatSpendUSD(spent)} of ${formatSpendUSD(limit)}`}>
               <div className="mb-1 flex justify-between text-[11px] text-[var(--text-muted)]">
-                <span className="tabular-nums">${spent.toFixed(2)} spent</span>
-                <span className="tabular-nums">${limit.toFixed(2)}</span>
+                <span className="tabular-nums">{formatSpendUSD(spent)} spent</span>
+                <span className="tabular-nums">{formatSpendUSD(limit)}</span>
               </div>
               <div className="h-1.5 overflow-hidden rounded-full bg-[var(--bg-subtle)]">
                 <div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} />

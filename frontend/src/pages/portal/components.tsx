@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button, Card, Badge, Input, SegmentedControl } from "../../components/ui";
 import { claimPortalKey, type KeyUsageData, type PortalRecentRequest } from "../../lib/api";
+import { formatSpendUSD } from "../../lib/format";
 
 // ─── Shared portal onboarding surfaces ────────────────────────────────────
 
@@ -237,7 +238,7 @@ export function OverviewSection({ d }: { d: KeyUsageData }) {
                         <BudgetProgress label="Tokens" used={b.tokens_used} limit={b.limit_tokens} pct={b.tokens_pct_used} alert={b.alert} remaining={b.tokens_remaining} format={formatTokens} />
                       )}
                       {b.limit_usd > 0 && (
-                        <BudgetProgress label="Spend" used={b.spent_usd} limit={b.limit_usd} pct={b.usd_pct_used} alert={b.alert} remaining={b.usd_remaining} format={(v: number) => `$${v.toFixed(2)}`} />
+                        <BudgetProgress label="Spend" used={b.spent_usd} limit={b.limit_usd} pct={b.usd_pct_used} alert={b.alert} remaining={b.usd_remaining} format={formatSpendUSD} />
                       )}
                     </div>
                   </div>

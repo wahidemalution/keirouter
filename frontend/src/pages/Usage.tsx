@@ -1709,8 +1709,7 @@ function fmtUSD(value: number) {
   if (!Number.isFinite(value)) return "—";
   if (value === 0) return "$0.00";
   const absolute = Math.abs(value);
-  if (absolute < 0.0001) return value > 0 ? "<$0.0001" : ">-$0.0001";
-  if (absolute < 1) return `$${value.toFixed(4)}`;
+  if (absolute < 0.01) return `$${value.toFixed(6)}`;
   return `$${value.toFixed(2)}`;
 }
 

@@ -23,6 +23,7 @@ import {
   type Plan,
 } from "../lib/api";
 import { dashboard } from "../lib/dashboardRoutes";
+import { formatSpendUSD } from "../lib/format";
 import { useToast } from "../components/Toast";
 import { GuardrailEditor } from "../components/GuardrailEditor";
 import { ModelAccessList, ModelMultiSelect } from "../components/ModelSelect";
@@ -432,8 +433,8 @@ function BudgetTab({ apiKey }: { apiKey: APIKey }) {
               </div>
               <div>
                 <div className="mb-1 flex items-baseline justify-between text-sm">
-                  <span className="font-medium text-[var(--text)]">${spent.toFixed(2)} spent</span>
-                  <span className="text-[var(--text-muted)]">of ${limit.toFixed(2)} · ${remaining.toFixed(2)} left</span>
+                  <span className="font-medium text-[var(--text)]">{formatSpendUSD(spent)} spent</span>
+                  <span className="text-[var(--text-muted)]">of {formatSpendUSD(limit)} · {formatSpendUSD(remaining)} left</span>
                 </div>
                 <div className="h-2.5 overflow-hidden rounded-full bg-[var(--bg-subtle)]">
                   <div className={`h-full rounded-full ${pct >= 100 ? "bg-red-500" : pct >= (budget.alert_pct || 100) ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${pct}%` }} />
