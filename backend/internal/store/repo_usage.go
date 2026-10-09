@@ -198,7 +198,10 @@ func (r *UsageRepo) SpendAndTokensBatch(ctx context.Context, scopes []SpendScope
 	}
 	results := make([]SpendResult, len(scopes))
 
-	// Build UNION ALL query: one SELECT per scope.
+	// Build UNION ALL query: one SELECT per scope. Each branch carries an
+	// explicit index column because SQL does not guarantee that UNION ALL
+	// preserves branch order, so results must be mapped by that index rather
+	// than by row position.
 	var query string
 	args := make([]any, 0, len(scopes)*2)
 	for i, s := range scopes {
@@ -210,8 +213,8 @@ func (r *UsageRepo) SpendAndTokensBatch(ctx context.Context, scopes []SpendScope
 			query += " UNION ALL "
 		}
 		query += fmt.Sprintf(
-			"SELECT (CAST(COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000, COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM usage_records WHERE %s = ? AND created_at >= ?",
-			column)
+			"SELECT %d AS idx, (CAST(COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000, COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM usage_records WHERE %s = ? AND created_at >= ?",
+			i, column)
 		args = append(args, s.ScopeID, formatTime(s.Since))
 	}
 	query = r.db.rebind(query)
@@ -222,14 +225,27 @@ func (r *UsageRepo) SpendAndTokensBatch(ctx context.Context, scopes []SpendScope
 	}
 	defer rows.Close()
 
-	i := 0
-	for rows.Next() && i < len(results) {
-		if err := rows.Scan(&results[i].CostMicros, &results[i].Tokens); err != nil {
+	seen := 0
+	for rows.Next() {
+		var idx int
+		var cost, tokens int64
+		if err := rows.Scan(&idx, &cost, &tokens); err != nil {
 			return nil, fmt.Errorf("store: spend batch scan: %w", err)
 		}
-		i++
+		if idx < 0 || idx >= len(results) {
+			return nil, fmt.Errorf("store: spend batch: out-of-range index %d", idx)
+		}
+		results[idx].CostMicros = cost
+		results[idx].Tokens = tokens
+		seen++
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if seen != len(scopes) {
+		return nil, fmt.Errorf("store: spend batch: expected %d rows, got %d", len(scopes), seen)
+	}
+	return results, nil
 }
 
 // scopeColumn maps a budget scope to its SQL column name.
