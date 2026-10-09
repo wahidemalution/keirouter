@@ -647,7 +647,6 @@ export function ModelSection({ models }: { models: NonNullable<KeyUsageData["mod
                             <span className="font-semibold text-[var(--text)] text-[15px] truncate">{m.model}</span>
                             {i === 0 && totals.requests > 0 && <Badge tone="accent" title="Most used model">Top</Badge>}
                           </div>
-                          <span className="text-[13px] text-[var(--text-muted)] capitalize truncate">{m.provider}</span>
                         </div>
                       </div>
                     </td>
