@@ -107,8 +107,8 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		s.streamChat(w, r, codec, req, opts, key.Name)
+		s.streamChat(w, r, codec, req, opts, key.Name, s.bansosNoticeText(r.Context(), key.ID))
 		return
 	}
-	s.unaryChat(w, r, codec, req, opts, key.Name)
+	s.unaryChat(w, r, codec, req, opts, key.Name, s.bansosNoticeText(r.Context(), key.ID))
 }

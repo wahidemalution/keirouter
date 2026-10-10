@@ -229,6 +229,50 @@ export function BansosPage() {
               </div>
             </div>
           </Card>
+
+          <Card>
+            <CardHeader
+              title="Peringatan pembelian ulang"
+              description="Menambahkan baris peringatan secara acak ke output hanya untuk key bansos ini. Tidak mengubah hasil generate/kode, dan tidak pernah muncul untuk key user biasa."
+            />
+            <div className="p-5 sm:p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-[var(--muted)]">Status peringatan</p>
+                  <Badge tone={data.notice_enabled ? "success" : "secondary"}>
+                    {data.notice_enabled ? "Aktif" : "Nonaktif"}
+                  </Badge>
+                </div>
+                <Toggle
+                  checked={!!data.notice_enabled}
+                  onChange={(v) => update.mutate({ notice_enabled: v })}
+                />
+              </div>
+              <div className="mt-4 grid gap-4 md:grid-cols-[1fr_140px]">
+                <Field label="Teks peringatan (kosongkan = pakai default)">
+                  <Input
+                    defaultValue={data.notice_text ?? ""}
+                    placeholder="ini bansos dari tokenizer.id — kalau kamu beli token ini kamu ditipu"
+                    onBlur={(e) => update.mutate({ notice_text: e.target.value })}
+                  />
+                </Field>
+                <Field label="Peluang muncul (% — 0 = matikan)">
+                  <Input
+                    defaultValue={String(data.notice_rate ?? 30)}
+                    inputMode="numeric"
+                    onBlur={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isFinite(n) || n < 0 || n > 100) {
+                        toast.error("Peluang harus 0–100");
+                        return;
+                      }
+                      update.mutate({ notice_rate: n });
+                    }}
+                  />
+                </Field>
+              </div>
+            </div>
+          </Card>
         </div>
       )}
 

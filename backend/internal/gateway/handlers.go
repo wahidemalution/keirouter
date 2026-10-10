@@ -277,11 +277,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 
 	if req.Stream {
 		s.consoleLog.Log("DEBUG", "Dispatching as streaming response", "")
-		s.streamChat(w, r, codec, req, opts, key.Name)
+		s.streamChat(w, r, codec, req, opts, key.Name, s.bansosNoticeText(r.Context(), key.ID))
 		return
 	}
 	s.consoleLog.Log("DEBUG", "Dispatching as standard response", "")
-	s.unaryChat(w, r, codec, req, opts, key.Name)
+	s.unaryChat(w, r, codec, req, opts, key.Name, s.bansosNoticeText(r.Context(), key.ID))
 }
 
 func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.EffectiveLimits, error) {
@@ -304,7 +304,7 @@ func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.
 }
 
 // unaryChat runs a non-streaming request and renders the response.
-func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, keyName string) {
+func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, keyName string, notice string) {
 	start := time.Now()
 	s.consoleLog.Log("DEBUG", "Sending request to provider…", "")
 	result, err := s.pipeline.Chat(r.Context(), req, opts)
@@ -316,6 +316,9 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 		return
 	}
 
+	if notice != "" {
+		appendNoticePart(result.Response, notice)
+	}
 	out, err := codec.RenderResponse(result.Response)
 	if err != nil {
 		s.consoleLog.Log("ERROR", "Failed to render provider response", err.Error())
@@ -340,7 +343,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 
 // streamChat runs a streaming request and relays SSE events in the client's
 // dialect, honoring client disconnects and the configured stall timeout.
-func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, keyName string) {
+func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, keyName string, notice string) {
 	streamCodec, ok := codec.(transform.StreamCodec)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "dialect does not support streaming")
@@ -402,7 +405,17 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 			dst = hw
 			frameFlush = nil // the heartbeat writer flushes after every frame
 		}
+		var injector *noticeInjectingWriter
+		if notice != "" {
+			injector = &noticeInjectingWriter{dst: dst, dialect: req.Metadata.SourceDialect, notice: notice}
+			dst = injector
+		}
 		n, cpErr := copySanitizedStream(dst, result.DirectBody, req.Metadata.SourceDialect, frameFlush)
+		if injector != nil && cpErr == nil {
+			if ferr := injector.FlushFrame(); ferr != nil {
+				cpErr = ferr
+			}
+		}
 		if hw != nil {
 			hw.stop()
 		}
@@ -512,6 +525,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	lastActivity := time.Now()
 
 	var streamErr error
+	var deferredFinish *core.StreamChunk
 streamLoop:
 	for {
 		select {
@@ -541,6 +555,16 @@ streamLoop:
 			}
 			if chunk.Type == core.ChunkUsage && chunk.Usage != nil {
 				totalTokens = chunk.Usage.PromptTokens + chunk.Usage.CompletionTokens
+			}
+			// When a bansos notice must be appended, hold the terminal finish
+			// chunk so the notice text is streamed first. This keeps the
+			// Anthropic event order valid (content_block_* before message_delta).
+			if notice != "" && chunk.Type == core.ChunkFinish {
+				if deferredFinish == nil {
+					c := chunk
+					deferredFinish = &c
+				}
+				continue
 			}
 			chunkCount++
 			sanitizer.Process(chunk, renderChunk)
@@ -586,6 +610,26 @@ streamLoop:
 		}
 	}
 
+	// Append the bansos notice as a trailing text chunk (empty notice = no-op for
+	// every regular user key). Rendered through the codec so OpenAI appends to the
+	// content string and Anthropic emits a separate text block. It runs before
+	// the deferred finish chunk below so the Anthropic event order stays valid.
+	if notice != "" {
+		noticeChunk := core.StreamChunk{Type: core.ChunkText, Delta: "\n\n---\n" + notice}
+		events, _ := streamCodec.RenderStreamChunk(noticeChunk, state)
+		for _, ev := range events {
+			_, _ = bw.Write(ev)
+		}
+	}
+
+	// Emit the held-back terminal finish chunk now that the notice is out.
+	if deferredFinish != nil {
+		events, _ := streamCodec.RenderStreamChunk(*deferredFinish, state)
+		for _, ev := range events {
+			_, _ = bw.Write(ev)
+		}
+	}
+
 	for _, ev := range streamCodec.RenderStreamDone(state) {
 		_, _ = bw.Write(ev)
 	}
@@ -597,6 +641,16 @@ streamLoop:
 		fmt.Sprintf("Provider: %s\nModel:    %s\nChunks:   %d\nTokens:   %s\nLatency:  %dms",
 			result.Provider, result.Model, chunkCount, humanInt(totalTokens), latency))
 	s.logRequest(keyName, result.Provider, result.Model, totalTokens, 0, latency, false, nil)
+}
+
+// appendNoticePart appends the bansos warning as a trailing text part on the
+// response. OpenAI renders it appended to the content string; Anthropic renders
+// it as a separate text block. Called only when notice != "" (bansos key only).
+func appendNoticePart(resp *core.ChatResponse, notice string) {
+	resp.Message.Content = append(resp.Message.Content, core.ContentPart{
+		Type: core.PartText,
+		Text: "\n\n---\n" + notice,
+	})
 }
 
 // providerStreamEventError keeps a late provider error available to internal
@@ -653,6 +707,172 @@ func copySanitizedStream(dst io.Writer, src io.Reader, dialect core.Dialect, flu
 			}
 		}
 		return written, nil
+	}
+}
+
+// noticeInjectingWriter wraps a direct-stream destination and, before the
+// terminal frame is written, emits a trailing notice event in the client's
+// dialect. Non-terminal frames are forwarded byte-for-byte, so the upstream
+// payload is never altered; only the bansos key is ever wrapped.
+type noticeInjectingWriter struct {
+	dst     io.Writer
+	dialect core.Dialect
+	notice  string
+	emitted bool
+	carry   []byte
+	// id/model mirror the upstream frames so the notice chunk looks like a
+	// native continuation (strict clients validate these fields).
+	id    string
+	model string
+	// maxIndex tracks the highest Anthropic content-block index seen, so the
+	// notice block opens at the next free index.
+	maxIndex int
+}
+
+// Write buffers frames (terminated by a blank line) and defers the terminal
+// frame so the notice can be emitted immediately before it.
+func (w *noticeInjectingWriter) Write(p []byte) (int, error) {
+	total := len(p)
+	w.carry = append(w.carry, p...)
+	for {
+		idx := bytes.Index(w.carry, []byte("\n\n"))
+		if idx < 0 {
+			return total, nil
+		}
+		frame := w.carry[:idx+2]
+		w.carry = w.carry[idx+2:]
+		w.captureIdentity(frame)
+		if err := w.writeFrame(frame); err != nil {
+			return total, err
+		}
+	}
+}
+
+// captureIdentity records the id/model and the highest content-block index from
+// an SSE data frame, if present.
+func (w *noticeInjectingWriter) captureIdentity(frame []byte) {
+	data := strings.TrimSpace(string(frame))
+	if i := strings.Index(data, "data:"); i >= 0 {
+		data = strings.TrimSpace(data[i+len("data:"):])
+	}
+	var probe struct {
+		ID    string `json:"id"`
+		Model string `json:"model"`
+		Index *int   `json:"index"`
+	}
+	if json.Unmarshal([]byte(data), &probe) == nil {
+		if probe.ID != "" {
+			w.id = probe.ID
+		}
+		if probe.Model != "" {
+			w.model = probe.Model
+		}
+		if probe.Index != nil && *probe.Index > w.maxIndex {
+			w.maxIndex = *probe.Index
+		}
+	}
+}
+
+func (w *noticeInjectingWriter) writeFrame(frame []byte) error {
+	if w.notice != "" && !w.emitted && isTerminalFrame(frame, w.dialect) {
+		w.emitted = true
+		if ev := noticeSSEFrame(w.dialect, w.notice, w.id, w.model, w.maxIndex+1); ev != nil {
+			if _, err := w.dst.Write(ev); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := w.dst.Write(frame)
+	return err
+}
+
+// FlushFrame releases any buffered partial frame at end-of-stream.
+func (w *noticeInjectingWriter) FlushFrame() error {
+	if len(w.carry) == 0 {
+		return nil
+	}
+	frame := w.carry
+	w.carry = nil
+	return w.writeFrame(frame)
+}
+
+// isTerminalFrame reports whether an SSE frame ends the stream for the dialect.
+func isTerminalFrame(frame []byte, dialect core.Dialect) bool {
+	body := strings.TrimSpace(string(frame))
+	switch dialect {
+	case core.DialectAnthropic:
+		return strings.Contains(body, "message_stop")
+	case core.DialectGemini:
+		return strings.Contains(body, `"finishReason"`)
+	default: // OpenAI / Responses / Ollama
+		return strings.Contains(body, "[DONE]") ||
+			strings.Contains(body, `"finish_reason":"`) ||
+			strings.Contains(body, `"finish_reason": "`) ||
+			strings.Contains(body, `"done":true`) || strings.Contains(body, `"done": true`)
+	}
+}
+
+// noticeSSEFrame renders a trailing text event in the client's dialect so the
+// notice appears at the end of the assistant message.
+func noticeSSEFrame(dialect core.Dialect, notice string, id string, model string, index int) []byte {
+	text := "\n\n---\n" + notice
+	switch dialect {
+	case core.DialectAnthropic:
+		// Emit a complete text block so strict Anthropic clients (Claude Code)
+		// see a well-formed content_block_start → delta → stop sequence.
+		start, _ := json.Marshal(map[string]any{
+			"type":          "content_block_start",
+			"index":         index,
+			"content_block": map[string]any{"type": "text", "text": ""},
+		})
+		deltaPayload, _ := json.Marshal(map[string]any{
+			"type":  "content_block_delta",
+			"index": index,
+			"delta": map[string]any{"type": "text_delta", "text": text},
+		})
+		stop, _ := json.Marshal(map[string]any{"type": "content_block_stop", "index": index})
+		out := append([]byte("event: content_block_start\ndata: "), start...)
+		out = append(out, '\n', '\n')
+		out = append(out, "event: content_block_delta\ndata: "...)
+		out = append(out, deltaPayload...)
+		out = append(out, '\n', '\n')
+		out = append(out, "event: content_block_stop\ndata: "...)
+		out = append(out, stop...)
+		return append(out, '\n', '\n')
+	case core.DialectGemini:
+		payload, _ := json.Marshal(map[string]any{
+			"candidates": []any{map[string]any{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []any{map[string]any{"text": text}},
+				},
+			}},
+		})
+		return append([]byte("data: "), append(payload, '\n', '\n')...)
+	case core.DialectOllama:
+		payload, _ := json.Marshal(map[string]any{
+			"model":   model,
+			"message": map[string]any{"role": "assistant", "content": text},
+			"done":    false,
+		})
+		return append(payload, '\n')
+	default: // OpenAI / Responses
+		payload := map[string]any{
+			"object": "chat.completion.chunk",
+			"choices": []any{map[string]any{
+				"index":         0,
+				"delta":         map[string]any{"content": text},
+				"finish_reason": nil,
+			}},
+		}
+		if id != "" {
+			payload["id"] = id
+		}
+		if model != "" {
+			payload["model"] = model
+		}
+		body, _ := json.Marshal(payload)
+		return append([]byte("data: "), append(body, '\n', '\n')...)
 	}
 }
 

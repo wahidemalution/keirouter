@@ -442,6 +442,9 @@ export interface Bansos {
   rpm: number;
   tpm: number;
   credit: BansosCredit | null;
+  notice_enabled?: boolean;
+  notice_text?: string;
+  notice_rate?: number;
   updated_at?: string;
   key?: string;
 }
@@ -1671,6 +1674,9 @@ export const api = {
     rpm?: number;
     tpm?: number;
     credit_limit_usd?: number;
+    notice_enabled?: boolean;
+    notice_text?: string;
+    notice_rate?: number;
   }) => request<Bansos>("PATCH", "/bansos", patch),
   topupBansos: (input: { amount_usd: number; reason?: string; idempotency_key: string }) =>
     request<{ topup: KeyTopup }>("POST", "/bansos/topup", input),

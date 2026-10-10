@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -36,8 +37,27 @@ type bansosConfig struct {
 	AllowedModels []string      `json:"allowed_models"`
 	RPM           int64         `json:"rpm"`
 	TPM           int64         `json:"tpm"`
+	NoticeEnabled bool          `json:"notice_enabled"`
+	NoticeText    string        `json:"notice_text"`
+	NoticeRate    int           `json:"notice_rate"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
+}
+
+// bansosDefaultNoticeRate is the per-response probability (percent) used when a
+// bansos has NoticeEnabled but no explicit NoticeRate (0 is treated as unset).
+const bansosDefaultNoticeRate = 30
+
+// bansosDefaultNoticeText is shown when NoticeEnabled is on but NoticeText is
+// blank, so the warning works without a configured message.
+const bansosDefaultNoticeText = "ini bansos dari tokenizer.id — kalau kamu beli token ini kamu ditipu"
+
+// bansosNotice is the cached, request-path view of the bansos notice settings.
+type bansosNotice struct {
+	KeyID   string
+	Enabled bool
+	Text    string
+	Rate    int
 }
 
 // loadBansos reads the bansos config. ok=false when never configured.
@@ -78,6 +98,67 @@ func (s *Server) bansosKeyID(ctx context.Context) string {
 		return ""
 	}
 	return cfg.KeyID
+}
+
+// invalidateBansosNoticeCache clears the cached notice view so the next request
+// reloads it from the settings store.
+func (s *Server) invalidateBansosNoticeCache() {
+	s.bansosNoticeMu.Lock()
+	s.bansosNoticeCache = nil
+	s.bansosNoticeMu.Unlock()
+}
+
+// loadBansosNotice returns the cached notice view, loading it from the settings
+// store on first use or after invalidation.
+func (s *Server) loadBansosNotice(ctx context.Context) *bansosNotice {
+	s.bansosNoticeMu.RLock()
+	cached := s.bansosNoticeCache
+	s.bansosNoticeMu.RUnlock()
+	if cached != nil {
+		return cached
+	}
+	cfg, ok, err := s.loadBansos(ctx)
+	if err != nil || !ok {
+		return nil
+	}
+	notice := &bansosNotice{
+		KeyID:   cfg.KeyID,
+		Enabled: cfg.NoticeEnabled,
+		Text:    cfg.NoticeText,
+		Rate:    cfg.NoticeRate,
+	}
+	s.bansosNoticeMu.Lock()
+	s.bansosNoticeCache = notice
+	s.bansosNoticeMu.Unlock()
+	return notice
+}
+
+// bansosNoticeText returns the warning to append for this key's request, or ""
+// when the key is not the bansos key, the notice is disabled, or this response
+// lost the randomized roll. The key-id gate is exact-match and mandatory: a
+// regular user key can never receive a notice.
+func (s *Server) bansosNoticeText(ctx context.Context, keyID string) string {
+	if keyID == "" {
+		return ""
+	}
+	notice := s.loadBansosNotice(ctx)
+	if notice == nil || !notice.Enabled || notice.KeyID == "" || notice.KeyID != keyID {
+		return ""
+	}
+	rate := notice.Rate
+	if rate <= 0 {
+		// An explicit 0 (or unset) with the toggle on means "never"; the admin UI
+		// seeds 30 on enable, so a real rate is always present when intended.
+		return ""
+	}
+	if rate < 100 && rand.Intn(100) >= rate {
+		return ""
+	}
+	text := strings.TrimSpace(notice.Text)
+	if text == "" {
+		text = bansosDefaultNoticeText
+	}
+	return text
 }
 
 // bansosCreateRequest is the POST /api/bansos body.
@@ -140,6 +221,9 @@ func (s *Server) bansosStatePayload(ctx context.Context, cfg bansosConfig) (map[
 		"allowed_models": models,
 		"rpm":            cfg.RPM,
 		"tpm":            cfg.TPM,
+		"notice_enabled": cfg.NoticeEnabled,
+		"notice_text":    cfg.NoticeText,
+		"notice_rate":    cfg.NoticeRate,
 		"credit":         credit,
 		"updated_at":     cfg.UpdatedAt,
 	}, nil
@@ -291,6 +375,7 @@ func (s *Server) adminCreateBansos(w http.ResponseWriter, r *http.Request) {
 		s.budgetEngine.InvalidateBudgetCache()
 	}
 	s.identity.InvalidateAuthCacheForKey(issued.Record.ID)
+	s.invalidateBansosNoticeCache()
 
 	payload, err := s.bansosStatePayload(r.Context(), cfg)
 	if err != nil {
@@ -324,6 +409,9 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		RPM            *int64       `json:"rpm"`
 		TPM            *int64       `json:"tpm"`
 		CreditLimitUSD *json.Number `json:"credit_limit_usd"`
+		NoticeEnabled  *bool        `json:"notice_enabled"`
+		NoticeText     *string      `json:"notice_text"`
+		NoticeRate     *int         `json:"notice_rate"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -332,6 +420,10 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// ── Validate every field before performing any mutation ────────────────
+	if body.NoticeRate != nil && (*body.NoticeRate < 0 || *body.NoticeRate > 100) {
+		writeError(w, http.StatusBadRequest, "notice_rate must be between 0 and 100")
+		return
+	}
 	resultingMode := cfg.Mode
 	if body.Mode != nil {
 		if *body.Mode != bansosModeUnlimited && *body.Mode != bansosModeCredit {
@@ -473,11 +565,27 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		cfg.Active = *body.Active
 	}
 
+	if body.NoticeEnabled != nil {
+		cfg.NoticeEnabled = *body.NoticeEnabled
+	}
+	if body.NoticeText != nil {
+		cfg.NoticeText = *body.NoticeText
+	}
+	if body.NoticeRate != nil {
+		cfg.NoticeRate = *body.NoticeRate
+	}
+	// Seed the default rate the first time the notice is switched on without an
+	// explicit rate, so the toggle alone produces a working notice.
+	if cfg.NoticeEnabled && cfg.NoticeRate <= 0 && body.NoticeRate == nil {
+		cfg.NoticeRate = bansosDefaultNoticeRate
+	}
+
 	cfg.UpdatedAt = time.Now()
 	if err := s.saveBansos(ctx, cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
+	s.invalidateBansosNoticeCache()
 	if s.budgetEngine != nil {
 		s.budgetEngine.InvalidateBudgetCacheForScope(store.ScopeAPIKey, cfg.KeyID)
 	}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -110,6 +111,9 @@ type Server struct {
 	paymentClient       *payment.Client
 	turnstile           turnstileVerifier
 	router              chi.Router
+
+	bansosNoticeMu    sync.RWMutex
+	bansosNoticeCache *bansosNotice
 }
 
 // Deps bundles the gateway's collaborators.

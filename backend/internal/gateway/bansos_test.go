@@ -73,6 +73,53 @@ func TestBansosConfigRoundTrip(t *testing.T) {
 	require.Equal(t, "key-1", s.bansosKeyID(ctx))
 }
 
+func TestBansosNoticeTextGatedToBansosKeyOnly(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	ctx := context.Background()
+
+	require.Empty(t, s.bansosNoticeText(ctx, "user-key"), "unconfigured bansos must never notify a user key")
+
+	cfg := bansosConfig{
+		KeyID: "bansos-key", PlanID: "plan-1", Active: true, Mode: bansosModeUnlimited,
+		NoticeEnabled: true, NoticeText: "ini bansos dari tokenizer.id", NoticeRate: 100,
+	}
+	require.NoError(t, s.saveBansos(ctx, cfg))
+	s.invalidateBansosNoticeCache()
+
+	require.Equal(t, "ini bansos dari tokenizer.id", s.bansosNoticeText(ctx, "bansos-key"))
+	require.Empty(t, s.bansosNoticeText(ctx, "user-key"), "a regular user key must never receive the bansos notice")
+	require.Empty(t, s.bansosNoticeText(ctx, "bansos-key-x"), "a different key id must never match")
+	require.Empty(t, s.bansosNoticeText(ctx, ""), "an empty key id must never match")
+
+	cfg.NoticeEnabled = false
+	require.NoError(t, s.saveBansos(ctx, cfg))
+	s.invalidateBansosNoticeCache()
+	require.Empty(t, s.bansosNoticeText(ctx, "bansos-key"), "disabled notice must never fire")
+
+	cfg.NoticeEnabled = true
+	cfg.NoticeText = ""
+	require.NoError(t, s.saveBansos(ctx, cfg))
+	s.invalidateBansosNoticeCache()
+	require.Equal(t, bansosDefaultNoticeText, s.bansosNoticeText(ctx, "bansos-key"), "blank text must fall back to the default")
+}
+
+func TestBansosNoticeRateSemantics(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	ctx := context.Background()
+	cfg := bansosConfig{
+		KeyID: "bansos-key", PlanID: "plan-1", Active: true, Mode: bansosModeUnlimited,
+		NoticeEnabled: true, NoticeText: "x", NoticeRate: 0,
+	}
+	require.NoError(t, s.saveBansos(ctx, cfg))
+	s.invalidateBansosNoticeCache()
+	require.Empty(t, s.bansosNoticeText(ctx, "bansos-key"), "rate 0 means never, even with the toggle on")
+
+	cfg.NoticeRate = 100
+	require.NoError(t, s.saveBansos(ctx, cfg))
+	s.invalidateBansosNoticeCache()
+	require.Equal(t, "x", s.bansosNoticeText(ctx, "bansos-key"), "rate 100 always fires")
+}
+
 func callBansosHandler(t *testing.T, s *Server, h func(http.ResponseWriter, *http.Request), method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r *http.Request

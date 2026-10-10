@@ -50,6 +50,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		s.consoleLog.Log("DEBUG", fmt.Sprintf("Authenticated key %q", key.Name),
 			fmt.Sprintf("Key:     %s (%s)\nRequest: %s %s", key.Name, key.ID, r.Method, r.URL.Path))
 
+		// Bansos anti-resale notice for endpoints with no text content
+		// (embeddings, images, audio, video). The key-id gate is exact-match so a
+		// regular user key can never receive this header.
+		if notice := s.bansosNoticeText(r.Context(), key.ID); notice != "" {
+			w.Header().Set("X-Bansos-Notice", notice)
+		}
+
 		ctx := context.WithValue(r.Context(), apiKeyCtxKey, key)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
