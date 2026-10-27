@@ -52,3 +52,48 @@ func (s *Server) adminKeyModelUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"period": period, "since": since, "models": rows})
 }
+
+// adminModelKeyUsage lists which API keys called one provider+model in the
+// period, so an operator can audit who uses a model without opening every key.
+func (s *Server) adminModelKeyUsage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	provider, model := q.Get("provider"), q.Get("model")
+	if provider == "" || model == "" {
+		writeError(w, http.StatusBadRequest, "provider and model are required")
+		return
+	}
+	period := q.Get("period")
+	since := sinceForPeriod(period, q.Get("tz"))
+	usage, err := s.usage.KeyUsageForModelSince(r.Context(), adminTenant, provider, model, since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "failed to load key usage"))
+		return
+	}
+	emails := s.portalEmailsByKey(r.Context())
+	names := map[string]string{}
+	if keys, err := s.identity.List(r.Context(), adminTenant); err == nil {
+		for _, k := range keys {
+			names[k.ID] = k.Name
+		}
+	}
+	rows := make([]map[string]any, 0, len(usage))
+	for _, k := range usage {
+		rows = append(rows, map[string]any{
+			"key_id":            k.KeyID,
+			"key_name":          names[k.KeyID],
+			"email":             emails[k.KeyID],
+			"requests":          k.Requests,
+			"success_requests":  k.SuccessCount,
+			"failed_requests":   k.FailureCount,
+			"blocked_requests":  k.BlockedCount,
+			"prompt_tokens":     k.PromptTokens,
+			"completion_tokens": k.CompletionTokens,
+			"total_tokens":      k.PromptTokens + k.CompletionTokens,
+			"cost_usd":          nanosToUSD(k.CostNanos),
+			"last_used_at":      k.LastUsedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"period": period, "since": since, "provider": provider, "model": model, "keys": rows,
+	})
+}

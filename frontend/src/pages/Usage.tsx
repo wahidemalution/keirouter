@@ -269,7 +269,7 @@ export function UsagePage() {
               </div>
             )}
             {tab === "providers" && <ProviderAccounting providers={data.providers} health={health.data} healthLoading={health.isLoading} healthError={health.isError} />}
-            {tab === "models" && <ModelUsageTable models={modelUsage.data?.models ?? []} loading={modelUsage.isLoading} error={modelUsage.isError} />}
+            {tab === "models" && <ModelUsageTable models={modelUsage.data?.models ?? []} period={period} loading={modelUsage.isLoading} error={modelUsage.isError} />}
             {tab === "requests" && (
               <RecentRequests
                 records={data.recent}
@@ -598,8 +598,9 @@ function Cell({ main, sub }: { main: ReactNode; sub?: string }) {
 
 type ModelSortKey = "model" | "requests" | "tokens" | "cost" | "latency" | "coverage";
 
-function ModelUsageTable({ models, loading, error }: { models: ModelUsage[]; loading: boolean; error: boolean }) {
+function ModelUsageTable({ models, period, loading, error }: { models: ModelUsage[]; period: string; loading: boolean; error: boolean }) {
   const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<ModelUsage | null>(null);
   const [sortKey, setSortKey] = useState<ModelSortKey>("cost");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
 
@@ -697,15 +698,20 @@ function ModelUsageTable({ models, loading, error }: { models: ModelUsage[]; loa
                 {paged.map((m) => (
                   <tr key={`${m.provider}/${m.model}`} className="group transition-colors hover:bg-hover">
                     <td className={cn("px-4 py-2.5", STICKY_TD)}>
-                      <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setSelected(m)}
+                        aria-label={`Show which keys used ${m.model}`}
+                        className={cn("-mx-1 flex min-h-11 items-center gap-2.5 rounded-md px-1 text-left sm:min-h-0", FOCUS_RING)}
+                      >
                         <ProviderLogo icon={m.provider_icon} name={m.provider_name || m.provider} size={22} />
-                        <div className="min-w-0">
-                          <div className="max-w-[160px] truncate font-mono text-[12.5px] text-fg sm:max-w-xs" title={m.model}>
+                        <span className="min-w-0">
+                          <span className="block max-w-[160px] truncate font-mono text-[12.5px] text-link group-hover:underline sm:max-w-xs" title={m.model}>
                             {m.model}
-                          </div>
-                          <div className="truncate text-[11.5px] text-fg-muted">{m.provider_name || m.provider}</div>
-                        </div>
-                      </div>
+                          </span>
+                          <span className="block truncate text-[11.5px] text-fg-muted">{m.provider_name || m.provider}</span>
+                        </span>
+                      </button>
                     </td>
                     <Cell main={fmtInteger(m.total_requests)} sub={`${fmtRatio(m.success_rate)} ok`} />
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums" title={`${fmtCompact(m.cached_tokens)} cached · ${fmtCompact(m.reasoning_tokens)} reasoning`}>
@@ -739,7 +745,107 @@ function ModelUsageTable({ models, loading, error }: { models: ModelUsage[]; loa
           {pages > 1 && <TablePagination page={page} pages={pages} total={total} onPage={setPage} />}
         </>
       )}
+      <Sheet open={selected != null} onOpenChange={(open) => !open && setSelected(null)}>
+        <SheetContent side="right" className="w-full sm:max-w-[560px]">
+          {selected && <ModelKeysDetail model={selected} period={period} onClose={() => setSelected(null)} />}
+        </SheetContent>
+      </Sheet>
     </Panel>
+  );
+}
+
+// Which API keys called one model in the period, for auditing who uses it.
+function ModelKeysDetail({ model: m, period, onClose }: { model: ModelUsage; period: string; onClose: () => void }) {
+  const keys = useQuery({
+    queryKey: ["usage-model-keys", m.provider, m.model, period],
+    queryFn: () => api.modelKeyUsage(m.provider, m.model, period),
+    staleTime: 12_000,
+  });
+  const rows = keys.data?.keys ?? [];
+  const periodLabel = REPORT_PERIODS.find((p) => p.value === period)?.label ?? period;
+
+  return (
+    // The Sheet portals outside <main data-tone>, so restate the Monitor tone for the group icons.
+    <div data-tone="blue" className="flex h-full min-h-0 flex-col">
+      <div className="flex items-start gap-3 border-b border-line px-4 py-4 sm:px-5">
+        <ProviderLogo icon={m.provider_icon} name={m.provider_name || m.provider} size={32} className="mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <SheetTitle className="truncate font-mono text-[14px] font-medium text-fg" title={m.model}>
+            {m.model}
+          </SheetTitle>
+          <SheetDescription className="mt-0.5 text-[12.5px] text-fg-muted">
+            {m.provider_name || m.provider} · keys that called it, period {periodLabel}
+          </SheetDescription>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close model users"
+          className={cn("-mr-1.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-hover hover:text-fg sm:h-8 sm:w-8", FOCUS_RING)}
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {keys.isLoading ? (
+          <div className="space-y-2 p-4" aria-busy="true">
+            <span className="sr-only">Loading keys</span>
+            {[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        ) : keys.isError ? (
+          <div className="p-4">
+            <ErrorBanner message="Couldn't load the keys for this model. Close the panel and open it again." />
+          </div>
+        ) : rows.length === 0 ? (
+          <Empty title="No keys called this model in this period" hint="Pick a longer period at the top of the page." />
+        ) : (
+          <>
+            <p className="border-b border-line bg-subtle px-4 py-2 text-[12px] text-fg-muted sm:px-5">
+              <span className="tabular-nums text-fg">{fmtInteger(rows.length)}</span> {rows.length === 1 ? "key" : "keys"}, busiest first. Open a key to see its budget.
+            </p>
+            <ul className="divide-y divide-line" aria-label={`Keys that used ${m.model}`}>
+              {rows.map((k) => {
+                const label = k.email || k.key_name || k.key_id || "No API key";
+                const body = (
+                  <>
+                    <span className="min-w-0 flex-1">
+                      <span className={cn("block truncate text-[13px]", k.email ? "text-fg" : "font-mono text-fg-muted")} title={label}>
+                        {label}
+                      </span>
+                      <span className="block truncate text-[11.5px] text-fg-muted">
+                        {k.email && k.key_name && (
+                          <>
+                            <span className="font-mono">{k.key_name}</span> ·{" "}
+                          </>
+                        )}
+                        {fmtInteger(k.requests)} req · {fmtCompact(k.total_tokens)} tokens
+                        {k.failed_requests > 0 && <span className="text-warn"> · {fmtInteger(k.failed_requests)} failed</span>}
+                        {" · "}last {formatDateTime(k.last_used_at, { seconds: false })}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right text-[13px] font-medium tabular-nums text-fg">{fmtUSD(k.cost_usd)}</span>
+                  </>
+                );
+                return (
+                  <li key={k.key_id || "none"}>
+                    {k.key_id ? (
+                      <Link
+                        to={dashboard(`/keys/${k.key_id}?tab=budget`)}
+                        className={cn("flex min-h-11 items-center gap-3 px-4 py-2.5 hover:bg-hover sm:px-5", FOCUS_RING)}
+                      >
+                        {body}
+                      </Link>
+                    ) : (
+                      <div className="flex items-center gap-3 px-4 py-2.5 sm:px-5">{body}</div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

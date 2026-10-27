@@ -103,6 +103,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/usage", s.adminUsageSummary)
 	r.Get("/usage/insights", s.adminUsageInsights)
 	r.Get("/usage/models", s.adminModelUsageAccurate)
+	r.Get("/usage/models/keys", s.adminModelKeyUsage)
 	r.Get("/usage/chains", s.adminChainUsage)
 	r.Get("/usage/leaderboard", s.adminUsageLeaderboard)
 	r.Get("/usage/stream", s.adminUsageStream)

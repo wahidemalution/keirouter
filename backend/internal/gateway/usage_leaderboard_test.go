@@ -96,3 +96,43 @@ func TestAdminKeyModelUsage(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, call("missing").Code)
 }
+
+func TestAdminModelKeyUsage(t *testing.T) {
+	s := newPortalTestServer(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	require.NoError(t, s.db.APIKeys().Create(ctx, store.APIKey{ID: "ka", TenantID: store.DefaultTenantID, Name: "key-ka",
+		KeyHash: "hka", LookupHash: "lka", Display: "d", CreatedAt: now}))
+	require.NoError(t, s.db.PortalUsers().Upsert(ctx, store.PortalUser{GoogleSub: "sa", Email: "a@x.io", KeyID: "ka", CreatedAt: now, UpdatedAt: now}))
+	rec := func(id, key, model string) store.UsageRecord {
+		return store.UsageRecord{ID: id, TenantID: store.DefaultTenantID, APIKeyID: key, Provider: "p", Model: model,
+			Status: "success", PromptTokens: 10, CostNanos: 1e9, PricingStatus: "priced", PricingSource: "official", CreatedAt: now}
+	}
+	require.NoError(t, s.usage.RecordBatch(ctx, []store.UsageRecord{rec("u1", "ka", "m1"), rec("u2", "ka", "m1"), rec("u3", "kb", "m2")}))
+
+	call := func(query string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.adminModelKeyUsage(w, httptest.NewRequest(http.MethodGet, "/usage/models/keys?"+query, nil))
+		return w
+	}
+	w := call("period=today&provider=p&model=m1")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var body struct {
+		Keys []struct {
+			KeyID    string  `json:"key_id"`
+			KeyName  string  `json:"key_name"`
+			Email    string  `json:"email"`
+			Requests int64   `json:"requests"`
+			CostUSD  float64 `json:"cost_usd"`
+		} `json:"keys"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Len(t, body.Keys, 1)
+	require.Equal(t, "ka", body.Keys[0].KeyID)
+	require.Equal(t, "key-ka", body.Keys[0].KeyName)
+	require.Equal(t, "a@x.io", body.Keys[0].Email)
+	require.Equal(t, int64(2), body.Keys[0].Requests)
+	require.InDelta(t, 2.0, body.Keys[0].CostUSD, 1e-9)
+
+	require.Equal(t, http.StatusBadRequest, call("period=today&provider=p").Code)
+}

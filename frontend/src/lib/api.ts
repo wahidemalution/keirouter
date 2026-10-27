@@ -858,6 +858,23 @@ export interface KeyModelUsage {
   last_used_at: string;
 }
 
+/** One API key's usage of a single model; key_id is empty for keyless requests. */
+export interface ModelKeyUsage {
+  key_id: string;
+  key_name: string;
+  /** Portal user's email; empty for operator or Bansos keys. */
+  email: string;
+  requests: number;
+  success_requests: number;
+  failed_requests: number;
+  blocked_requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  last_used_at: string;
+}
+
 export interface LeaderboardEntry {
   key_id: string;
   key_name: string;
@@ -2845,6 +2862,10 @@ export const api = {
     request<ModelUsageResponse>("GET", `/usage/models?period=${period}&tz=${browserTZ()}`),
   keyModelUsage: (keyId: string, period: string) =>
     request<{ period: string; since: string; models: KeyModelUsage[] }>("GET", `/keys/${keyId}/models?period=${period}&tz=${browserTZ()}`),
+  modelKeyUsage: (provider: string, model: string, period: string) => {
+    const qs = new URLSearchParams({ period, tz: browserTZ(), provider, model });
+    return request<{ period: string; since: string; provider: string; model: string; keys: ModelKeyUsage[] }>("GET", `/usage/models/keys?${qs.toString()}`);
+  },
   usageLeaderboard: (period: string) =>
     request<UsageLeaderboard>("GET", `/usage/leaderboard?period=${period}&tz=${browserTZ()}`),
 

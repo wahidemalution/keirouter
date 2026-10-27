@@ -88,3 +88,36 @@ func TestModelUsageByKeySince(t *testing.T) {
 	require.True(t, got[0].LastUsedAt.Equal(now), got[0].LastUsedAt)
 	require.Equal(t, "m2", got[1].Model)
 }
+
+func TestKeyUsageForModelSince(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := func(id, key, provider, model, status string, cost int64, at time.Time) UsageRecord {
+		r := finRec(id, provider, "c", cost, 0, false, at)
+		r.APIKeyID, r.Model, r.Status, r.PromptTokens, r.CompletionTokens = key, model, status, 10, 5
+		return r
+	}
+	require.NoError(t, db.Usage().RecordBatch(ctx, []UsageRecord{
+		rec("a", "ka", "p", "m1", "success", 2e9, now.Add(-time.Minute)),
+		rec("b", "ka", "p", "m1", "error", 0, now),
+		rec("c", "kb", "p", "m1", "success", 1e9, now),
+		rec("d", "kb", "p", "m1", "success", 1e9, now),
+		rec("e", "kb", "p", "m1", "success", 1e9, now),
+		rec("f", "kc", "p", "m2", "success", 9e9, now),
+		rec("g", "kc", "other", "m1", "success", 9e9, now),
+		rec("h", "kd", "p", "m1", "success", 9e9, now.Add(-2*time.Hour)),
+	}))
+	got, err := db.Usage().KeyUsageForModelSince(ctx, DefaultTenantID, "p", "m1", now.Add(-time.Hour))
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "kb", got[0].KeyID)
+	require.Equal(t, int64(3), got[0].Requests)
+	require.Equal(t, int64(3e9), got[0].CostNanos)
+	require.Equal(t, "ka", got[1].KeyID)
+	require.Equal(t, int64(2), got[1].Requests)
+	require.Equal(t, int64(1), got[1].SuccessCount)
+	require.Equal(t, int64(1), got[1].FailureCount)
+	require.Equal(t, int64(20), got[1].PromptTokens)
+	require.True(t, got[1].LastUsedAt.Equal(now), got[1].LastUsedAt)
+}
