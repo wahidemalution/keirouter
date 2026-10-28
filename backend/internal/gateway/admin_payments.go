@@ -158,3 +158,64 @@ func (s *Server) adminApprovePaymentOrder(w http.ResponseWriter, r *http.Request
 	view["budget_limit_usd"] = float64(budget.LimitMicros) / 1_000_000
 	writeJSON(w, http.StatusOK, view)
 }
+
+// adminCancelPaymentOrder cancels an unpaid credit order so the user can start
+// a new payment before the old link expires. SumoPod has no cancel call: if
+// the user still pays the old link, the webhook credits the order as usual.
+func (s *Server) adminCancelPaymentOrder(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	reason := strings.TrimSpace(body.Reason)
+	if len(reason) > 500 {
+		writeError(w, http.StatusBadRequest, "reason must be 500 characters or fewer")
+		return
+	}
+	order, err := s.db.PaymentOrders().Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "order not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	if productOrCredit(order.Product) != store.ProductCredit {
+		writeError(w, http.StatusConflict, "only credit top-up orders can be cancelled")
+		return
+	}
+	if order.Status != store.PaymentPending {
+		writeError(w, http.StatusConflict, "order is already "+string(order.Status))
+		return
+	}
+	tx, err := s.db.SQL().BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	applied, err := s.db.PaymentOrders().TransitionOnTx(r.Context(), tx, order.ID, store.PaymentPending, store.PaymentCancelled, "dashboard", reason, "")
+	if err != nil {
+		_ = tx.Rollback()
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	if !applied {
+		_ = tx.Rollback()
+		writeError(w, http.StatusConflict, "order was already handled")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	updated, err := s.db.PaymentOrders().Get(r.Context(), order.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	writeJSON(w, http.StatusOK, s.orderView(updated))
+}

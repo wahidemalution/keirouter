@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CreditCard, Loader2, ShoppingCart } from "lucide-react";
+import { Ban, Check, CreditCard, Loader2, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, type PaymentOrderAdmin } from "../../lib/api";
 import { useToast } from "../../components/Toast";
@@ -13,6 +13,7 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   pending: "warning",
   failed: "danger",
   expired: "neutral",
+  cancelled: "neutral",
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -21,17 +22,20 @@ const STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
   failed: "Failed",
   expired: "Expired",
+  cancelled: "Cancelled",
 };
 
 // Statuses an admin can still approve: the gateway may mark an order expired
-// or failed even though the customer's payment went through.
-const SETTLEABLE = new Set(["pending", "expired", "failed"]);
+// or failed even though the customer's payment went through. A cancelled
+// order's SumoPod link stays payable, so it can be approved too.
+const SETTLEABLE = new Set(["pending", "expired", "failed", "cancelled"]);
 
 export function PortalOrders() {
   const qc = useQueryClient();
   const toast = useToast();
   const [approving, setApproving] = useState<PaymentOrderAdmin | null>(null);
   const [reason, setReason] = useState("");
+  const [cancelling, setCancelling] = useState<PaymentOrderAdmin | null>(null);
 
   const ordersQuery = useQuery({ queryKey: ["payment-orders"], queryFn: api.paymentOrders, refetchInterval: REFETCH_MS });
   const summaryQuery = useQuery({ queryKey: ["payment-summary"], queryFn: api.paymentSummary, refetchInterval: REFETCH_MS });
@@ -49,6 +53,21 @@ export function PortalOrders() {
       setReason("");
     },
   });
+
+  const cancel = useMutation({
+    mutationFn: (id: string) => api.cancelPaymentOrder(id, ""),
+    onSuccess: () => {
+      toast.success("Order cancelled", "The user can now start a new payment.");
+      qc.invalidateQueries({ queryKey: ["payment-orders"] });
+      qc.invalidateQueries({ queryKey: ["payment-summary"] });
+      setCancelling(null);
+    },
+  });
+
+  const closeCancel = () => {
+    setCancelling(null);
+    cancel.reset();
+  };
 
   const orders = ordersQuery.data?.orders ?? [];
   const pending = summaryQuery.data?.count_by_status?.pending ?? 0;
@@ -117,11 +136,18 @@ export function PortalOrders() {
                     <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(o.created_at, true)}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 tabular-nums">{o.paid_at ? dateID(o.paid_at, true) : "-"}</td>
                     <td className="px-4 py-2.5 text-right">
-                      {SETTLEABLE.has(o.status) && (
-                        <Button variant="ghost" onClick={() => setApproving(o)} title="Approve manually">
-                          <Check aria-hidden="true" /> Approve
-                        </Button>
-                      )}
+                      <div className="flex justify-end gap-2">
+                        {o.status === "pending" && o.product !== "hosting" && (
+                          <Button variant="danger" onClick={() => setCancelling(o)} title="Cancel this payment link">
+                            <Ban aria-hidden="true" /> Cancel
+                          </Button>
+                        )}
+                        {SETTLEABLE.has(o.status) && (
+                          <Button variant="ghost" onClick={() => setApproving(o)} title="Approve manually">
+                            <Check aria-hidden="true" /> Approve
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -162,6 +188,30 @@ export function PortalOrders() {
             <Button onClick={() => approve.mutate({ id: approving.order_id, reason })} disabled={approve.isPending}>
               {approve.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <CreditCard aria-hidden="true" />}
               {approving.product === "hosting" ? "Approve payment" : "Approve and add credit"}
+            </Button>
+          </ModalFooter>
+        </Modal>
+      )}
+
+      {cancelling && (
+        <Modal open onClose={closeCancel} title="Cancel payment">
+          <div className="space-y-3 px-5 py-4">
+            <p className="text-[13px] text-fg-muted">
+              Cancel the unpaid {idr(cancelling.amount_idr)} order from {cancelling.user_email || cancelling.key_id}, so they can start a new payment
+              without waiting for this link to expire.
+            </p>
+            <p className="text-[13px] text-fg">
+              SumoPod keeps the old link open until it expires. If the user still pays it, the credit is added as usual.
+            </p>
+            {cancel.isError && <ErrorBanner message={`Cancel failed. ${errorText(cancel.error)}`} />}
+          </div>
+          <ModalFooter>
+            <Button variant="ghost" onClick={closeCancel}>
+              Keep order
+            </Button>
+            <Button variant="danger" onClick={() => cancel.mutate(cancelling.order_id)} disabled={cancel.isPending}>
+              {cancel.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Ban aria-hidden="true" />}
+              Cancel order
             </Button>
           </ModalFooter>
         </Modal>

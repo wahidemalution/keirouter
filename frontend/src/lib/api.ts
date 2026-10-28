@@ -1943,12 +1943,16 @@ export interface PaymentConfig {
 
 export interface PaymentOrder {
   order_id: string;
-  status: "pending" | "completed" | "manual" | "failed" | "expired";
+  status: "pending" | "completed" | "manual" | "failed" | "expired" | "cancelled";
   amount_idr: number;
   credit_usd: number;
   fx_rate: number;
+  /** Set while the order's payment link can still be paid. */
   payment_link_url?: string;
   expires_at?: string;
+  payable?: boolean;
+  /** True when checkout returned an existing open order instead of a new one. */
+  reused?: boolean;
   created_at: string;
   paid_at?: string;
 }
@@ -2657,6 +2661,8 @@ export const api = {
   paymentEconomics: () => request<UsageEconomics>("GET", "/payments/economics"),
   approvePaymentOrder: (id: string, reason: string) =>
     request<PaymentOrderAdmin>("POST", `/payments/orders/${id}/approve`, { reason }),
+  cancelPaymentOrder: (id: string, reason: string) =>
+    request<PaymentOrderAdmin>("POST", `/payments/orders/${id}/cancel`, { reason }),
 
   // Hosting 9router (admin): Dokploy settings and instance lifecycle.
   getHostingSettings: () => request<HostingSettings>("GET", "/hosting/settings"),

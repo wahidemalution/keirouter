@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -138,6 +139,20 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// One payment link per key until it expires or an admin cancels it:
+	// another click returns the open order instead of a new SumoPod payment.
+	unlock := s.lockCreditOrders(keyID)
+	defer unlock()
+	orders, err := s.db.PaymentOrders().ListByKey(r.Context(), keyID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	if open, found := s.openCreditOrder(orders, time.Now()); found {
+		s.writeOrderResponseReused(w, open)
+		return
+	}
+
 	if s.currencySvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "currency rate unavailable")
 		return
@@ -200,10 +215,66 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 	s.writeOrderResponse(w, http.StatusCreated, o)
 }
 
+// lockCreditOrders serializes credit checkouts per API key, so a double click
+// cannot create two payment links.
+func (s *Server) lockCreditOrders(keyID string) func() {
+	m, _ := s.creditOrderLocks.LoadOrStore(keyID, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// creditLinkOpen reports whether a credit order's payment link can still be
+// paid: pending, with a link, and before its expiry. Without a parseable
+// expiry it falls back to the configured link lifetime from creation.
+func (s *Server) creditLinkOpen(o store.PaymentOrder, now time.Time) bool {
+	if o.Status != store.PaymentPending || o.PaymentLinkURL == "" {
+		return false
+	}
+	if productOrCredit(o.Product) != store.ProductCredit {
+		return false
+	}
+	if t, err := time.Parse(time.RFC3339, o.ExpiresAt); err == nil {
+		return now.Before(t)
+	}
+	hours := s.cfg.Payment.ExpiresInHours
+	if hours <= 0 {
+		hours = 24
+	}
+	return !o.CreatedAt.IsZero() && now.Before(o.CreatedAt.Add(time.Duration(hours)*time.Hour))
+}
+
+// openCreditOrder returns the newest credit order whose link is still open.
+func (s *Server) openCreditOrder(orders []store.PaymentOrder, now time.Time) (store.PaymentOrder, bool) {
+	var best store.PaymentOrder
+	found := false
+	for _, o := range orders {
+		if !s.creditLinkOpen(o, now) {
+			continue
+		}
+		if !found || o.CreatedAt.After(best.CreatedAt) {
+			best, found = o, true
+		}
+	}
+	return best, found
+}
+
+// writeOrderResponseReused renders an existing open order returned in place
+// of a new one.
+func (s *Server) writeOrderResponseReused(w http.ResponseWriter, o store.PaymentOrder) {
+	out := orderResponse(o)
+	out["reused"] = true
+	writeJSON(w, http.StatusOK, out)
+}
+
 // writeOrderResponse renders an order. credit_usd and fx_rate are display-only
 // floats derived from the integer micros stored on the order.
 func (s *Server) writeOrderResponse(w http.ResponseWriter, status int, o store.PaymentOrder) {
-	writeJSON(w, status, map[string]any{
+	writeJSON(w, status, orderResponse(o))
+}
+
+func orderResponse(o store.PaymentOrder) map[string]any {
+	return map[string]any{
 		"order_id":         o.ID,
 		"status":           string(o.Status),
 		"amount_idr":       o.AmountIDR,
@@ -212,7 +283,7 @@ func (s *Server) writeOrderResponse(w http.ResponseWriter, status int, o store.P
 		"payment_link_url": o.PaymentLinkURL,
 		"expires_at":       o.ExpiresAt,
 		"created_at":       o.CreatedAt,
-	})
+	}
 }
 
 // handlePortalListOrders lists the caller's orders.
@@ -266,11 +337,17 @@ func (s *Server) handlePortalGetOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) orderView(o store.PaymentOrder) map[string]any {
-	return map[string]any{
+	v := map[string]any{
 		"order_id": o.ID, "status": string(o.Status), "amount_idr": o.AmountIDR,
 		"credit_usd": float64(o.CreditMicros) / 1_000_000,
 		"fx_rate":    float64(o.FxRateMicros) / 1_000_000,
 		"created_at": o.CreatedAt, "paid_at": o.PaidAt,
 		"product": productOrCredit(o.Product),
 	}
+	if s.creditLinkOpen(o, time.Now()) {
+		v["payable"] = true
+		v["payment_link_url"] = o.PaymentLinkURL
+		v["expires_at"] = o.ExpiresAt
+	}
+	return v
 }

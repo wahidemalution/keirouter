@@ -90,6 +90,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/payments/summary", s.adminPaymentSummary)
 	r.Get("/payments/economics", s.adminUsageEconomics)
 	r.Post("/payments/orders/{id}/approve", s.adminApprovePaymentOrder)
+	r.Post("/payments/orders/{id}/cancel", s.adminCancelPaymentOrder)
 	s.mountFinance(r)
 	s.mountHosting(r)
 	s.mountHostingOps(r)

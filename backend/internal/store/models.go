@@ -373,12 +373,17 @@ const (
 	PaymentManual    PaymentOrderStatus = "manual"
 	PaymentFailed    PaymentOrderStatus = "failed"
 	PaymentExpired   PaymentOrderStatus = "expired"
+	// PaymentCancelled is an unpaid order an admin cancelled so the user can
+	// start a new one. SumoPod has no cancel call, so the old link stays
+	// payable until it expires.
+	PaymentCancelled PaymentOrderStatus = "cancelled"
 )
 
 // PaymentSettleable lists the statuses a confirmed payment may still settle.
 // The gateway can report success after it already reported expiry or failure
 // (a customer paying as the link expires), and that money must still count.
-var PaymentSettleable = []PaymentOrderStatus{PaymentPending, PaymentExpired, PaymentFailed}
+// A cancelled order's link also stays payable, so its payment counts too.
+var PaymentSettleable = []PaymentOrderStatus{PaymentPending, PaymentExpired, PaymentFailed, PaymentCancelled}
 
 // Settleable reports whether a confirmed payment can still settle the order.
 func (s PaymentOrderStatus) Settleable() bool {

@@ -128,6 +128,8 @@ type Server struct {
 	// hostingOrderLocks serializes hosting checkouts per API key, so double
 	// clicks cannot create two unpaid instances or two coupon holds.
 	hostingOrderLocks sync.Map // key id -> *sync.Mutex
+	// creditOrderLocks serializes credit top-up checkouts per API key.
+	creditOrderLocks sync.Map // key id -> *sync.Mutex
 	// couponChecks limits coupon lookups per API key against code guessing.
 	couponChecks     *ipLimiter
 	couponChecksOnce sync.Once
