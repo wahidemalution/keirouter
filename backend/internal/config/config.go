@@ -252,6 +252,9 @@ type LimitsConfig struct {
 	// LoginAttemptsPerMinute caps dashboard login attempts per IP. Zero
 	// disables it.
 	LoginAttemptsPerMinute int `koanf:"login_attempts_per_minute"`
+	// ModelsRequestsPerMinute caps GET /v1/models per API key, so a client
+	// that refreshes its model list in a loop gets 429s. Zero disables it.
+	ModelsRequestsPerMinute int `koanf:"models_requests_per_minute"`
 	// RedisURL is the redis backend's server (redis:// or rediss://). Empty
 	// falls back to cache.redis_url.
 	RedisURL string `koanf:"redis_url"`
@@ -484,18 +487,19 @@ func Default() Config {
 			ShutdownFlushTimeout: 5 * time.Second,
 		},
 		Limits: LimitsConfig{
-			Enabled:                false,
-			Backend:                "memory",
-			Window:                 time.Minute,
-			CleanupInterval:        time.Minute,
-			ReconcileTokens:        true,
-			ConcurrencyRetryAfter:  time.Second,
-			AuthFailuresPerMinute:  20,
-			LoginAttemptsPerMinute: 5,
-			RedisTimeout:           100 * time.Millisecond,
-			FailMode:               "local",
-			LeaseTTL:               time.Minute,
-			BudgetCounterTTL:       time.Minute,
+			Enabled:                 false,
+			Backend:                 "memory",
+			Window:                  time.Minute,
+			CleanupInterval:         time.Minute,
+			ReconcileTokens:         true,
+			ConcurrencyRetryAfter:   time.Second,
+			AuthFailuresPerMinute:   20,
+			LoginAttemptsPerMinute:  5,
+			ModelsRequestsPerMinute: 60,
+			RedisTimeout:            100 * time.Millisecond,
+			FailMode:                "local",
+			LeaseTTL:                time.Minute,
+			BudgetCounterTTL:        time.Minute,
 		},
 		Audit: AuditConfig{
 			Enabled:       true,
@@ -733,6 +737,9 @@ func (c *Config) validate() error {
 	}
 	if c.Limits.LoginAttemptsPerMinute < 0 {
 		return fmt.Errorf("limits.login_attempts_per_minute must not be negative")
+	}
+	if c.Limits.ModelsRequestsPerMinute < 0 {
+		return fmt.Errorf("limits.models_requests_per_minute must not be negative")
 	}
 	if c.Health.Interval <= 0 {
 		c.Health.Interval = 30 * time.Second

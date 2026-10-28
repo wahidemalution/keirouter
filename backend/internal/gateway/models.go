@@ -2,7 +2,10 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +29,25 @@ type modelEntry struct {
 	Dimensions       int                         `json:"dimensions,omitempty"`
 	Capabilities     *modelCapabilities          `json:"capabilities,omitempty"`
 	CapabilitySource capability.CapabilitySource `json:"capability_source,omitempty"`
+}
+
+// modelsRateLimiter caps GET /v1/models per API key. Clients normally list
+// models once at startup; one that refreshes in a loop floods the logs. The
+// limit is limits.models_requests_per_minute, overridable from the dashboard.
+// It runs after authMiddleware.
+func (s *Server) modelsRateLimiter(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key, _ := authedKey(r.Context())
+		id := "key:" + key.ID
+		if !s.modelsLimiter.Allow(id) {
+			_, wait := s.modelsLimiter.Exceeded(id)
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(wait.Seconds())))))
+			writeError(w, http.StatusTooManyRequests, fmt.Sprintf(
+				"rate limit exceeded: at most %d model list requests per minute", s.modelsLimiter.limit.Load()))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handleListModels reports the tenant's chains as virtual models only.

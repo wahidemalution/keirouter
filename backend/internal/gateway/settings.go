@@ -80,6 +80,7 @@ type EndpointSettings struct {
 	ConcurrencyRetryAfterMs *int   `json:"concurrency_retry_after_ms,omitempty"`
 	AuthFailuresPerMinute   *int   `json:"auth_failures_per_minute,omitempty"`
 	LoginAttemptsPerMinute  *int   `json:"login_attempts_per_minute,omitempty"`
+	ModelsRequestsPerMinute *int   `json:"models_requests_per_minute,omitempty"`
 
 	// Timeout settings (milliseconds).
 	// StreamStallTimeoutMs aborts a stream that produces no data for this long.
@@ -291,6 +292,9 @@ func (s *Server) effectiveLimitSettings(es EndpointSettings) EndpointSettings {
 	if es.LoginAttemptsPerMinute == nil {
 		es.LoginAttemptsPerMinute = &cfg.LoginAttemptsPerMinute
 	}
+	if es.ModelsRequestsPerMinute == nil {
+		es.ModelsRequestsPerMinute = &cfg.ModelsRequestsPerMinute
+	}
 	return es
 }
 
@@ -309,6 +313,7 @@ func (s *Server) applyLimitSettings(es EndpointSettings) {
 	}
 	s.authFailures.SetLimit(*es.AuthFailuresPerMinute)
 	s.loginLimiter.SetLimit(*es.LoginAttemptsPerMinute)
+	s.modelsLimiter.SetLimit(*es.ModelsRequestsPerMinute)
 }
 
 // adminTestHeadroom probes a Headroom proxy to confirm it is running. It accepts
@@ -399,6 +404,7 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 		ConcurrencyRetryAfterMs *int    `json:"concurrency_retry_after_ms"`
 		AuthFailuresPerMinute   *int    `json:"auth_failures_per_minute"`
 		LoginAttemptsPerMinute  *int    `json:"login_attempts_per_minute"`
+		ModelsRequestsPerMinute *int    `json:"models_requests_per_minute"`
 		StreamStallTimeoutMs    *int    `json:"stream_stall_timeout_ms"`
 		ResponseHeaderTimeoutMs *int    `json:"response_header_timeout_ms"`
 		RequestTimeoutMs        *int    `json:"request_timeout_ms"`
@@ -572,6 +578,13 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		current.LoginAttemptsPerMinute = patch.LoginAttemptsPerMinute
+	}
+	if patch.ModelsRequestsPerMinute != nil {
+		if *patch.ModelsRequestsPerMinute < 0 || *patch.ModelsRequestsPerMinute > 10000 {
+			writeError(w, http.StatusBadRequest, "models_requests_per_minute must be between 0 and 10000")
+			return
+		}
+		current.ModelsRequestsPerMinute = patch.ModelsRequestsPerMinute
 	}
 	if patch.StreamStallTimeoutMs != nil {
 		if *patch.StreamStallTimeoutMs < 5000 || *patch.StreamStallTimeoutMs > 600000 {

@@ -183,6 +183,7 @@ export interface EndpointSettings {
   concurrency_retry_after_ms?: number;
   auth_failures_per_minute?: number;
   login_attempts_per_minute?: number;
+  models_requests_per_minute?: number;
   stream_stall_timeout_ms: number;
   response_header_timeout_ms: number;
   request_timeout_ms: number;
