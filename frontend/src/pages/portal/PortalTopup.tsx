@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle2, CreditCard, History, Receipt, Wallet, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, CreditCard, ExternalLink, History, Receipt, Wallet, XCircle } from "lucide-react";
 import {
   createTopupOrder,
   fetchPortalPaymentConfig,
@@ -31,7 +31,24 @@ const ORDER_STATUS_TONE: Record<PaymentOrder["status"], "success" | "warning" | 
   pending: "warning",
   failed: "danger",
   expired: "neutral",
+  cancelled: "neutral",
 };
+
+/** The payment link if it is an http(s) URL, otherwise null. */
+function safeLink(link?: string): string | null {
+  if (!link) return null;
+  try {
+    const proto = new URL(link).protocol;
+    return proto === "http:" || proto === "https:" ? link : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A pending order whose link has passed its expiry reads as expired. */
+function orderStatusLabel(o: PaymentOrder): PaymentOrder["status"] {
+  return o.status === "pending" && !o.payable ? "expired" : o.status;
+}
 
 export function PortalTopupPage() {
   const qc = useQueryClient();
@@ -88,21 +105,15 @@ export function PortalTopupPage() {
         turnstile_token: turnstileToken || undefined,
       }),
     onSuccess: (order) => {
-      const link = order.payment_link_url;
-      let safe = false;
-      if (link) {
-        try {
-          const proto = new URL(link).protocol;
-          safe = proto === "http:" || proto === "https:";
-        } catch {
-          safe = false;
-        }
-      }
-      if (safe && link) {
-        window.location.href = link;
-      } else {
+      const link = safeLink(order.payment_link_url);
+      if (!link) {
         toast.error("Invalid payment link");
+        return;
       }
+      if (order.reused) {
+        toast.info("You already have an unpaid order", `Opening the payment link for ${formatIDR(order.amount_idr)}.`);
+      }
+      window.location.href = link;
     },
     onError: (e: Error) => {
       toast.error("Payment failed", e.message);
@@ -160,6 +171,8 @@ export function PortalTopupPage() {
   };
 
   const orderList = orders.data?.orders ?? [];
+  const openOrder = orderList.find((o) => o.payable && safeLink(o.payment_link_url));
+  const openLink = safeLink(openOrder?.payment_link_url);
 
   return (
     <div className="space-y-6">
@@ -265,20 +278,38 @@ export function PortalTopupPage() {
                   <p className="text-[12px] text-fg-faint">Rate source: {config.currency_source}</p>
                 )}
               </dl>
-              <TurnstileWidget
-                siteKey={siteKey}
-                onToken={setTurnstileToken}
-                resetSignal={resetSignal}
-                className="mt-4 flex justify-center"
-              />
-              <Button
-                className="mt-4 w-full"
-                onClick={submit}
-                disabled={!amountValid || !fxRate || buyMutation.isPending || (!!siteKey && !turnstileToken)}
-              >
-                <CreditCard aria-hidden="true" />
-                {buyMutation.isPending ? "Starting payment…" : "Buy credit"}
-              </Button>
+              {openOrder && openLink ? (
+                <div className="mt-4 space-y-3">
+                  <p role="status" className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2.5 text-[12.5px] text-fg">
+                    <Clock className="mt-0.5 h-4 w-4 shrink-0 text-warn" strokeWidth={1.75} aria-hidden="true" />
+                    <span>
+                      You have an unpaid order of {formatIDR(openOrder.amount_idr)}. Pay it before buying more
+                      {openOrder.expires_at ? `, or wait until it expires at ${formatDateTime(openOrder.expires_at)}` : ""}.
+                    </span>
+                  </p>
+                  <Button className="w-full" onClick={() => (window.location.href = openLink)}>
+                    <ExternalLink aria-hidden="true" />
+                    Continue payment
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <TurnstileWidget
+                    siteKey={siteKey}
+                    onToken={setTurnstileToken}
+                    resetSignal={resetSignal}
+                    className="mt-4 flex justify-center"
+                  />
+                  <Button
+                    className="mt-4 w-full"
+                    onClick={submit}
+                    disabled={!amountValid || !fxRate || buyMutation.isPending || (!!siteKey && !turnstileToken)}
+                  >
+                    <CreditCard aria-hidden="true" />
+                    {buyMutation.isPending ? "Starting payment…" : "Buy credit"}
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </PanelCard>
@@ -292,26 +323,50 @@ export function PortalTopupPage() {
             <EmptyState title="No payment orders yet" />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px] text-[13px]">
+              <table className="w-full min-w-[620px] text-[13px]">
                 <thead className={THEAD}>
                   <tr>
                     <th scope="col" className={`${TH} text-left`}>Date</th>
                     <th scope="col" className={`${TH} text-right`}>Amount</th>
                     <th scope="col" className={`${TH} text-right`}>Credit</th>
                     <th scope="col" className={`${TH} text-left`}>Status</th>
+                    <th scope="col" className={`${TH} text-right`}>
+                      <span className="sr-only">Payment link</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
-                  {orderList.map((o) => (
+                  {orderList.map((o) => {
+                    const label = orderStatusLabel(o);
+                    const link = o.payable ? safeLink(o.payment_link_url) : null;
+                    return (
                     <tr key={o.order_id} className="transition-colors hover:bg-hover">
                       <td className={`${TD} whitespace-nowrap tabular-nums text-fg-muted`}>{formatDateTime(o.created_at)}</td>
                       <td className={`${TD} text-right tabular-nums text-fg`}>{formatIDR(o.amount_idr)}</td>
                       <td className={`${TD} text-right font-semibold tabular-nums text-fg`}>{formatUSD(o.credit_usd)}</td>
                       <td className={TD}>
-                        <Badge tone={ORDER_STATUS_TONE[o.status] ?? "neutral"}>{o.status}</Badge>
+                        <Badge tone={ORDER_STATUS_TONE[label] ?? "neutral"}>{label}</Badge>
+                        {link && o.expires_at && (
+                          <span className="mt-0.5 block whitespace-nowrap text-[11.5px] tabular-nums text-fg-muted">
+                            Expires {formatDateTime(o.expires_at)}
+                          </span>
+                        )}
+                      </td>
+                      <td className={`${TD} text-right`}>
+                        {link && (
+                          <a
+                            href={link}
+                            rel="noopener noreferrer"
+                            className="inline-flex min-h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-surface px-3 py-1.5 text-[13px] font-medium text-fg hover:border-line-strong hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+                          >
+                            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                            Pay now
+                          </a>
+                        )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
