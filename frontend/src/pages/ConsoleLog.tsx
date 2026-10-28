@@ -11,6 +11,7 @@ import { useToast } from "../components/Toast";
 import { cn } from "@/lib/utils";
 import type { ConsoleLogEntry } from "../lib/api";
 import { parseQuery, matches, shortReq, queryToken, isFailed, type ParsedQuery } from "../lib/consoleQuery";
+import { fmtDateTime, zonedParts } from "../lib/serverTime";
 
 // ── Types & constants ────────────────────────────────────────────────────────
 
@@ -162,7 +163,7 @@ function fmtCost(micros?: number): string {
 }
 
 function fullTime(e: ConsoleLogEntry): string {
-  return e.ts ? new Date(e.ts).toLocaleString() : e.time;
+  return e.ts ? fmtDateTime(e.ts) : e.time;
 }
 
 function formatLine(l: ConsoleLogEntry): string {
@@ -188,9 +189,9 @@ function formatRows(rows: Row[], view: View): string {
 }
 
 function logFileName(): string {
-  const d = new Date();
+  const d = zonedParts(Date.now());
   const p = (n: number) => String(n).padStart(2, "0");
-  return `keirouter-console-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.log`;
+  return `keirouter-console-${d.year}${p(d.month)}${p(d.day)}-${p(d.hour)}${p(d.minute)}${p(d.second)}.log`;
 }
 
 // Leading "Key: value" lines of a detail block become fields; the rest (raw

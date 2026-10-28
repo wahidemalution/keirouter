@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { dashboard } from "../lib/dashboardRoutes";
+import { fmtDate } from "../lib/serverTime";
 
 // Built-in reference skills — SKILL.md pages that teach AI agents how to call
 // KeiRouter endpoints. These are static docs with copyable URLs, not runtime
@@ -693,7 +694,7 @@ function SkillRow({
   const updated = new Date(skill.updated_at || skill.created_at);
   const updatedLabel = Number.isNaN(updated.getTime())
     ? undefined
-    : `${skill.updated_at ? "Updated" : "Created"} ${updated.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}`;
+    : `${skill.updated_at ? "Updated" : "Created"} ${fmtDate(updated, { year: "numeric", month: "short", day: "numeric" })}`;
 
   return (
     <li className="flex flex-wrap items-start gap-x-3 gap-y-2 px-4 py-3 transition-colors hover:bg-hover sm:flex-nowrap">

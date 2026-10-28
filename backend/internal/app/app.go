@@ -30,7 +30,6 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
-	"github.com/mydisha/keirouter/backend/internal/finance"
 	"github.com/mydisha/keirouter/backend/internal/gateway"
 	"github.com/mydisha/keirouter/backend/internal/guardrails"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/bias"
@@ -40,6 +39,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/guardrails/toxicity"
 	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
+	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/inflight"
@@ -62,8 +62,8 @@ import (
 // App is the assembled application, ready to serve.
 type App struct {
 	cfg config.Config
-	// financeBox seals the finance alert webhook (the master-key sealer).
-	financeBox         finance.SecretBox
+	// financeBox seals hosting secrets (the master-key sealer).
+	financeBox         hosting.SecretBox
 	log                *slog.Logger
 	db                 *store.DB
 	accounts           *store.AccountRepo
@@ -747,11 +747,6 @@ func (a *App) Run(ctx context.Context) error {
 		go func() {
 			defer a.bg.Done()
 			a.runReferenceSync(ctx)
-		}()
-		a.bg.Add(1)
-		go func() {
-			defer a.bg.Done()
-			a.runFinanceAlerts(ctx)
 		}()
 		a.bg.Add(1)
 		go func() {

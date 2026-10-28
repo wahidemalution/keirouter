@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fmtDate, fmtTime, startOfServerDay, zonedParts } from "../../lib/serverTime";
 
 // Dependency-free time-series charts shared by Provider Health, System and
 // the key portal. Plain HTML bars / SVG lines in the dashboard's visual
@@ -203,25 +204,22 @@ export function niceTimeTicks(starts: string[], maxLabels: number): { pct: numbe
   const span = end - t0;
   const step = TIME_STEPS.find((s) => s >= bucket && span / s <= maxLabels) ?? TIME_STEPS[TIME_STEPS.length - 1];
 
-  // Align to local midnight, then walk forward in whole steps.
-  const midnight = new Date(t0);
-  midnight.setHours(0, 0, 0, 0);
-  let t = midnight.getTime();
+  // Align to midnight in the server zone, then walk forward in whole steps.
+  let t = startOfServerDay(t0);
   if (step < DAY) t += Math.ceil((t0 - t) / step) * step;
   else while (t < t0) t += DAY;
 
   const ticks: { pct: number; label: string }[] = [];
   for (; t < end; t += step) {
-    const d = new Date(t);
     // Day-sized steps keep landing on midnight even across DST changes.
-    if (step >= DAY) d.setHours(0, 0, 0, 0);
-    const atMidnight = d.getHours() === 0 && d.getMinutes() === 0;
+    if (step >= DAY) t = startOfServerDay(t + 3 * 3600_000);
+    const p = zonedParts(t);
+    const atMidnight = p.hour === 0 && p.minute === 0;
     const label =
-      step >= DAY || (atMidnight && d.getTime() > t0)
-        ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-        : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-    ticks.push({ pct: ((d.getTime() - t0) / span) * 100, label });
-    if (step >= DAY) t = d.getTime();
+      step >= DAY || (atMidnight && t > t0)
+        ? fmtDate(t, { month: "short", day: "numeric" })
+        : fmtTime(t, { hour: "2-digit", minute: "2-digit", hour12: false });
+    ticks.push({ pct: ((t - t0) / span) * 100, label });
   }
   return ticks;
 }
@@ -244,8 +242,8 @@ export function niceScale(peak: number, fixedMax?: number): { max: number; ticks
   return { max: step * 4, ticks: [step * 4, step * 3, step * 2, step, 0] };
 }
 
-export const clockLabel = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-export const dayLabel = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+export const clockLabel = (ms: number) => fmtTime(ms, { hour: "2-digit", minute: "2-digit", hour12: false });
+export const dayLabel = (ms: number) => fmtDate(ms, { month: "short", day: "numeric" });
 
 function compact(v: number): string {
   if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;

@@ -29,41 +29,27 @@ func TestCostBasisGroupsByProviderChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []CostBasisRow{{Provider: "p1", ChainID: "c1", Requests: 2,
 		BilledNanos: 18e9, UpstreamNanos: 10e9, UnknownBilledNanos: 3e9}}, rows)
-
-	byProv, err := db.Usage().CostBasisByProviderSince(ctx, DefaultTenantID, map[string]time.Time{
-		"p1": since, "p2": now.Add(-3 * time.Hour),
-	})
-	require.NoError(t, err)
-	require.Len(t, byProv, 1)
-	require.Equal(t, int64(2), byProv[0].Requests)
-
-	byProv, err = db.Usage().CostBasisByProviderSince(ctx, DefaultTenantID, map[string]time.Time{
-		"p1": now.Add(-3 * time.Hour),
-	})
-	require.NoError(t, err)
-	require.Len(t, byProv, 1)
-	require.Equal(t, int64(3), byProv[0].Requests)
 }
 
-func TestUsageDistinctProviders(t *testing.T) {
+func TestCostBasisSeriesBucketsByZoneDay(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
-	now := time.Now().UTC()
-	got, err := db.Usage().DistinctProviders(ctx, DefaultTenantID)
-	require.NoError(t, err)
-	require.Empty(t, got)
-	other := finRec("x", "p9", "c1", 1, 1, false, now)
-	other.TenantID = "other"
+	wib := int64(7 * 3600)
+	// 2026-10-10 18:30 UTC is 01:30 on Oct 11 in WIB, so it lands in the next WIB day.
+	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, db.Usage().RecordBatch(ctx, []UsageRecord{
-		finRec("a", "p2", "c1", 1, 1, false, now),
-		finRec("b", "p1", "c1", 1, 1, false, now.Add(-400*24*time.Hour)),
-		finRec("c", "p2", "c2", 1, 1, false, now),
-		finRec("d", "", "c2", 1, 1, false, now),
-		other,
+		finRec("a", "p1", "c1", 15e9, 10e9, false, day.Add(10*time.Hour)),
+		finRec("b", "p1", "c1", 3e9, 0, false, day.Add(16*time.Hour+59*time.Minute)),
+		finRec("c", "p1", "c1", 4e9, 2e9, false, day.Add(18*time.Hour+30*time.Minute)),
+		finRec("d", "p1", "c1", 9e9, 9e9, true, day.Add(11*time.Hour)),
 	}))
-	got, err = db.Usage().DistinctProviders(ctx, DefaultTenantID)
+	pts, err := db.Usage().CostBasisSeries(ctx, DefaultTenantID, day, 86400, wib)
 	require.NoError(t, err)
-	require.Equal(t, []string{"p1", "p2"}, got)
+	first := (day.Unix() + wib) / 86400
+	require.Equal(t, []CostBasisPoint{
+		{Bucket: first, CostBasisRow: CostBasisRow{ChainID: "c1", Requests: 2, BilledNanos: 18e9, UpstreamNanos: 10e9, UnknownBilledNanos: 3e9}},
+		{Bucket: first + 1, CostBasisRow: CostBasisRow{ChainID: "c1", Requests: 1, BilledNanos: 4e9, UpstreamNanos: 2e9}},
+	}, pts)
 }
 
 func TestPaidTotalsSince(t *testing.T) {

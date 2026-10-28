@@ -28,6 +28,7 @@ import { useConfirm } from "../components/ui/confirm-dialog";
 import { ICONS } from "../lib/icons";
 import { formatDateTime } from "../lib/format";
 import { dashboard } from "../lib/dashboardRoutes";
+import { fmtDateTime } from "../lib/serverTime";
 
 const PERIODS = REPORT_PERIODS.map((p) => ({ ...p }));
 
@@ -404,7 +405,7 @@ export function QuotaPage() {
               icon={TimerReset}
               label="Next reset"
               value={
-                <span title={totals.nextReset ? new Date(totals.nextReset.at).toLocaleString() : undefined}>
+                <span title={totals.nextReset ? fmtDateTime(totals.nextReset.at) : undefined}>
                   {totals.nextReset ? formatCountdown(totals.nextReset.at).replace(/^in /, "") : "—"}
                 </span>
               }

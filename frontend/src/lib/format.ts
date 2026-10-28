@@ -1,6 +1,8 @@
 // Shared display formatters. Previously duplicated across Budgets, Overview,
 // KeyPortal, and Usage — consolidated so spend/token formatting stays consistent.
 
+import { fmtDate, fmtDateTime, zonedParts } from "./serverTime.ts";
+
 export function microsToUSD(micros: number, decimals = 2): string {
   return formatUSD(micros / 1_000_000, decimals);
 }
@@ -59,15 +61,15 @@ function toDate(value: string | number | Date | null | undefined): Date | null {
 export function formatDate(value: string | number | Date | null | undefined, opts: { short?: boolean } = {}): string {
   const d = toDate(value);
   if (!d) return "—";
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(opts.short && sameYear ? {} : { year: "numeric" }) });
+  const sameYear = zonedParts(d).year === zonedParts(Date.now()).year;
+  return fmtDate(d, { month: "short", day: "numeric", ...(opts.short && sameYear ? {} : { year: "numeric" }) });
 }
 
 /** "Oct 12, 2026, 14:03:22": the full timestamp, for tooltips and detail rows. */
 export function formatDateTime(value: string | number | Date | null | undefined, opts: { seconds?: boolean } = { seconds: true }): string {
   const d = toDate(value);
   if (!d) return "—";
-  return d.toLocaleString(undefined, {
+  return fmtDateTime(d, {
     month: "short",
     day: "numeric",
     year: "numeric",

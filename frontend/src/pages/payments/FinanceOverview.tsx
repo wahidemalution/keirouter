@@ -1,4 +1,4 @@
-import { Activity, Coins, Percent, PiggyBank, Receipt, Wallet, Wrench } from "lucide-react";
+import { Activity, Coins, Percent, Receipt, Wallet, Wrench } from "lucide-react";
 import type { FinanceOverview as Overview, FinanceRange } from "../../lib/api";
 import { ErrorBanner, Kpi, KpiGrid, LoadingRegion, Skeleton } from "../../components/ui";
 import { count, idr, usd } from "./shared";
@@ -39,7 +39,7 @@ export function FinanceOverview({
   return (
     <div className="space-y-2">
       {error && <ErrorBanner message={`The last refresh failed, so the numbers below may be out of date. ${error}`} />}
-      <KpiGrid cols={4} label={`Credit and cost basis, ${rangeText}`}>
+      <KpiGrid cols={3} label={`Credit, revenue and provider cost, ${rangeText}`}>
         <Kpi
           icon={Wallet}
           label="Credit received"
@@ -51,35 +51,27 @@ export function FinanceOverview({
           icon={Receipt}
           label="Revenue"
           value={usd(o.revenue_usd)}
+          tone={o.revenue_usd < 0 ? "bad" : "section"}
+          valueClassName={o.revenue_usd < 0 ? "text-bad" : ""}
           hint={`Markup on ${usd(o.billed_usd)} billed · ${count(o.requests)} requests`}
         />
         <Kpi
           icon={Wrench}
-          label="Cost basis"
+          label="Provider cost"
           value={usd(cost)}
           hint={o.cost_estimated_usd > 0 ? `Upstream price, including ${usd(o.cost_estimated_usd)} estimated` : "Upstream price before markup"}
-        />
-      </KpiGrid>
-      <KpiGrid cols={3} label={`Profit and requests, ${rangeText}`}>
-        <Kpi
-          icon={PiggyBank}
-          label="Profit"
-          value={usd(o.profit_usd)}
-          tone={o.profit_usd < 0 ? "bad" : "section"}
-          valueClassName={o.profit_usd < 0 ? "text-bad" : ""}
-          hint="User billing minus cost basis"
         />
         <Kpi
           icon={Percent}
           label="Margin"
           value={`${o.margin_pct.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`}
-          hint="Profit divided by cost basis"
+          hint="Revenue divided by provider cost"
         />
         <Kpi icon={Activity} label="Active requests" value={count(o.in_flight)} hint="Running right now" />
       </KpiGrid>
       {o.cost_estimated_usd > 0 && (
         <p className="text-[12px] text-fg-muted">
-          Part of the cost basis ({usd(o.cost_estimated_usd)}) is the sell price minus markup, because the upstream price wasn't recorded. Revenue, profit
+          Part of the provider cost ({usd(o.cost_estimated_usd)}) is the sell price minus markup, because the upstream price wasn't recorded. Revenue
           and margin use this figure.
         </p>
       )}

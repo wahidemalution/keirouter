@@ -4,6 +4,7 @@ import type { SeriesPoint, UsageInsights } from "../../lib/api";
 import { ICONS } from "../../lib/icons";
 import { cn } from "@/lib/utils";
 import { PlotTooltip, niceTimeTicks, timeTickStyle, useElementWidth, usePlotPointer, xLabelCount } from "./TimeSeries";
+import { fmtDateTime, fmtTime } from "../../lib/serverTime";
 
 // TrafficCard is the shared requests / tokens / cost / latency bar chart used
 // by Overview and Usage. Plain HTML bars (no charting library), stacked where
@@ -319,6 +320,6 @@ function niceScale(peak: number): { max: number; ticks: number[] } {
 function formatBucket(iso: string, withDate: boolean): string {
   const d = new Date(iso);
   return withDate
-    ? d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    ? fmtDateTime(d, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : fmtTime(d, { hour: "2-digit", minute: "2-digit" });
 }

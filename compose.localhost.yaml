@@ -26,6 +26,8 @@ services:
       - "127.0.0.1:${KEIROUTER_PORT:-20180}:20180"
     volumes:
       - keirouter-data:/data
+      # Run in the host's timezone so the dashboard clock and "today" match the host.
+      - /etc/localtime:/etc/localtime:ro
     environment:
       KEIROUTER_DATA__DIR: /data
       # Ini HOST di DALAM container, wajib tetap 0.0.0.0 agar port-forward

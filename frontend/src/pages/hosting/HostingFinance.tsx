@@ -19,6 +19,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { C_COST, C_PROFIT, C_REV, LegendItem, VIZ_VARS, axisTick } from "../../components/financeChart";
 import {
   api,
   type HostingCost,
@@ -66,18 +67,6 @@ const CATEGORY_TONE: Record<HostingCostCategory, "accent" | "secondary" | "neutr
   other: "neutral",
 };
 
-// Chart series colours. Revenue is the brand blue; cost and profit are the
-// next two slots of a categorical order validated for colour-vision
-// deficiency in both themes (dataviz validate_palette: blue · orange · aqua,
-// all-pairs). The light orange/aqua sit under 3:1 on the card, so the chart
-// always ships a legend, a tooltip and a table view.
-const VIZ_VARS =
-  "[--viz-rev:var(--color-accent-500)] [--viz-cost:#ea7a3a] [--viz-profit:#1baf7a] dark:[--viz-cost:#e06f30] dark:[--viz-profit:#199e70]";
-const C_REV = "var(--viz-rev)";
-const C_COST = "var(--viz-cost)";
-const C_PROFIT = "var(--viz-profit)";
-
-const axisTick = { fontSize: 11.5, fill: "var(--text-muted)", fontFamily: "var(--font-sans)" } as const;
 
 function signedIdr(n: number): string {
   return n > 0 ? `+${idr(n)}` : idr(n);
@@ -110,7 +99,6 @@ export function FinanceTab() {
       <RefundWarning refunds={f.refunds_needed ?? []} />
       <CurrentMonth f={f} />
       <MonthlyChart f={f} range={range} onRange={setRange} fetching={q.isFetching} />
-      <CostsPanel costs={f.costs} />
     </div>
   );
 }
@@ -223,7 +211,7 @@ function MonthlyChart({ f, range, onRange, fetching }: { f: HostingFinance; rang
           icon={TrendingUp}
           size="sm"
           title="No revenue or costs yet"
-          hint="The chart fills in once a hosting order is paid or an operating cost is added below."
+          hint="The chart fills in once a hosting order is paid or a cost is added on the Operating costs tab."
         />
       ) : view === "chart" ? (
         <div className={cn("px-4 pb-3 pt-4", VIZ_VARS)}>
@@ -270,22 +258,6 @@ function chartSummary(rows: Row[]): string {
   const last = rows[rows.length - 1];
   const best = rows.reduce((a, b) => (b.profit_idr > a.profit_idr ? b : a));
   return `Monthly revenue, costs and profit from ${rows[0].label} to ${last.label}. This month: revenue ${idr(last.revenue_idr)}, costs ${idr(last.cost_idr)}, profit ${idr(last.profit_idr)}. Highest profit ${idr(best.profit_idr)} in ${best.label}. Switch to Table view for full numbers.`;
-}
-
-function LegendItem({ color, label, line }: { color: string; label: string; line?: boolean }) {
-  return (
-    <li className="inline-flex items-center gap-1.5">
-      {line ? (
-        <span className="relative inline-block h-2 w-4" aria-hidden="true">
-          <span className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full" style={{ background: color }} />
-          <span className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ background: color }} />
-        </span>
-      ) : (
-        <span className="h-2 w-2 rounded-[2px]" style={{ background: color }} aria-hidden="true" />
-      )}
-      {label}
-    </li>
-  );
 }
 
 function FinanceTooltip({ active, payload, label }: any) {
@@ -379,6 +351,28 @@ function RefundWarning({ refunds }: { refunds: NonNullable<HostingFinance["refun
 
 // ─── Operating costs ────────────────────────────────────────────────────────
 
+/** The Operating costs tab. Costs ride on the hosting finance response, so a
+ * cost change refreshes the hosting chart through the same query key. */
+export function CostsTab() {
+  const q = useQuery({ queryKey: [...QK_HOSTING.finance, "costs"], queryFn: () => api.hostingFinance(1) });
+  if (q.isLoading && !q.data) {
+    return (
+      <LoadingRegion label="Loading operating costs">
+        <Skeleton className="h-[240px] w-full rounded-2xl" />
+      </LoadingRegion>
+    );
+  }
+  if (!q.data) {
+    return <ErrorBanner message={`Couldn't load operating costs. ${q.isError ? errorText(q.error) : ""}`.trim()} />;
+  }
+  return (
+    <div className="space-y-6">
+      {q.isError && <ErrorBanner message={`Couldn't refresh the costs. The list below may be out of date. ${errorText(q.error)}`} />}
+      <CostsPanel costs={q.data.costs} />
+    </div>
+  );
+}
+
 function CostsPanel({ costs }: { costs: HostingCost[] }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -416,7 +410,7 @@ function CostsPanel({ costs }: { costs: HostingCost[] }) {
     <Panel
       icon={Coins}
       title="Operating costs"
-      subtitle={costs.length ? `This month: ${idr(monthTotal)} across ${count(costs.length)} costs.` : "VPS rental or purchase, domains and other hosting costs."}
+      subtitle={costs.length ? `This month: ${idr(monthTotal)} across ${count(costs.length)} costs.` : undefined}
       action={
         <Button onClick={() => setEditing("new")}>
           <Plus aria-hidden="true" />

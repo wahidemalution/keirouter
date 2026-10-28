@@ -115,7 +115,7 @@ func (s *Server) adminHostingFinance(w http.ResponseWriter, r *http.Request) {
 	costViews := make([]map[string]any, 0, len(costs))
 	for _, c := range costs {
 		v := hostingCostView(c)
-		v["this_month_idr"] = hosting.CostInMonth(c, firstOfMonthWIB(now))
+		v["this_month_idr"] = hosting.CostInMonth(c, firstOfMonth(now))
 		costViews = append(costViews, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -139,9 +139,9 @@ func (s *Server) adminHostingFinance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func firstOfMonthWIB(t time.Time) time.Time {
-	l := t.In(hosting.WIB)
-	return time.Date(l.Year(), l.Month(), 1, 0, 0, 0, 0, hosting.WIB)
+func firstOfMonth(t time.Time) time.Time {
+	l := t.In(hosting.Zone)
+	return time.Date(l.Year(), l.Month(), 1, 0, 0, 0, 0, hosting.Zone)
 }
 
 type hostingCostRequest struct {

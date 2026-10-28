@@ -19,6 +19,8 @@ services:
       - "${KEIROUTER_PORT:-20180}:20180"
     volumes:
       - keirouter-data:/data
+      # Run in the host's timezone so the dashboard clock and "today" match the host.
+      - /etc/localtime:/etc/localtime:ro
     environment:
       KEIROUTER_DATA__DIR: /data
       KEIROUTER_SERVER__HOST: 0.0.0.0

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useId, useState, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useId, useMemo, useState, useEffect, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient, useIsFetching } from "@tanstack/react-query";
 import {
@@ -43,6 +43,7 @@ import { BrandMark } from "./BrandMark";
 import { UpdateNotification } from "./UpdateNotification";
 import { preloadRoute, type RoutePreloadKey } from "../routePreload";
 import { dashboard, DASHBOARD_PREFIX } from "../lib/dashboardRoutes";
+import { fmtDate, fmtTime, setServerZone } from "../lib/serverTime";
 
 // The command palette (and cmdk) stays out of the shell bundle: it is fetched
 // on idle or on the first Ctrl/Cmd+K, then mounted for the rest of the session.
@@ -183,8 +184,8 @@ const TITLE_BY_PATH: Record<string, string> = {
   "/portal-users": "Portal users",
   "/finance": "Finance",
   "/finance/hosting": "Hosting finance",
+  "/finance/costs": "Operating costs",
   "/finance/orders": "Portal orders",
-  "/finance/settings": "Finance settings",
   "/hosting": "Hosting instances",
   "/hosting/coupons": "Hosting coupons",
   "/hosting/settings": "Hosting setup",
@@ -229,6 +230,11 @@ export function Layout() {
     document.documentElement.dataset.tone = pageTone;
   }, [pageTone]);
   const { branding } = useBranding();
+  // Pages format times in the server zone, so they wait for gateway info. If
+  // it fails, they fall back to the browser zone rather than not rendering.
+  const gatewayInfo = useGatewayInfo();
+  if (gatewayInfo.data) setServerZone(gatewayInfo.data.tz_iana, gatewayInfo.data.tz_offset_s);
+  const zoneReady = !!gatewayInfo.data || gatewayInfo.isError;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMounted, setPaletteMounted] = useState(false);
@@ -321,7 +327,7 @@ export function Layout() {
         >
           <div className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
             <Suspense fallback={<PageOutletFallback />}>
-              <Outlet />
+              {zoneReady ? <Outlet /> : <PageOutletFallback />}
             </Suspense>
           </div>
         </main>
@@ -561,9 +567,74 @@ function TopBar({ menuOpen, onMenuToggle, onSearchOpen }: { menuOpen: boolean; o
 
       <div className="flex shrink-0 items-center gap-1.5 sm:ml-auto">
         <UpdateNotification />
+        <HeaderClock />
         <AccountMenu />
       </div>
     </header>
+  );
+}
+
+/** "WIB" stays as is; a numeric abbreviation like "+07" becomes "UTC+7". */
+function zoneLabel(name: string, offsetS: number): string {
+  if (name && !/^[+-]\d/.test(name)) return name;
+  if (offsetS === 0) return "UTC";
+  const sign = offsetS > 0 ? "+" : "-";
+  const a = Math.abs(offsetS);
+  const h = Math.floor(a / 3600);
+  const m = Math.floor((a % 3600) / 60);
+  return `UTC${sign}${h}${m ? `:${String(m).padStart(2, "0")}` : ""}`;
+}
+
+// The clock shows the host's time in the host's zone (see lib/serverTime).
+function HeaderClock() {
+  const info = useGatewayInfo();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    let timer: number;
+    // Tick on each minute boundary rather than polling every second.
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        setNow(Date.now());
+        schedule();
+      }, 60_000 - (Date.now() % 60_000) + 50);
+    };
+    schedule();
+    // Background tabs throttle timers; catch up as soon as the tab is visible.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      window.clearTimeout(timer);
+      setNow(Date.now());
+      schedule();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  // Skew between the host clock and this browser, measured when gateway info
+  // last arrived, so a wrong client clock does not change what is shown.
+  const data = info.data;
+  const skew = useMemo(() => {
+    if (!data?.server_time) return 0;
+    const server = Date.parse(data.server_time);
+    return Number.isNaN(server) ? 0 : server - info.dataUpdatedAt;
+  }, [data?.server_time, info.dataUpdatedAt]);
+
+  if (!data?.server_time) return null;
+  const hostNow = new Date(now + skew);
+  const zone = zoneLabel(data.tz_name, data.tz_offset_s);
+  return (
+    <time
+      dateTime={hostNow.toISOString()}
+      title={`Server time (${zone})`}
+      className="whitespace-nowrap px-1 text-[12.5px] tabular-nums text-fg-muted sm:px-2"
+    >
+      <span className="hidden sm:inline">{fmtDate(hostNow, { weekday: "short", day: "numeric", month: "short", year: "numeric" }, "en-GB")} · </span>
+      <span className="font-medium text-fg">{fmtTime(hostNow, { hour: "2-digit", minute: "2-digit", hour12: false }, "en-GB")}</span>
+      <span className="hidden sm:inline"> {zone}</span>
+    </time>
   );
 }
 

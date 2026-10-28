@@ -5,8 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
+
+// wib pins the finance zone so results do not depend on the test host.
+var wib = time.FixedZone("WIB", 7*3600)
+
+func init() { hosting.Zone = wib }
 
 func near(a, b, eps float64) bool { return math.Abs(a-b) <= eps }
 
@@ -45,54 +51,6 @@ func TestBuildOverview_ProfitExample(t *testing.T) {
 	}
 }
 
-func acct() store.UpstreamAccount {
-	return store.UpstreamAccount{ID: "a1", Status: "active", OpeningBalanceMicros: 100e6, LowBalanceMicros: 100e6, Providers: []string{"p"}}
-}
-
-func TestBalances_OpeningCutoff(t *testing.T) {
-	bs, _ := Balances(BalanceInput{
-		Accounts:     []store.UpstreamAccount{acct()},
-		TopupMicros:  map[string]int64{"a1": 20e6},
-		SinceOpening: []store.CostBasisRow{{Provider: "p", UpstreamNanos: 30e9, BilledNanos: 30e9}},
-	})
-	if !near(bs[0].BalanceUSD, 90, 1e-9) || bs[0].TopupsUSD != 20 || bs[0].SpentUSD != 30 {
-		t.Fatalf("%+v", bs[0])
-	}
-}
-
-func TestBalances_UnmappedBucket(t *testing.T) {
-	rows := []store.CostBasisRow{
-		{Provider: "p-x", Requests: 2, UpstreamNanos: 4e9},
-		{Provider: "p-x", ChainID: "z", Requests: 1, UpstreamNanos: 1e9},
-		{Provider: "p", Requests: 1, UpstreamNanos: 2e9},
-	}
-	bs, u := Balances(BalanceInput{Accounts: []store.UpstreamAccount{acct()}, Range: rows, InFlight: map[string]int64{"p": 3}})
-	if len(u.Providers) != 1 || u.Providers[0] != "p-x" || u.Requests != 3 || !near(u.SpentRangeUSD, 5, 1e-9) {
-		t.Fatalf("%+v", u)
-	}
-	if !near(bs[0].SpentRangeUSD, 2, 1e-9) || bs[0].InFlight != 3 {
-		t.Fatalf("%+v", bs[0])
-	}
-}
-
-func TestBalances_LowAndDaysLeft(t *testing.T) {
-	in := BalanceInput{
-		Accounts:     []store.UpstreamAccount{acct()},
-		TopupMicros:  map[string]int64{"a1": 20e6},
-		SinceOpening: []store.CostBasisRow{{Provider: "p", UpstreamNanos: 30e9}},
-		Last7d:       []store.CostBasisRow{{Provider: "p", UpstreamNanos: 14e9}},
-	}
-	bs, _ := Balances(in)
-	if !bs[0].Low || !near(bs[0].AvgDailyUSD, 2, 1e-9) || bs[0].DaysLeft == nil || !near(*bs[0].DaysLeft, 45, 1e-9) {
-		t.Fatalf("%+v", bs[0])
-	}
-	in.Last7d = nil
-	bs, _ = Balances(in)
-	if bs[0].DaysLeft != nil || !bs[0].Low {
-		t.Fatalf("%+v", bs[0])
-	}
-}
-
 func TestRangeStart(t *testing.T) {
 	loc := time.FixedZone("x", 7*3600)
 	now := time.Date(2026, 10, 15, 13, 30, 0, 0, loc)
@@ -124,5 +82,69 @@ func TestBuildOverview_MarkupExample(t *testing.T) {
 	o = BuildOverview(est, Markups{Global: 50}, store.PaidOrderTotals{}, 0, nil)
 	if !near(o.RevenueUSD, 0.5, 1e-9) || !near(o.CostEstimatedUSD, 1, 1e-9) || !near(o.MarginPct, 50, 1e-9) {
 		t.Fatalf("%+v", o)
+	}
+}
+
+func TestBuildSeries_DailyFillsGapsAndEstimates(t *testing.T) {
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, wib)
+	plan, err := planSeries("7d", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := func(d int) int64 { return (time.Date(2026, 10, d, 0, 0, 0, 0, wib).Unix() + 7*3600) / 86400 }
+	pts := []store.CostBasisPoint{
+		{Bucket: day(22), CostBasisRow: store.CostBasisRow{ChainID: "c1", Requests: 2, BilledNanos: 15e8, UpstreamNanos: 1e9}},
+		{Bucket: day(28), CostBasisRow: store.CostBasisRow{ChainID: "c1", Requests: 1, BilledNanos: 3e9, UnknownBilledNanos: 3e9}},
+		{Bucket: day(10), CostBasisRow: store.CostBasisRow{ChainID: "c1", Requests: 9, BilledNanos: 9e9}}, // outside the window
+	}
+	s := BuildSeries(plan, pts, Markups{Global: 50}, now)
+	if s.Granularity != "day" || len(s.Points) != 7 {
+		t.Fatalf("got %s with %d points", s.Granularity, len(s.Points))
+	}
+	if !s.Points[0].Start.Equal(time.Date(2026, 10, 22, 0, 0, 0, 0, wib)) {
+		t.Fatalf("first bucket starts %v", s.Points[0].Start)
+	}
+	p0, p6 := s.Points[0], s.Points[6]
+	if !near(p0.BilledUSD, 1.5, 1e-9) || !near(p0.CostUSD, 1, 1e-9) || !near(p0.RevenueUSD, 0.5, 1e-9) || p0.Requests != 2 {
+		t.Fatalf("day 22: %+v", p0)
+	}
+	if s.Points[3].Requests != 0 || s.Points[3].BilledUSD != 0 {
+		t.Fatalf("gap day not zero: %+v", s.Points[3])
+	}
+	// Unknown upstream cost is estimated as billed / (1 + 50%).
+	if !near(p6.CostUSD, 2, 1e-9) || !near(p6.RevenueUSD, 1, 1e-9) {
+		t.Fatalf("day 28: %+v", p6)
+	}
+}
+
+func TestBuildSeries_AllTimeFoldsMonths(t *testing.T) {
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, wib)
+	plan, _ := planSeries("all", now)
+	day := func(m time.Month, d int) int64 {
+		return (time.Date(2026, m, d, 0, 0, 0, 0, wib).Unix() + 7*3600) / 86400
+	}
+	pts := []store.CostBasisPoint{
+		{Bucket: day(8, 3), CostBasisRow: store.CostBasisRow{Requests: 1, BilledNanos: 2e9, UpstreamNanos: 1e9}},
+		{Bucket: day(8, 30), CostBasisRow: store.CostBasisRow{Requests: 1, BilledNanos: 2e9, UpstreamNanos: 1e9}},
+	}
+	s := BuildSeries(plan, pts, Markups{}, now)
+	if s.Granularity != "month" || len(s.Points) != 3 {
+		t.Fatalf("got %s with %d points", s.Granularity, len(s.Points))
+	}
+	if s.Points[0].Requests != 2 || !near(s.Points[0].RevenueUSD, 2, 1e-9) || s.Points[2].Requests != 0 {
+		t.Fatalf("months: %+v", s.Points)
+	}
+	if empty := BuildSeries(plan, nil, Markups{}, now); len(empty.Points) != 0 {
+		t.Fatalf("all time with no usage should have no points, got %d", len(empty.Points))
+	}
+}
+
+func TestPlanSeries_TodayIsHourly(t *testing.T) {
+	plan, err := planSeries("today", time.Date(2026, 10, 28, 3, 0, 0, 0, time.UTC)) // 10:00 WIB
+	if err != nil || plan.granularity != "hour" || plan.buckets != 11 {
+		t.Fatalf("plan %+v err %v", plan, err)
+	}
+	if _, err := planSeries("x", time.Now()); err == nil {
+		t.Fatal("expected an error for an unknown range")
 	}
 }

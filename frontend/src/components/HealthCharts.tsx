@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { ICONS } from "@/lib/icons";
 import { EmptyState, SectionTitle } from "./ui";
 import { fmtIssue } from "./HealthBadge";
+import { fmtDateTime } from "../lib/serverTime";
 
 // Provider-health trend charts. Raw snapshots are one row per minute per
 // account/model/capability, so they are first folded into ~48 equal time
@@ -76,7 +77,7 @@ export function fmtMs(v: number): string {
 const isLongRange = (range: string) => range === "7d" || range === "30d";
 const tickFor = (range: string) => (isLongRange(range) ? dayLabel : clockLabel);
 const tipFor = (range: string) => (ms: number) =>
-  new Date(ms).toLocaleString(undefined, isLongRange(range) ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+  fmtDateTime(ms, isLongRange(range) ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
 
 // ── Assembled view ───────────────────────────────────────────────────────────
 

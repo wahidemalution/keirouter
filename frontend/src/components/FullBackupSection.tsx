@@ -3,6 +3,7 @@ import { DatabaseBackup, Download, Upload } from "lucide-react";
 import { api } from "../lib/api";
 import { Button, Card, Field, Input, Modal, SectionHeader } from "./ui";
 import { useToast } from "./Toast";
+import { fmtDateTime } from "../lib/serverTime";
 
 const MIN_PASSPHRASE = 8;
 
@@ -67,7 +68,7 @@ export function FullBackupSection() {
       const r = await api.fullRestore(restoreFile, restorePass.trim());
       toast.success(
         "Restore complete",
-        `${r.rows.toLocaleString()} rows across ${r.tables} tables restored from ${new Date(r.backup_created_at).toLocaleString()}. Restart KeiRouter now.`,
+        `${r.rows.toLocaleString()} rows across ${r.tables} tables restored from ${fmtDateTime(r.backup_created_at)}. Restart KeiRouter now.`,
       );
       closeRestore();
     } catch (e) {

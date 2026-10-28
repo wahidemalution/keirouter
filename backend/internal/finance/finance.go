@@ -1,11 +1,10 @@
-// Package finance holds pure revenue, cost and upstream balance math for the
+// Package finance holds pure revenue and cost math for the
 // admin finance dashboard. Nanos are 1e-9 USD, micros are 1e-6 USD.
 package finance
 
 import (
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/store"
@@ -87,102 +86,6 @@ func BuildOverview(rows []store.CostBasisRow, m Markups, paid store.PaidOrderTot
 		o.InFlight += n
 	}
 	return o
-}
-
-type AccountBalance struct {
-	Account                                            store.UpstreamAccount
-	BalanceUSD, TopupsUSD, SpentUSD, SpentEstimatedUSD float64
-	SpentRangeUSD                                      float64
-	AvgDailyUSD                                        float64
-	DaysLeft                                           *float64
-	InFlight                                           int64
-	Low                                                bool
-}
-
-type UnmappedBucket struct {
-	Providers     []string
-	SpentRangeUSD float64
-	Requests      int64
-}
-
-type BalanceInput struct {
-	Accounts      []store.UpstreamAccount
-	TopupMicros   map[string]int64
-	SinceOpening  []store.CostBasisRow
-	Range, Last7d []store.CostBasisRow
-	Markups       Markups
-	InFlight      map[string]int64
-}
-
-// spendByProvider returns exact and estimated nanos per provider.
-func spendByProvider(rows []store.CostBasisRow, m Markups) (exact, est map[string]int64) {
-	exact, est = map[string]int64{}, map[string]int64{}
-	for _, r := range rows {
-		e, s := CostNanos(r, m)
-		exact[r.Provider] += e
-		est[r.Provider] += s
-	}
-	return exact, est
-}
-
-func sumProviders(by map[string]int64, providers []string) int64 {
-	var t int64
-	for _, p := range providers {
-		t += by[p]
-	}
-	return t
-}
-
-func Balances(in BalanceInput) ([]AccountBalance, UnmappedBucket) {
-	mapped := map[string]bool{}
-	for _, a := range in.Accounts {
-		for _, p := range a.Providers {
-			mapped[p] = true
-		}
-	}
-	openE, openS := spendByProvider(in.SinceOpening, in.Markups)
-	rangeE, rangeS := spendByProvider(in.Range, in.Markups)
-	weekE, weekS := spendByProvider(in.Last7d, in.Markups)
-
-	out := make([]AccountBalance, 0, len(in.Accounts))
-	for _, a := range in.Accounts {
-		exact := sumProviders(openE, a.Providers)
-		est := sumProviders(openS, a.Providers)
-		topups := in.TopupMicros[a.ID]
-		b := AccountBalance{
-			Account:           a,
-			BalanceUSD:        float64(a.OpeningBalanceMicros+topups)/microsPerUSD - usd(exact+est),
-			TopupsUSD:         float64(topups) / microsPerUSD,
-			SpentUSD:          usd(exact + est),
-			SpentEstimatedUSD: usd(est),
-			SpentRangeUSD:     usd(sumProviders(rangeE, a.Providers) + sumProviders(rangeS, a.Providers)),
-			AvgDailyUSD:       usd(sumProviders(weekE, a.Providers)+sumProviders(weekS, a.Providers)) / 7,
-			InFlight:          sumProviders(in.InFlight, a.Providers),
-		}
-		b.Low = a.LowBalanceMicros > 0 && b.BalanceUSD < float64(a.LowBalanceMicros)/microsPerUSD
-		if b.AvgDailyUSD > 0 {
-			d := b.BalanceUSD / b.AvgDailyUSD
-			b.DaysLeft = &d
-		}
-		out = append(out, b)
-	}
-
-	var u UnmappedBucket
-	seen := map[string]bool{}
-	for _, r := range in.Range {
-		if mapped[r.Provider] {
-			continue
-		}
-		e, s := CostNanos(r, in.Markups)
-		u.SpentRangeUSD += usd(e + s)
-		u.Requests += r.Requests
-		if !seen[r.Provider] {
-			seen[r.Provider] = true
-			u.Providers = append(u.Providers, r.Provider)
-		}
-	}
-	sort.Strings(u.Providers)
-	return out, u
 }
 
 // RangeStart returns the inclusive lower bound for a named window.

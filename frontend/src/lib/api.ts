@@ -1,6 +1,8 @@
 // Typed client for the KeiRouter admin API. All calls go through the dev-server
 // proxy (or the embedded static server in production) to /api.
 
+import { serverIana } from "./serverTime";
+
 export interface RegionOption {
   id: string;
   label: string;
@@ -1629,13 +1631,10 @@ async function fetchWithTimeout(
   }
 }
 
-/** Returns the browser's IANA timezone (e.g. "Asia/Jakarta"), falling back to UTC. */
-function browserTZ(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
+/** The server's IANA zone for the `tz` query parameter. "" lets the server
+ * use its own zone, so "today" is the host's day, not the viewer's. */
+function serverTZParam(): string {
+  return encodeURIComponent(serverIana());
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -1995,74 +1994,24 @@ export interface FinanceOverview {
   in_flight: number;
 }
 
-export type UpstreamAccountStatus = "active" | "planned" | "archived";
-
-export interface UpstreamAccount {
-  id: string;
-  name: string;
-  url: string;
-  status: UpstreamAccountStatus;
-  opening_balance_usd: number;
-  /** RFC3339, or "" when unset. */
-  opening_at: string;
-  low_balance_usd: number;
-  /** RFC3339, or "" when no alert has fired since the threshold was last set. */
-  alert_fired_at: string;
-  providers: string[];
-  created_at: string;
-  updated_at: string;
+export interface FinanceSeriesPoint {
+  /** RFC3339 start of the bucket, in WIB. */
+  start: string;
+  billed_usd: number;
+  cost_usd: number;
+  revenue_usd: number;
+  requests: number;
 }
 
-export interface UpstreamAccountBalance extends UpstreamAccount {
-  balance_usd: number;
-  topups_usd: number;
-  spent_usd: number;
-  spent_estimated_usd: number;
-  spent_range_usd: number;
-  avg_daily_usd: number;
-  /** null when there is no recent spend to project from. */
-  days_left: number | null;
-  in_flight: number;
-  low: boolean;
+export interface FinanceSeries {
+  granularity: "hour" | "day" | "month";
+  points: FinanceSeriesPoint[];
 }
 
 export interface FinanceReport {
   range: FinanceRange;
   overview: FinanceOverview;
-  accounts: UpstreamAccountBalance[];
-  unmapped: { providers: string[]; spent_range_usd: number; requests: number };
-}
-
-export interface UpstreamAccountInput {
-  name?: string;
-  url?: string;
-  status?: UpstreamAccountStatus;
-  opening_balance_usd?: number;
-  /** RFC3339 or YYYY-MM-DD. */
-  opening_at?: string;
-  low_balance_usd?: number;
-  providers?: string[];
-}
-
-export interface UpstreamTopup {
-  id: string;
-  account_id: string;
-  amount_usd: number;
-  topup_at: string;
-  note: string;
-  actor: string;
-  created_at: string;
-}
-
-export interface FinanceAlertSettings {
-  enabled: boolean;
-  discord_webhook_url_masked: string;
-  configured: boolean;
-}
-
-export interface FinanceProviderOption {
-  id: string;
-  label: string;
+  series: FinanceSeries;
 }
 
 export interface UsageEconomics {
@@ -2741,26 +2690,9 @@ export const api = {
   updateHostingCost: (id: string, body: HostingCostInput) => request<HostingCost>("PUT", `/hosting/costs/${encodeURIComponent(id)}`, body),
   deleteHostingCost: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
 
-  // Finance monitor (admin): profit, upstream balances, top-ups, alerts.
+  // Finance monitor (admin): credit, revenue and provider cost.
   financeReport: (range: FinanceRange) =>
     request<FinanceReport>("GET", `/payments/finance?range=${encodeURIComponent(range)}`),
-  financeProviders: () => request<{ providers: FinanceProviderOption[] }>("GET", "/payments/providers"),
-  upstreamAccounts: () => request<{ accounts: UpstreamAccount[] }>("GET", "/payments/upstream-accounts"),
-  createUpstreamAccount: (body: UpstreamAccountInput) =>
-    request<UpstreamAccount>("POST", "/payments/upstream-accounts", body),
-  updateUpstreamAccount: (id: string, body: UpstreamAccountInput) =>
-    request<UpstreamAccount>("PATCH", `/payments/upstream-accounts/${encodeURIComponent(id)}`, body),
-  upstreamTopups: (accountId: string) =>
-    request<{ topups: UpstreamTopup[] }>("GET", `/payments/upstream-accounts/${encodeURIComponent(accountId)}/topups`),
-  createUpstreamTopup: (accountId: string, body: { amount_usd: number; topup_at?: string; note?: string }) =>
-    request<UpstreamTopup>("POST", `/payments/upstream-accounts/${encodeURIComponent(accountId)}/topups`, body),
-  deleteUpstreamTopup: (id: string) =>
-    request<{ ok: boolean }>("DELETE", `/payments/upstream-topups/${encodeURIComponent(id)}`),
-  financeAlerts: () => request<FinanceAlertSettings>("GET", "/payments/alerts"),
-  /** `enabled` is always sent: the backend reads a missing field as false. */
-  updateFinanceAlerts: (body: { enabled: boolean; discord_webhook_url?: string }) =>
-    request<FinanceAlertSettings>("PUT", "/payments/alerts", body),
-  testFinanceAlerts: () => request<{ ok: boolean }>("POST", "/payments/alerts/test"),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
   createKey: (name: string, opts?: {
@@ -2849,30 +2781,30 @@ export const api = {
   adjustKeyLimit: (keyId: string, input: { limit_usd: number; reason: string; idempotency_key: string }) =>
     request<{ adjustment: KeyLimitAdjustment }>("POST", `/keys/${keyId}/limit`, input),
 
-  usage: (period: string) => request<UsageSummary>("GET", `/usage?period=${period}&tz=${browserTZ()}`),
+  usage: (period: string) => request<UsageSummary>("GET", `/usage?period=${period}&tz=${serverTZParam()}`),
   usageInsights: (period: string, opts: { limit?: number; buckets?: number } = {}) => {
-    const qs = new URLSearchParams({ period, tz: browserTZ() });
+    const qs = new URLSearchParams({ period, tz: serverTZParam() });
     if (opts.limit) qs.set("limit", String(opts.limit));
     if (opts.buckets) qs.set("buckets", String(opts.buckets));
     return request<UsageInsights>("GET", `/usage/insights?${qs.toString()}`);
   },
   chainUsage: (period: string) =>
-    request<{ period: string; since: string; chains: ChainUsage[] }>("GET", `/usage/chains?period=${period}&tz=${browserTZ()}`),
+    request<{ period: string; since: string; chains: ChainUsage[] }>("GET", `/usage/chains?period=${period}&tz=${serverTZParam()}`),
   modelUsage: (period: string) =>
-    request<ModelUsageResponse>("GET", `/usage/models?period=${period}&tz=${browserTZ()}`),
+    request<ModelUsageResponse>("GET", `/usage/models?period=${period}&tz=${serverTZParam()}`),
   keyModelUsage: (keyId: string, period: string) =>
-    request<{ period: string; since: string; models: KeyModelUsage[] }>("GET", `/keys/${keyId}/models?period=${period}&tz=${browserTZ()}`),
+    request<{ period: string; since: string; models: KeyModelUsage[] }>("GET", `/keys/${keyId}/models?period=${period}&tz=${serverTZParam()}`),
   modelKeyUsage: (provider: string, model: string, period: string) => {
-    const qs = new URLSearchParams({ period, tz: browserTZ(), provider, model });
+    const qs = new URLSearchParams({ period, tz: serverTZParam(), provider, model });
     return request<{ period: string; since: string; provider: string; model: string; keys: ModelKeyUsage[] }>("GET", `/usage/models/keys?${qs.toString()}`);
   },
   usageLeaderboard: (period: string) =>
-    request<UsageLeaderboard>("GET", `/usage/leaderboard?period=${period}&tz=${browserTZ()}`),
+    request<UsageLeaderboard>("GET", `/usage/leaderboard?period=${period}&tz=${serverTZParam()}`),
 
   quota: (period: string) =>
-    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${browserTZ()}`),
+    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${serverTZParam()}`),
   quotaByProvider: (provider: string) =>
-    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=today&tz=${browserTZ()}&provider=${provider}`),
+    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=today&tz=${serverTZParam()}&provider=${provider}`),
 
   consoleLog: () => request<{ epoch: string; logs: ConsoleLogEntry[] }>("GET", "/console"),
 
@@ -3168,7 +3100,7 @@ export const api = {
   exportAudit: (filter?: AuditFilter) =>
     requestBlob("GET", `/audit/export${auditQuery({ ...filter, cursor: undefined, limit: undefined })}`),
   guardrailStats: (period: string, opts: { buckets?: number; api_key_id?: string; model?: string; chain_id?: string } = {}) => {
-    const qs = new URLSearchParams({ period, tz: browserTZ() });
+    const qs = new URLSearchParams({ period, tz: serverTZParam() });
     for (const [k, v] of Object.entries(opts)) {
       if (v) qs.set(k, String(v));
     }
@@ -3179,7 +3111,7 @@ export const api = {
     for (const [k, v] of Object.entries(filter ?? {})) {
       if (v) qs.set(k, String(v));
     }
-    if (filter?.period) qs.set("tz", browserTZ());
+    if (filter?.period) qs.set("tz", serverTZParam());
     const suffix = qs.toString();
     return request<{ logs: GuardrailLogEntry[] }>(
       "GET",
@@ -3311,6 +3243,14 @@ export interface GatewayInfo {
   go_version: string;
   os: string;
   arch: string;
+  /** The host's current time, RFC3339 with its UTC offset. */
+  server_time: string;
+  /** Zone abbreviation on the host, e.g. "WIB" or "UTC". */
+  tz_name: string;
+  /** The host's offset from UTC in seconds. */
+  tz_offset_s: number;
+  /** IANA zone from the host's TZ setting, or "" when only the offset is known. */
+  tz_iana?: string;
 }
 
 export type HealthStatus = "healthy" | "degraded" | "unhealthy" | "unknown" | "disabled";

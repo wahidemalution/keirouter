@@ -17,6 +17,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu";
 import { dashboard } from "../lib/dashboardRoutes";
+import { fmtDateTime } from "../lib/serverTime";
 
 // ── Local primitives (match Keys.tsx / ConnectKit field styling) ─────────────
 
@@ -650,7 +651,7 @@ function PoolRow({ pool, accounts, selected, onSelect, onEdit, onDelete, onTest,
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <PoolStatus status={testingThis ? "checking" : pool.test_status} />
           {!testingThis && pool.last_tested && (
-            <span className="whitespace-nowrap text-[12px] tabular-nums text-fg-muted" title={new Date(pool.last_tested).toLocaleString()}>
+            <span className="whitespace-nowrap text-[12px] tabular-nums text-fg-muted" title={fmtDateTime(pool.last_tested)}>
               {relTime(pool.last_tested)}
             </span>
           )}
