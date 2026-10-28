@@ -184,7 +184,6 @@ const TITLE_BY_PATH: Record<string, string> = {
   "/finance": "Finance",
   "/finance/hosting": "Hosting finance",
   "/finance/orders": "Portal orders",
-  "/finance/settings": "Finance settings",
   "/hosting": "Hosting instances",
   "/hosting/coupons": "Hosting coupons",
   "/hosting/settings": "Hosting setup",

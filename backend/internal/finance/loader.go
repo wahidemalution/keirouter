@@ -26,8 +26,6 @@ type Loader struct {
 type Report struct {
 	Range    string
 	Overview Overview
-	Accounts []AccountBalance
-	Unmapped UnmappedBucket
 }
 
 func (l *Loader) now() time.Time {
@@ -66,7 +64,7 @@ func (l *Loader) Markups(ctx context.Context) (Markups, error) {
 	return m, nil
 }
 
-// Report builds the overview, account balances and unmapped bucket for a range.
+// Report builds the overview for a range.
 func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	now := l.now()
 	start, err := RangeStart(rangeName, now)
@@ -89,68 +87,8 @@ func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	inflight := l.inflight()
-	accounts, unmapped, err := l.balances(ctx, now, m, rangeRows, inflight)
-	if err != nil {
-		return Report{}, err
-	}
 	return Report{
 		Range:    rangeName,
-		Overview: BuildOverview(rangeRows, m, paid, outstanding, inflight),
-		Accounts: accounts,
-		Unmapped: unmapped,
+		Overview: BuildOverview(rangeRows, m, paid, outstanding, l.inflight()),
 	}, nil
-}
-
-// Balances returns every upstream account's balance. SpentRangeUSD is
-// left at zero: callers (the alert loop) only need balance and burn rate.
-func (l *Loader) Balances(ctx context.Context) ([]AccountBalance, error) {
-	m, err := l.Markups(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Range spend is not needed for balances; skip the all-time aggregate.
-	accounts, _, err := l.balances(ctx, l.now(), m, nil, l.inflight())
-	return accounts, err
-}
-
-func (l *Loader) balances(ctx context.Context, now time.Time, m Markups, rangeRows []store.CostBasisRow, inflight map[string]int64) ([]AccountBalance, UnmappedBucket, error) {
-	up := l.DB.Upstream()
-	accounts, err := up.List(ctx)
-	if err != nil {
-		return nil, UnmappedBucket{}, err
-	}
-	topups, err := up.TopupTotals(ctx)
-	if err != nil {
-		return nil, UnmappedBucket{}, err
-	}
-	since := map[string]time.Time{}
-	for _, a := range accounts {
-		for _, p := range a.Providers {
-			since[p] = a.OpeningAt
-		}
-	}
-	var sinceOpening []store.CostBasisRow
-	if len(since) > 0 {
-		if sinceOpening, err = l.DB.Usage().CostBasisByProviderSince(ctx, store.DefaultTenantID, since); err != nil {
-			return nil, UnmappedBucket{}, err
-		}
-	}
-	last7d, err := l.DB.Usage().CostBasis(ctx, store.DefaultTenantID, now.Add(-7*24*time.Hour))
-	if err != nil {
-		return nil, UnmappedBucket{}, err
-	}
-	out, unmapped := Balances(BalanceInput{
-		Accounts:     accounts,
-		TopupMicros:  topups,
-		SinceOpening: sinceOpening,
-		Range:        rangeRows,
-		Last7d:       last7d,
-		Markups:      m,
-		InFlight:     inflight,
-	})
-	if unmapped.Providers == nil {
-		unmapped.Providers = []string{}
-	}
-	return out, unmapped, nil
 }

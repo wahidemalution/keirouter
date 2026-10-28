@@ -1995,74 +1995,9 @@ export interface FinanceOverview {
   in_flight: number;
 }
 
-export type UpstreamAccountStatus = "active" | "planned" | "archived";
-
-export interface UpstreamAccount {
-  id: string;
-  name: string;
-  url: string;
-  status: UpstreamAccountStatus;
-  opening_balance_usd: number;
-  /** RFC3339, or "" when unset. */
-  opening_at: string;
-  low_balance_usd: number;
-  /** RFC3339, or "" when no alert has fired since the threshold was last set. */
-  alert_fired_at: string;
-  providers: string[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface UpstreamAccountBalance extends UpstreamAccount {
-  balance_usd: number;
-  topups_usd: number;
-  spent_usd: number;
-  spent_estimated_usd: number;
-  spent_range_usd: number;
-  avg_daily_usd: number;
-  /** null when there is no recent spend to project from. */
-  days_left: number | null;
-  in_flight: number;
-  low: boolean;
-}
-
 export interface FinanceReport {
   range: FinanceRange;
   overview: FinanceOverview;
-  accounts: UpstreamAccountBalance[];
-  unmapped: { providers: string[]; spent_range_usd: number; requests: number };
-}
-
-export interface UpstreamAccountInput {
-  name?: string;
-  url?: string;
-  status?: UpstreamAccountStatus;
-  opening_balance_usd?: number;
-  /** RFC3339 or YYYY-MM-DD. */
-  opening_at?: string;
-  low_balance_usd?: number;
-  providers?: string[];
-}
-
-export interface UpstreamTopup {
-  id: string;
-  account_id: string;
-  amount_usd: number;
-  topup_at: string;
-  note: string;
-  actor: string;
-  created_at: string;
-}
-
-export interface FinanceAlertSettings {
-  enabled: boolean;
-  discord_webhook_url_masked: string;
-  configured: boolean;
-}
-
-export interface FinanceProviderOption {
-  id: string;
-  label: string;
 }
 
 export interface UsageEconomics {
@@ -2741,26 +2676,9 @@ export const api = {
   updateHostingCost: (id: string, body: HostingCostInput) => request<HostingCost>("PUT", `/hosting/costs/${encodeURIComponent(id)}`, body),
   deleteHostingCost: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
 
-  // Finance monitor (admin): profit, upstream balances, top-ups, alerts.
+  // Finance monitor (admin): credit, revenue and provider cost.
   financeReport: (range: FinanceRange) =>
     request<FinanceReport>("GET", `/payments/finance?range=${encodeURIComponent(range)}`),
-  financeProviders: () => request<{ providers: FinanceProviderOption[] }>("GET", "/payments/providers"),
-  upstreamAccounts: () => request<{ accounts: UpstreamAccount[] }>("GET", "/payments/upstream-accounts"),
-  createUpstreamAccount: (body: UpstreamAccountInput) =>
-    request<UpstreamAccount>("POST", "/payments/upstream-accounts", body),
-  updateUpstreamAccount: (id: string, body: UpstreamAccountInput) =>
-    request<UpstreamAccount>("PATCH", `/payments/upstream-accounts/${encodeURIComponent(id)}`, body),
-  upstreamTopups: (accountId: string) =>
-    request<{ topups: UpstreamTopup[] }>("GET", `/payments/upstream-accounts/${encodeURIComponent(accountId)}/topups`),
-  createUpstreamTopup: (accountId: string, body: { amount_usd: number; topup_at?: string; note?: string }) =>
-    request<UpstreamTopup>("POST", `/payments/upstream-accounts/${encodeURIComponent(accountId)}/topups`, body),
-  deleteUpstreamTopup: (id: string) =>
-    request<{ ok: boolean }>("DELETE", `/payments/upstream-topups/${encodeURIComponent(id)}`),
-  financeAlerts: () => request<FinanceAlertSettings>("GET", "/payments/alerts"),
-  /** `enabled` is always sent: the backend reads a missing field as false. */
-  updateFinanceAlerts: (body: { enabled: boolean; discord_webhook_url?: string }) =>
-    request<FinanceAlertSettings>("PUT", "/payments/alerts", body),
-  testFinanceAlerts: () => request<{ ok: boolean }>("POST", "/payments/alerts/test"),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
   createKey: (name: string, opts?: {

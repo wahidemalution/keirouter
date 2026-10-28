@@ -956,59 +956,6 @@ func (r *UsageRepo) CostBasis(ctx context.Context, tenantID string, since time.T
 	return r.queryCostBasis(ctx, "", tenantID, formatTime(since))
 }
 
-// DistinctProviders lists the non-empty provider ids that appear in a
-// tenant's usage, sorted. It reads only the provider column so the finance
-// provider picker avoids an aggregate over every usage row.
-func (r *UsageRepo) DistinctProviders(ctx context.Context, tenantID string) ([]string, error) {
-	q := r.db.rebind(`SELECT DISTINCT provider FROM usage_records
-		WHERE tenant_id = ? AND provider IS NOT NULL AND provider <> '' ORDER BY provider`)
-	rows, err := r.db.sql.QueryContext(ctx, q, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("store: distinct providers: %w", err)
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, fmt.Errorf("store: distinct providers scan: %w", err)
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// CostBasisByProviderSince is CostBasis with a per-provider cut-off. Providers
-// absent from the map are excluded. One query runs per distinct cut-off.
-func (r *UsageRepo) CostBasisByProviderSince(ctx context.Context, tenantID string, since map[string]time.Time) ([]CostBasisRow, error) {
-	groups := map[string][]string{}
-	for provider, t := range since {
-		k := formatTime(t)
-		groups[k] = append(groups[k], provider)
-	}
-	var out []CostBasisRow
-	for ts, providers := range groups {
-		sort.Strings(providers)
-		ph := strings.TrimSuffix(strings.Repeat("?,", len(providers)), ",")
-		args := []any{tenantID, ts}
-		for _, p := range providers {
-			args = append(args, p)
-		}
-		rows, err := r.queryCostBasis(ctx, " AND provider IN ("+ph+")", args...)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rows...)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Provider != out[j].Provider {
-			return out[i].Provider < out[j].Provider
-		}
-		return out[i].ChainID < out[j].ChainID
-	})
-	return out, nil
-}
-
 // OutstandingPortalCredit sums the remaining total-period budget of every
 // portal user's key: max(0, limit - spent), spend using the same
 // cost_nanos/1000 rule as SpendAndTokensBatch.

@@ -29,41 +29,6 @@ func TestCostBasisGroupsByProviderChain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []CostBasisRow{{Provider: "p1", ChainID: "c1", Requests: 2,
 		BilledNanos: 18e9, UpstreamNanos: 10e9, UnknownBilledNanos: 3e9}}, rows)
-
-	byProv, err := db.Usage().CostBasisByProviderSince(ctx, DefaultTenantID, map[string]time.Time{
-		"p1": since, "p2": now.Add(-3 * time.Hour),
-	})
-	require.NoError(t, err)
-	require.Len(t, byProv, 1)
-	require.Equal(t, int64(2), byProv[0].Requests)
-
-	byProv, err = db.Usage().CostBasisByProviderSince(ctx, DefaultTenantID, map[string]time.Time{
-		"p1": now.Add(-3 * time.Hour),
-	})
-	require.NoError(t, err)
-	require.Len(t, byProv, 1)
-	require.Equal(t, int64(3), byProv[0].Requests)
-}
-
-func TestUsageDistinctProviders(t *testing.T) {
-	db := newTestDB(t)
-	ctx := context.Background()
-	now := time.Now().UTC()
-	got, err := db.Usage().DistinctProviders(ctx, DefaultTenantID)
-	require.NoError(t, err)
-	require.Empty(t, got)
-	other := finRec("x", "p9", "c1", 1, 1, false, now)
-	other.TenantID = "other"
-	require.NoError(t, db.Usage().RecordBatch(ctx, []UsageRecord{
-		finRec("a", "p2", "c1", 1, 1, false, now),
-		finRec("b", "p1", "c1", 1, 1, false, now.Add(-400*24*time.Hour)),
-		finRec("c", "p2", "c2", 1, 1, false, now),
-		finRec("d", "", "c2", 1, 1, false, now),
-		other,
-	}))
-	got, err = db.Usage().DistinctProviders(ctx, DefaultTenantID)
-	require.NoError(t, err)
-	require.Equal(t, []string{"p1", "p2"}, got)
 }
 
 func TestPaidTotalsSince(t *testing.T) {
