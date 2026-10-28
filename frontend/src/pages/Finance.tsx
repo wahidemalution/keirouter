@@ -5,8 +5,9 @@ import { Network, ReceiptText, Server } from "lucide-react";
 import { api, type FinanceRange } from "../lib/api";
 import { dashboard } from "../lib/dashboardRoutes";
 import { PageHeader } from "../components/Layout";
-import { SegmentedControl, TabBar, TabPanel } from "../components/ui";
+import { SegmentedControl, Skeleton, TabBar, TabPanel } from "../components/ui";
 import { FinanceOverview, RANGE_LABEL } from "./payments/FinanceOverview";
+import { FinanceChart } from "./payments/FinanceChart";
 import { PortalOrders } from "./payments/PortalOrders";
 import { FinanceTab as HostingFinance } from "./hosting/HostingFinance";
 import { QK, REFETCH_MS, errorText } from "./payments/shared";
@@ -82,7 +83,14 @@ export function FinancePage() {
       />
       <TabPanel idPrefix={TABS_ID} value={tab} className="space-y-6">
         {tab === "gateway" ? (
-          <FinanceOverview overview={finance.data?.overview} range={range} loading={finance.isLoading} error={financeError} />
+          <>
+            <FinanceOverview overview={finance.data?.overview} range={range} loading={finance.isLoading} error={financeError} />
+            {finance.data ? (
+              <FinanceChart series={finance.data.series} range={finance.data.range} />
+            ) : finance.isLoading ? (
+              <Skeleton className="h-[372px] w-full rounded-2xl" />
+            ) : null}
+          </>
         ) : tab === "hosting" ? (
           <HostingFinance />
         ) : (

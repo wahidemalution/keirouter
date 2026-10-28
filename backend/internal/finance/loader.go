@@ -26,6 +26,7 @@ type Loader struct {
 type Report struct {
 	Range    string
 	Overview Overview
+	Series   Series
 }
 
 func (l *Loader) now() time.Time {
@@ -64,7 +65,7 @@ func (l *Loader) Markups(ctx context.Context) (Markups, error) {
 	return m, nil
 }
 
-// Report builds the overview for a range.
+// Report builds the overview and chart series for a range.
 func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	now := l.now()
 	start, err := RangeStart(rangeName, now)
@@ -87,8 +88,17 @@ func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	plan, err := planSeries(rangeName, now)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: %q", ErrBadRange, rangeName)
+	}
+	pts, err := l.DB.Usage().CostBasisSeries(ctx, store.DefaultTenantID, plan.start, plan.slot, wibOffset)
+	if err != nil {
+		return Report{}, err
+	}
 	return Report{
 		Range:    rangeName,
 		Overview: BuildOverview(rangeRows, m, paid, outstanding, l.inflight()),
+		Series:   BuildSeries(plan, pts, m, now),
 	}, nil
 }

@@ -81,6 +81,15 @@ func TestFinance_OverviewProfit(t *testing.T) {
 	require.InDelta(t, 5.0, ov["revenue_usd"].(float64), 1e-9)
 	require.InDelta(t, 15.0, ov["billed_usd"].(float64), 1e-9)
 	require.InDelta(t, 50.0, ov["margin_pct"].(float64), 1e-9)
+
+	se := m["series"].(map[string]any)
+	require.Equal(t, "month", se["granularity"])
+	pts := se["points"].([]any)
+	require.NotEmpty(t, pts)
+	last := pts[len(pts)-1].(map[string]any)
+	require.InDelta(t, 15.0, last["billed_usd"].(float64), 1e-9)
+	require.InDelta(t, 10.0, last["cost_usd"].(float64), 1e-9)
+	require.InDelta(t, 5.0, last["revenue_usd"].(float64), 1e-9)
 }
 
 func TestFinance_UpstreamRoutesRemoved(t *testing.T) {

@@ -951,6 +951,43 @@ func (r *UsageRepo) queryCostBasis(ctx context.Context, where string, args ...an
 	return out, rows.Err()
 }
 
+// CostBasisPoint is a CostBasisRow (provider left empty) for one time bucket.
+type CostBasisPoint struct {
+	Bucket int64
+	CostBasisRow
+}
+
+// CostBasisSeries groups non-backfilled usage since the cut-off by time bucket
+// and chain. A bucket is floor((unix seconds + offsetSecs) / slotSecs), so an
+// offset of a zone's UTC offset aligns daily buckets to that zone's midnight.
+func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since time.Time, slotSecs, offsetSecs int64) ([]CostBasisPoint, error) {
+	if slotSecs <= 0 {
+		return nil, fmt.Errorf("store: cost basis series: slot must be positive")
+	}
+	q := r.db.rebind(fmt.Sprintf(`
+		SELECT CAST((%s + ?) / ? AS BIGINT) AS bucket, COALESCE(chain_id, ''), COUNT(*),
+			COALESCE(SUM(cost_nanos), 0),
+			COALESCE(SUM(upstream_cost_nanos), 0),
+			COALESCE(SUM(CASE WHEN upstream_cost_nanos = 0 THEN cost_nanos ELSE 0 END), 0)
+		FROM usage_records
+		WHERE tenant_id = ? AND pricing_backfilled = 0 AND created_at >= ?
+		GROUP BY bucket, COALESCE(chain_id, '') ORDER BY bucket, COALESCE(chain_id, '')`, r.db.epochExpr("created_at")))
+	rows, err := r.db.sql.QueryContext(ctx, q, offsetSecs, slotSecs, tenantID, formatTime(since))
+	if err != nil {
+		return nil, fmt.Errorf("store: cost basis series: %w", err)
+	}
+	defer rows.Close()
+	var out []CostBasisPoint
+	for rows.Next() {
+		var p CostBasisPoint
+		if err := rows.Scan(&p.Bucket, &p.ChainID, &p.Requests, &p.BilledNanos, &p.UpstreamNanos, &p.UnknownBilledNanos); err != nil {
+			return nil, fmt.Errorf("store: cost basis series scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // CostBasis groups non-backfilled usage since the cut-off by provider and chain.
 func (r *UsageRepo) CostBasis(ctx context.Context, tenantID string, since time.Time) ([]CostBasisRow, error) {
 	return r.queryCostBasis(ctx, "", tenantID, formatTime(since))

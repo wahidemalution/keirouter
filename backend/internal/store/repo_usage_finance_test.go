@@ -31,6 +31,27 @@ func TestCostBasisGroupsByProviderChain(t *testing.T) {
 		BilledNanos: 18e9, UpstreamNanos: 10e9, UnknownBilledNanos: 3e9}}, rows)
 }
 
+func TestCostBasisSeriesBucketsByZoneDay(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	wib := int64(7 * 3600)
+	// 2026-10-10 18:30 UTC is 01:30 on Oct 11 in WIB, so it lands in the next WIB day.
+	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, db.Usage().RecordBatch(ctx, []UsageRecord{
+		finRec("a", "p1", "c1", 15e9, 10e9, false, day.Add(10*time.Hour)),
+		finRec("b", "p1", "c1", 3e9, 0, false, day.Add(16*time.Hour+59*time.Minute)),
+		finRec("c", "p1", "c1", 4e9, 2e9, false, day.Add(18*time.Hour+30*time.Minute)),
+		finRec("d", "p1", "c1", 9e9, 9e9, true, day.Add(11*time.Hour)),
+	}))
+	pts, err := db.Usage().CostBasisSeries(ctx, DefaultTenantID, day, 86400, wib)
+	require.NoError(t, err)
+	first := (day.Unix() + wib) / 86400
+	require.Equal(t, []CostBasisPoint{
+		{Bucket: first, CostBasisRow: CostBasisRow{ChainID: "c1", Requests: 2, BilledNanos: 18e9, UpstreamNanos: 10e9, UnknownBilledNanos: 3e9}},
+		{Bucket: first + 1, CostBasisRow: CostBasisRow{ChainID: "c1", Requests: 1, BilledNanos: 4e9, UpstreamNanos: 2e9}},
+	}, pts)
+}
+
 func TestPaidTotalsSince(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

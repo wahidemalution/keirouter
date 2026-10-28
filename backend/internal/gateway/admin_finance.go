@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -65,8 +66,22 @@ func overviewView(o finance.Overview) map[string]any {
 	}
 }
 
-// adminFinanceReport returns the overview for ?range=today|7d|30d|all
-// (default 30d).
+func seriesView(se finance.Series) map[string]any {
+	points := make([]map[string]any, 0, len(se.Points))
+	for _, p := range se.Points {
+		points = append(points, map[string]any{
+			"start":       p.Start.Format(time.RFC3339),
+			"billed_usd":  p.BilledUSD,
+			"cost_usd":    p.CostUSD,
+			"revenue_usd": p.RevenueUSD,
+			"requests":    p.Requests,
+		})
+	}
+	return map[string]any{"granularity": se.Granularity, "points": points}
+}
+
+// adminFinanceReport returns the overview and chart series for
+// ?range=today|7d|30d|all (default 30d).
 func (s *Server) adminFinanceReport(w http.ResponseWriter, r *http.Request) {
 	rangeName := r.URL.Query().Get("range")
 	if rangeName == "" {
@@ -84,5 +99,6 @@ func (s *Server) adminFinanceReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"range":    rep.Range,
 		"overview": overviewView(rep.Overview),
+		"series":   seriesView(rep.Series),
 	})
 }

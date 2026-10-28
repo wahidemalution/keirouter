@@ -1995,9 +1995,24 @@ export interface FinanceOverview {
   in_flight: number;
 }
 
+export interface FinanceSeriesPoint {
+  /** RFC3339 start of the bucket, in WIB. */
+  start: string;
+  billed_usd: number;
+  cost_usd: number;
+  revenue_usd: number;
+  requests: number;
+}
+
+export interface FinanceSeries {
+  granularity: "hour" | "day" | "month";
+  points: FinanceSeriesPoint[];
+}
+
 export interface FinanceReport {
   range: FinanceRange;
   overview: FinanceOverview;
+  series: FinanceSeries;
 }
 
 export interface UsageEconomics {
