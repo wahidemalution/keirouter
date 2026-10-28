@@ -24,7 +24,7 @@ type Tab = (typeof TABS)[number];
 const TABS_ID = "finance-tabs";
 
 const DESCRIPTION: Record<Tab, string> = {
-  gateway: "AI gateway money: credit sold, cost basis, profit and upstream provider balances.",
+  gateway: "AI gateway money: credit sold, revenue, provider cost and upstream provider balances.",
   hosting: "Hosting money: revenue from paid orders against what the servers cost.",
   orders: "Every portal payment, for credit top-ups and hosting. Approve one here if the gateway missed it.",
   settings: "Opening balances, alert thresholds and how providers map to upstream accounts.",
