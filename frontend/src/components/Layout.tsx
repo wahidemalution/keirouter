@@ -183,6 +183,7 @@ const TITLE_BY_PATH: Record<string, string> = {
   "/portal-users": "Portal users",
   "/finance": "Finance",
   "/finance/hosting": "Hosting finance",
+  "/finance/costs": "Operating costs",
   "/finance/orders": "Portal orders",
   "/hosting": "Hosting instances",
   "/hosting/coupons": "Hosting coupons",

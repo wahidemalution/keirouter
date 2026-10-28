@@ -99,7 +99,6 @@ export function FinanceTab() {
       <RefundWarning refunds={f.refunds_needed ?? []} />
       <CurrentMonth f={f} />
       <MonthlyChart f={f} range={range} onRange={setRange} fetching={q.isFetching} />
-      <CostsPanel costs={f.costs} />
     </div>
   );
 }
@@ -212,7 +211,7 @@ function MonthlyChart({ f, range, onRange, fetching }: { f: HostingFinance; rang
           icon={TrendingUp}
           size="sm"
           title="No revenue or costs yet"
-          hint="The chart fills in once a hosting order is paid or an operating cost is added below."
+          hint="The chart fills in once a hosting order is paid or a cost is added on the Operating costs tab."
         />
       ) : view === "chart" ? (
         <div className={cn("px-4 pb-3 pt-4", VIZ_VARS)}>
@@ -352,6 +351,28 @@ function RefundWarning({ refunds }: { refunds: NonNullable<HostingFinance["refun
 
 // ─── Operating costs ────────────────────────────────────────────────────────
 
+/** The Operating costs tab. Costs ride on the hosting finance response, so a
+ * cost change refreshes the hosting chart through the same query key. */
+export function CostsTab() {
+  const q = useQuery({ queryKey: [...QK_HOSTING.finance, "costs"], queryFn: () => api.hostingFinance(1) });
+  if (q.isLoading && !q.data) {
+    return (
+      <LoadingRegion label="Loading operating costs">
+        <Skeleton className="h-[240px] w-full rounded-2xl" />
+      </LoadingRegion>
+    );
+  }
+  if (!q.data) {
+    return <ErrorBanner message={`Couldn't load operating costs. ${q.isError ? errorText(q.error) : ""}`.trim()} />;
+  }
+  return (
+    <div className="space-y-6">
+      {q.isError && <ErrorBanner message={`Couldn't refresh the costs. The list below may be out of date. ${errorText(q.error)}`} />}
+      <CostsPanel costs={q.data.costs} />
+    </div>
+  );
+}
+
 function CostsPanel({ costs }: { costs: HostingCost[] }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -389,7 +410,7 @@ function CostsPanel({ costs }: { costs: HostingCost[] }) {
     <Panel
       icon={Coins}
       title="Operating costs"
-      subtitle={costs.length ? `This month: ${idr(monthTotal)} across ${count(costs.length)} costs.` : "VPS rental or purchase, domains and other hosting costs."}
+      subtitle={costs.length ? `This month: ${idr(monthTotal)} across ${count(costs.length)} costs.` : undefined}
       action={
         <Button onClick={() => setEditing("new")}>
           <Plus aria-hidden="true" />

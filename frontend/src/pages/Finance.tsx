@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { Network, ReceiptText, Server } from "lucide-react";
+import { Coins, Network, ReceiptText, Server } from "lucide-react";
 import { api, type FinanceRange } from "../lib/api";
 import { dashboard } from "../lib/dashboardRoutes";
 import { PageHeader } from "../components/Layout";
@@ -9,7 +9,7 @@ import { SegmentedControl, Skeleton, TabBar, TabPanel } from "../components/ui";
 import { FinanceOverview, RANGE_LABEL } from "./payments/FinanceOverview";
 import { FinanceChart } from "./payments/FinanceChart";
 import { PortalOrders } from "./payments/PortalOrders";
-import { FinanceTab as HostingFinance } from "./hosting/HostingFinance";
+import { CostsTab, FinanceTab as HostingFinance } from "./hosting/HostingFinance";
 import { QK, REFETCH_MS, errorText } from "./payments/shared";
 
 const RANGES = (Object.keys(RANGE_LABEL) as FinanceRange[]).map((value) => ({ value, label: RANGE_LABEL[value] }));
@@ -17,13 +17,14 @@ const RANGE_STORAGE_KEY = "kr.payments.range";
 
 // /finance is the AI gateway tab; the others have their own URL so the
 // sidebar, bookmarks and links can open them directly.
-const TABS = ["gateway", "hosting", "orders"] as const;
+const TABS = ["gateway", "hosting", "costs", "orders"] as const;
 type Tab = (typeof TABS)[number];
 const TABS_ID = "finance-tabs";
 
 const DESCRIPTION: Record<Tab, string> = {
   gateway: "AI gateway money: credit sold, revenue and provider cost.",
   hosting: "Hosting money: revenue from paid orders against what the servers cost.",
+  costs: "VPS rental or purchase, domains and other hosting costs. Hosting profit is counted against these.",
   orders: "Every portal payment, for credit top-ups and hosting. Approve one here if the gateway missed it.",
 };
 
@@ -78,6 +79,7 @@ export function FinancePage() {
         tabs={[
           { value: "gateway", label: "AI gateway", icon: Network },
           { value: "hosting", label: "Hosting", icon: Server },
+          { value: "costs", label: "Operating costs", icon: Coins },
           { value: "orders", label: "Orders", icon: ReceiptText },
         ]}
       />
@@ -93,6 +95,8 @@ export function FinancePage() {
           </>
         ) : tab === "hosting" ? (
           <HostingFinance />
+        ) : tab === "costs" ? (
+          <CostsTab />
         ) : (
           <PortalOrders />
         )}
