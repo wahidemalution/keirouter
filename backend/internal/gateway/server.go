@@ -97,6 +97,7 @@ type Server struct {
 	rateLimiter      RateLimitController
 	authFailures     *ipLimiter
 	loginLimiter     *ipLimiter
+	modelsLimiter    *ipLimiter
 	refresher        dispatch.TokenRefresher
 	reloadPricing    func(context.Context) error
 	syncMarketPrices func(context.Context) (int, error)
@@ -258,6 +259,7 @@ func New(d Deps) *Server {
 		rateLimiter:         d.RateLimiter,
 		authFailures:        newIPLimiter(d.Config.Limits.AuthFailuresPerMinute, time.Minute),
 		loginLimiter:        newIPLimiter(d.Config.Limits.LoginAttemptsPerMinute, time.Minute),
+		modelsLimiter:       newIPLimiter(d.Config.Limits.ModelsRequestsPerMinute, time.Minute),
 		refresher:           d.Refresher,
 		reloadPricing:       d.ReloadPricing,
 		syncMarketPrices:    d.SyncMarketPrices,
@@ -407,7 +409,7 @@ func (s *Server) routes() chi.Router {
 		r.Post("/v1/web/fetch", s.handleWebFetch)
 
 		// Model discovery.
-		r.Get("/v1/models", s.handleListModels)
+		r.With(s.modelsRateLimiter).Get("/v1/models", s.handleListModels)
 		r.Get("/v1/models/info", s.handleModelInfo)
 		r.Get("/v1/models/{kind}", s.handleListModelsByKind)
 

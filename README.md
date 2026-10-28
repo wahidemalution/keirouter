@@ -489,7 +489,7 @@ Those defaults only apply to keys **without** a plan. The moment a key has one, 
 
 TPM is reserved up front and then settled against the usage the provider actually reports (`reconcile_tokens`), so cache hits, blocked requests and local failures hand their tokens back. `output_reserve_cap` stops clients that always send a huge `max_tokens` from draining TPM up front, and concurrency denials include a `Retry-After` hint.
 
-Separately, per-IP abuse guards (`auth_failures_per_minute`, `login_attempts_per_minute`) stay on even when per-key limits are off.
+Separately, per-IP abuse guards (`auth_failures_per_minute`, `login_attempts_per_minute`) and the per-key `GET /v1/models` cap (`models_requests_per_minute`, default 60) stay on even when per-key limits are off.
 
 ### High availability (multiple replicas)
 

@@ -265,6 +265,20 @@ export function NetworkTab({ local, update }: TabProps) {
             placeholder="5"
           />
         </SettingRow>
+        <SettingRow controlId="models-requests" label="Model list requests"
+          description="GET /v1/models calls allowed per API key each minute. 0 turns it off."
+          info="Clients usually list models once at startup. This stops one that refreshes in a loop from flooding the logs. Applies even when key rate limits are off.">
+          <NumberUnitInput
+            id="models-requests"
+            unit="/min"
+            aria-describedby={rowIds("models-requests").desc}
+            min={0}
+            max={10000}
+            value={local.models_requests_per_minute ?? 60}
+            onCommit={(n) => update({ models_requests_per_minute: n })}
+            placeholder="60"
+          />
+        </SettingRow>
         <ToggleRow label="Record request details"
           description="Store request details for the logs view."
           checked={local.observability_enabled !== false}

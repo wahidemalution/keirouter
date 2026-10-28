@@ -97,6 +97,8 @@ limits:
   # Per-IP abuse guards; they apply even when enabled is false. 0 = off.
   auth_failures_per_minute: 20   # then 429 for that IP's invalid keys; valid keys and loopback are never refused
   login_attempts_per_minute: 5
+  # Per-key cap on GET /v1/models, also on when enabled is false. 0 = off.
+  models_requests_per_minute: 60
   # backend=redis only. Empty falls back to cache.redis_url.
   redis_url: ""            # e.g. redis://:password@redis:6379/0 or rediss://...
   # Deadline for each limiter round trip. A slower or failed call trips a
