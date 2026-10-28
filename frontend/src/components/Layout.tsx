@@ -561,9 +561,53 @@ function TopBar({ menuOpen, onMenuToggle, onSearchOpen }: { menuOpen: boolean; o
 
       <div className="flex shrink-0 items-center gap-1.5 sm:ml-auto">
         <UpdateNotification />
+        <HeaderClock />
         <AccountMenu />
       </div>
     </header>
+  );
+}
+
+// The clock shows WIB, the zone the finance charts and hosting months use, so
+// "today" in the header matches "today" in the numbers.
+const CLOCK_TZ = "Asia/Jakarta";
+const clockDate = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: CLOCK_TZ });
+const clockTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: CLOCK_TZ });
+
+function HeaderClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer: number;
+    // Tick on each minute boundary rather than polling every second.
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        setNow(new Date());
+        schedule();
+      }, 60_000 - (Date.now() % 60_000) + 50);
+    };
+    schedule();
+    // Background tabs throttle timers; catch up as soon as the tab is visible.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      window.clearTimeout(timer);
+      setNow(new Date());
+      schedule();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  const date = clockDate.format(now);
+  const time = clockTime.format(now);
+  return (
+    <time dateTime={now.toISOString()} className="whitespace-nowrap px-1 text-[12.5px] tabular-nums text-fg-muted sm:px-2">
+      <span className="hidden sm:inline">{date} · </span>
+      <span className="font-medium text-fg">{time}</span>
+      <span className="hidden sm:inline"> WIB</span>
+    </time>
   );
 }
 
