@@ -10,10 +10,16 @@ import (
 
 // adminGatewayInfo returns the facts the dashboard shell shows about this
 // instance in one call: version, uptime, where the API listens, and which
-// storage engine backs it.
+// storage engine backs it. server_time and tz_* let the top bar show the
+// host's clock in the host's timezone.
 func (s *Server) adminGatewayInfo(w http.ResponseWriter, r *http.Request) {
 	uptime := int64(time.Since(sysHistory.started).Seconds())
+	now := time.Now()
+	tzName, tzOffset := now.Zone()
 	writeJSON(w, http.StatusOK, map[string]any{
+		"server_time": now.Format(time.RFC3339Nano),
+		"tz_name":     tzName,
+		"tz_offset_s": tzOffset,
 		"name":        "KeiRouter",
 		"version":     s.version,
 		"uptime_s":    uptime,

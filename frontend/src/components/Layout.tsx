@@ -1,4 +1,4 @@
-import { lazy, Suspense, useId, useState, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useId, useMemo, useState, useEffect, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient, useIsFetching } from "@tanstack/react-query";
 import {
@@ -568,20 +568,32 @@ function TopBar({ menuOpen, onMenuToggle, onSearchOpen }: { menuOpen: boolean; o
   );
 }
 
-// The clock shows WIB, the zone the finance charts and hosting months use, so
-// "today" in the header matches "today" in the numbers.
-const CLOCK_TZ = "Asia/Jakarta";
-const clockDate = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: CLOCK_TZ });
-const clockTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: CLOCK_TZ });
+// The clock shows the host's time in the host's timezone, from gateway info.
+// The offset and skew are applied by hand and formatted as UTC, so it needs no
+// timezone database in the browser and ignores the viewer's own zone.
+const clockDate = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+const clockTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
+
+/** "WIB" stays as is; a numeric abbreviation like "+07" becomes "UTC+7". */
+function zoneLabel(name: string, offsetS: number): string {
+  if (name && !/^[+-]\d/.test(name)) return name;
+  if (offsetS === 0) return "UTC";
+  const sign = offsetS > 0 ? "+" : "-";
+  const a = Math.abs(offsetS);
+  const h = Math.floor(a / 3600);
+  const m = Math.floor((a % 3600) / 60);
+  return `UTC${sign}${h}${m ? `:${String(m).padStart(2, "0")}` : ""}`;
+}
 
 function HeaderClock() {
-  const [now, setNow] = useState(() => new Date());
+  const info = useGatewayInfo();
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     let timer: number;
     // Tick on each minute boundary rather than polling every second.
     const schedule = () => {
       timer = window.setTimeout(() => {
-        setNow(new Date());
+        setNow(Date.now());
         schedule();
       }, 60_000 - (Date.now() % 60_000) + 50);
     };
@@ -590,7 +602,7 @@ function HeaderClock() {
     const onVisible = () => {
       if (document.visibilityState !== "visible") return;
       window.clearTimeout(timer);
-      setNow(new Date());
+      setNow(Date.now());
       schedule();
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -600,13 +612,28 @@ function HeaderClock() {
     };
   }, []);
 
-  const date = clockDate.format(now);
-  const time = clockTime.format(now);
+  // Skew between the host clock and this browser, measured when gateway info
+  // last arrived, so a wrong client clock does not change what is shown.
+  const data = info.data;
+  const skew = useMemo(() => {
+    if (!data?.server_time) return 0;
+    const server = Date.parse(data.server_time);
+    return Number.isNaN(server) ? 0 : server - info.dataUpdatedAt;
+  }, [data?.server_time, info.dataUpdatedAt]);
+
+  if (!data?.server_time) return null;
+  const hostNow = new Date(now + skew);
+  const wall = new Date(hostNow.getTime() + data.tz_offset_s * 1000);
+  const zone = zoneLabel(data.tz_name, data.tz_offset_s);
   return (
-    <time dateTime={now.toISOString()} className="whitespace-nowrap px-1 text-[12.5px] tabular-nums text-fg-muted sm:px-2">
-      <span className="hidden sm:inline">{date} · </span>
-      <span className="font-medium text-fg">{time}</span>
-      <span className="hidden sm:inline"> WIB</span>
+    <time
+      dateTime={hostNow.toISOString()}
+      title={`Server time (${zone})`}
+      className="whitespace-nowrap px-1 text-[12.5px] tabular-nums text-fg-muted sm:px-2"
+    >
+      <span className="hidden sm:inline">{clockDate.format(wall)} · </span>
+      <span className="font-medium text-fg">{clockTime.format(wall)}</span>
+      <span className="hidden sm:inline"> {zone}</span>
     </time>
   );
 }

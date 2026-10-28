@@ -3244,6 +3244,12 @@ export interface GatewayInfo {
   go_version: string;
   os: string;
   arch: string;
+  /** The host's current time, RFC3339 with its UTC offset. */
+  server_time: string;
+  /** Zone abbreviation on the host, e.g. "WIB" or "UTC". */
+  tz_name: string;
+  /** The host's offset from UTC in seconds. */
+  tz_offset_s: number;
 }
 
 export type HealthStatus = "healthy" | "degraded" | "unhealthy" | "unknown" | "disabled";
