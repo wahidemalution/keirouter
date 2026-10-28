@@ -4,6 +4,7 @@ import { LineChart } from "lucide-react";
 import { api, type MarketPricingSettings } from "../lib/api";
 import { Button, Card, Field, Input, SectionHeader, Spinner, Toggle } from "./ui";
 import { useToast } from "./Toast";
+import { fmtDateTime } from "../lib/serverTime";
 
 export function MarketPricingSection() {
   const qc = useQueryClient();
@@ -164,7 +165,7 @@ export function MarketPricingSection() {
             </Button>
             {data.last_fetched_at && (
               <span className="text-xs text-[var(--text-muted)]">
-                Last sync {new Date(data.last_fetched_at).toLocaleString()} · {data.last_synced_count} updated
+                Last sync {fmtDateTime(data.last_fetched_at)} · {data.last_synced_count} updated
               </span>
             )}
             {data.last_fetch_error && (

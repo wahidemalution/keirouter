@@ -43,6 +43,7 @@ import { BrandMark } from "./BrandMark";
 import { UpdateNotification } from "./UpdateNotification";
 import { preloadRoute, type RoutePreloadKey } from "../routePreload";
 import { dashboard, DASHBOARD_PREFIX } from "../lib/dashboardRoutes";
+import { fmtDate, fmtTime, setServerZone } from "../lib/serverTime";
 
 // The command palette (and cmdk) stays out of the shell bundle: it is fetched
 // on idle or on the first Ctrl/Cmd+K, then mounted for the rest of the session.
@@ -229,6 +230,11 @@ export function Layout() {
     document.documentElement.dataset.tone = pageTone;
   }, [pageTone]);
   const { branding } = useBranding();
+  // Pages format times in the server zone, so they wait for gateway info. If
+  // it fails, they fall back to the browser zone rather than not rendering.
+  const gatewayInfo = useGatewayInfo();
+  if (gatewayInfo.data) setServerZone(gatewayInfo.data.tz_iana, gatewayInfo.data.tz_offset_s);
+  const zoneReady = !!gatewayInfo.data || gatewayInfo.isError;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMounted, setPaletteMounted] = useState(false);
@@ -321,7 +327,7 @@ export function Layout() {
         >
           <div className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
             <Suspense fallback={<PageOutletFallback />}>
-              <Outlet />
+              {zoneReady ? <Outlet /> : <PageOutletFallback />}
             </Suspense>
           </div>
         </main>
@@ -568,12 +574,6 @@ function TopBar({ menuOpen, onMenuToggle, onSearchOpen }: { menuOpen: boolean; o
   );
 }
 
-// The clock shows the host's time in the host's timezone, from gateway info.
-// The offset and skew are applied by hand and formatted as UTC, so it needs no
-// timezone database in the browser and ignores the viewer's own zone.
-const clockDate = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-const clockTime = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
-
 /** "WIB" stays as is; a numeric abbreviation like "+07" becomes "UTC+7". */
 function zoneLabel(name: string, offsetS: number): string {
   if (name && !/^[+-]\d/.test(name)) return name;
@@ -585,6 +585,7 @@ function zoneLabel(name: string, offsetS: number): string {
   return `UTC${sign}${h}${m ? `:${String(m).padStart(2, "0")}` : ""}`;
 }
 
+// The clock shows the host's time in the host's zone (see lib/serverTime).
 function HeaderClock() {
   const info = useGatewayInfo();
   const [now, setNow] = useState(() => Date.now());
@@ -623,7 +624,6 @@ function HeaderClock() {
 
   if (!data?.server_time) return null;
   const hostNow = new Date(now + skew);
-  const wall = new Date(hostNow.getTime() + data.tz_offset_s * 1000);
   const zone = zoneLabel(data.tz_name, data.tz_offset_s);
   return (
     <time
@@ -631,8 +631,8 @@ function HeaderClock() {
       title={`Server time (${zone})`}
       className="whitespace-nowrap px-1 text-[12.5px] tabular-nums text-fg-muted sm:px-2"
     >
-      <span className="hidden sm:inline">{clockDate.format(wall)} · </span>
-      <span className="font-medium text-fg">{clockTime.format(wall)}</span>
+      <span className="hidden sm:inline">{fmtDate(hostNow, { weekday: "short", day: "numeric", month: "short", year: "numeric" }, "en-GB")} · </span>
+      <span className="font-medium text-fg">{fmtTime(hostNow, { hour: "2-digit", minute: "2-digit", hour12: false }, "en-GB")}</span>
       <span className="hidden sm:inline"> {zone}</span>
     </time>
   );

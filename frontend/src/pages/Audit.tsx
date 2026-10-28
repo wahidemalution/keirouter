@@ -8,6 +8,7 @@ import { useToast } from "../components/Toast";
 import { Badge, Button, ErrorBanner, IconTile, Input, Kpi, KpiGrid, SectionTitle, Select, Skeleton } from "../components/ui";
 import { ICONS } from "../lib/icons";
 import { formatDateTime } from "../lib/format";
+import { fmtDateTime } from "../lib/serverTime";
 
 // Action families an operator filters by. Values use the API's "prefix.*" form.
 const ACTION_FILTERS: [string, string][] = [
@@ -254,7 +255,7 @@ export function AuditPage() {
                       <Badge tone={OUTCOME_TONE[e.outcome] ?? "neutral"}>{OUTCOME_LABEL[e.outcome] ?? e.outcome}</Badge>
                     </span>
                     <span className="truncate text-[12px] text-fg-muted">
-                      {new Date(e.time).toLocaleString()} · {actorLabel(e)}
+                      {fmtDateTime(e.time)} · {actorLabel(e)}
                     </span>
                     {e.resource_type && <span className="truncate font-mono text-[12px] text-fg-muted">{resourceLabel(e)}</span>}
                   </button>

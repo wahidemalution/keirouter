@@ -6,6 +6,7 @@ import { useToast } from "../../components/Toast";
 import { MarketPricingSection } from "../../components/MarketPricingSection";
 import { Button, ErrorBanner, Skeleton } from "../../components/ui";
 import { FormField, SettingsCard, ToggleRow, inputClass } from "./shared";
+import { fmtDateTime } from "../../lib/serverTime";
 
 // ── Currency tab ────────────────────────────────────────────────────
 type CurrencyConfig = CurrencyStatus["config"];
@@ -81,7 +82,7 @@ export function CurrencyTab() {
               <p className="font-medium text-fg">1 USD = {st.effective_rate > 0 ? `${st.effective_rate} IDR` : "—"}</p>
               <p className="mt-0.5 text-[12px] text-fg-muted">
                 Source: {SOURCE_LABEL[st.source] ?? st.source}
-                {st.fetched_at ? ` · updated ${new Date(st.fetched_at).toLocaleString()}` : ""}
+                {st.fetched_at ? ` · updated ${fmtDateTime(st.fetched_at)}` : ""}
               </p>
               {st.last_error && <p className="mt-1 text-[12px] text-bad">Last error: {st.last_error}</p>}
             </div>

@@ -1,6 +1,8 @@
 // Typed client for the KeiRouter admin API. All calls go through the dev-server
 // proxy (or the embedded static server in production) to /api.
 
+import { serverIana } from "./serverTime";
+
 export interface RegionOption {
   id: string;
   label: string;
@@ -1629,13 +1631,10 @@ async function fetchWithTimeout(
   }
 }
 
-/** Returns the browser's IANA timezone (e.g. "Asia/Jakarta"), falling back to UTC. */
-function browserTZ(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  } catch {
-    return "UTC";
-  }
+/** The server's IANA zone for the `tz` query parameter. "" lets the server
+ * use its own zone, so "today" is the host's day, not the viewer's. */
+function serverTZParam(): string {
+  return encodeURIComponent(serverIana());
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -2782,30 +2781,30 @@ export const api = {
   adjustKeyLimit: (keyId: string, input: { limit_usd: number; reason: string; idempotency_key: string }) =>
     request<{ adjustment: KeyLimitAdjustment }>("POST", `/keys/${keyId}/limit`, input),
 
-  usage: (period: string) => request<UsageSummary>("GET", `/usage?period=${period}&tz=${browserTZ()}`),
+  usage: (period: string) => request<UsageSummary>("GET", `/usage?period=${period}&tz=${serverTZParam()}`),
   usageInsights: (period: string, opts: { limit?: number; buckets?: number } = {}) => {
-    const qs = new URLSearchParams({ period, tz: browserTZ() });
+    const qs = new URLSearchParams({ period, tz: serverTZParam() });
     if (opts.limit) qs.set("limit", String(opts.limit));
     if (opts.buckets) qs.set("buckets", String(opts.buckets));
     return request<UsageInsights>("GET", `/usage/insights?${qs.toString()}`);
   },
   chainUsage: (period: string) =>
-    request<{ period: string; since: string; chains: ChainUsage[] }>("GET", `/usage/chains?period=${period}&tz=${browserTZ()}`),
+    request<{ period: string; since: string; chains: ChainUsage[] }>("GET", `/usage/chains?period=${period}&tz=${serverTZParam()}`),
   modelUsage: (period: string) =>
-    request<ModelUsageResponse>("GET", `/usage/models?period=${period}&tz=${browserTZ()}`),
+    request<ModelUsageResponse>("GET", `/usage/models?period=${period}&tz=${serverTZParam()}`),
   keyModelUsage: (keyId: string, period: string) =>
-    request<{ period: string; since: string; models: KeyModelUsage[] }>("GET", `/keys/${keyId}/models?period=${period}&tz=${browserTZ()}`),
+    request<{ period: string; since: string; models: KeyModelUsage[] }>("GET", `/keys/${keyId}/models?period=${period}&tz=${serverTZParam()}`),
   modelKeyUsage: (provider: string, model: string, period: string) => {
-    const qs = new URLSearchParams({ period, tz: browserTZ(), provider, model });
+    const qs = new URLSearchParams({ period, tz: serverTZParam(), provider, model });
     return request<{ period: string; since: string; provider: string; model: string; keys: ModelKeyUsage[] }>("GET", `/usage/models/keys?${qs.toString()}`);
   },
   usageLeaderboard: (period: string) =>
-    request<UsageLeaderboard>("GET", `/usage/leaderboard?period=${period}&tz=${browserTZ()}`),
+    request<UsageLeaderboard>("GET", `/usage/leaderboard?period=${period}&tz=${serverTZParam()}`),
 
   quota: (period: string) =>
-    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${browserTZ()}`),
+    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${serverTZParam()}`),
   quotaByProvider: (provider: string) =>
-    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=today&tz=${browserTZ()}&provider=${provider}`),
+    request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=today&tz=${serverTZParam()}&provider=${provider}`),
 
   consoleLog: () => request<{ epoch: string; logs: ConsoleLogEntry[] }>("GET", "/console"),
 
@@ -3101,7 +3100,7 @@ export const api = {
   exportAudit: (filter?: AuditFilter) =>
     requestBlob("GET", `/audit/export${auditQuery({ ...filter, cursor: undefined, limit: undefined })}`),
   guardrailStats: (period: string, opts: { buckets?: number; api_key_id?: string; model?: string; chain_id?: string } = {}) => {
-    const qs = new URLSearchParams({ period, tz: browserTZ() });
+    const qs = new URLSearchParams({ period, tz: serverTZParam() });
     for (const [k, v] of Object.entries(opts)) {
       if (v) qs.set(k, String(v));
     }
@@ -3112,7 +3111,7 @@ export const api = {
     for (const [k, v] of Object.entries(filter ?? {})) {
       if (v) qs.set(k, String(v));
     }
-    if (filter?.period) qs.set("tz", browserTZ());
+    if (filter?.period) qs.set("tz", serverTZParam());
     const suffix = qs.toString();
     return request<{ logs: GuardrailLogEntry[] }>(
       "GET",
@@ -3250,6 +3249,8 @@ export interface GatewayInfo {
   tz_name: string;
   /** The host's offset from UTC in seconds. */
   tz_offset_s: number;
+  /** IANA zone from the host's TZ setting, or "" when only the offset is known. */
+  tz_iana?: string;
 }
 
 export type HealthStatus = "healthy" | "degraded" | "unhealthy" | "unknown" | "disabled";

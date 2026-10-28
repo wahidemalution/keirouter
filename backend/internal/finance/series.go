@@ -22,39 +22,40 @@ type Series struct {
 	Points      []SeriesPoint
 }
 
-// seriesPlan is how a range is cut into buckets, in WIB like hosting finance.
+// seriesPlan is how a range is cut into buckets, in hosting.Zone (the
+// server's zone) like hosting finance.
 type seriesPlan struct {
 	granularity string
 	slot        int64     // query bucket size in seconds
+	offset      int64     // the zone's UTC offset now, aligning buckets to its hours and days
 	start       time.Time // first bucket start; zero for all time
 	buckets     int       // number of buckets; 0 for all time
 }
 
 func planSeries(rangeName string, now time.Time) (seriesPlan, error) {
-	n := now.In(hosting.WIB)
-	midnight := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, hosting.WIB)
+	n := now.In(hosting.Zone)
+	_, off := n.Zone()
+	offset := int64(off)
+	midnight := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, hosting.Zone)
 	switch rangeName {
 	case "today":
-		return seriesPlan{"hour", 3600, midnight, n.Hour() + 1}, nil
+		return seriesPlan{"hour", 3600, offset, midnight, n.Hour() + 1}, nil
 	case "7d":
-		return seriesPlan{"day", 86400, midnight.AddDate(0, 0, -6), 7}, nil
+		return seriesPlan{"day", 86400, offset, midnight.AddDate(0, 0, -6), 7}, nil
 	case "30d":
-		return seriesPlan{"day", 86400, midnight.AddDate(0, 0, -29), 30}, nil
+		return seriesPlan{"day", 86400, offset, midnight.AddDate(0, 0, -29), 30}, nil
 	case "all":
-		return seriesPlan{granularity: "month", slot: 86400}, nil
+		return seriesPlan{granularity: "month", slot: 86400, offset: offset}, nil
 	}
 	return seriesPlan{}, ErrBadRange
 }
 
-// wibOffset aligns query buckets to WIB hours and days.
-const wibOffset = 7 * 3600
-
-func bucketStart(bucket, slot int64) time.Time {
-	return time.Unix(bucket*slot-wibOffset, 0).In(hosting.WIB)
+func bucketStart(bucket int64, plan seriesPlan) time.Time {
+	return time.Unix(bucket*plan.slot-plan.offset, 0).In(hosting.Zone)
 }
 
 func monthStart(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, hosting.WIB)
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, hosting.Zone)
 }
 
 // BuildSeries turns query buckets into chart points, filling empty buckets
@@ -65,7 +66,7 @@ func BuildSeries(plan seriesPlan, pts []store.CostBasisPoint, m Markups, now tim
 	sums := map[int64]*acc{} // keyed by bucket start, unix seconds
 	var first time.Time
 	for _, p := range pts {
-		at := bucketStart(p.Bucket, plan.slot)
+		at := bucketStart(p.Bucket, plan)
 		if plan.granularity == "month" {
 			at = monthStart(at)
 		}
@@ -86,7 +87,7 @@ func BuildSeries(plan seriesPlan, pts []store.CostBasisPoint, m Markups, now tim
 	var starts []time.Time
 	if plan.granularity == "month" {
 		if !first.IsZero() {
-			last := monthStart(now.In(hosting.WIB))
+			last := monthStart(now.In(hosting.Zone))
 			for t := first; !t.After(last); t = t.AddDate(0, 1, 0) {
 				starts = append(starts, t)
 			}

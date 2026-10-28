@@ -7,11 +7,12 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
-// WIB is the time zone months are bucketed in for the finance view.
-var WIB = time.FixedZone("WIB", 7*3600)
+// Zone is the time zone the finance views bucket days and months in: the
+// server's local zone, so they line up with the dashboard clock. Tests pin it.
+var Zone = time.Local
 
-// MonthKey formats t as YYYY-MM in WIB.
-func MonthKey(t time.Time) string { return t.In(WIB).Format("2006-01") }
+// MonthKey formats t as YYYY-MM in Zone.
+func MonthKey(t time.Time) string { return t.In(Zone).Format("2006-01") }
 
 // RefundRequired reports whether a settled order was paid for a deleted
 // instance and must be returned, so it is not revenue.
@@ -20,9 +21,9 @@ func RefundRequired(o store.PaymentOrder) bool {
 }
 
 // CostInMonth returns what c costs in the month starting at monthStart (the
-// first day of the month, WIB).
+// first day of the month, in Zone).
 func CostInMonth(c store.HostingCost, monthStart time.Time) int64 {
-	start, err := time.ParseInLocation("2006-01-02", c.StartDate, WIB)
+	start, err := time.ParseInLocation("2006-01-02", c.StartDate, Zone)
 	if err != nil {
 		return 0
 	}
@@ -37,7 +38,7 @@ func CostInMonth(c store.HostingCost, monthStart time.Time) int64 {
 		return 0
 	}
 	if c.EndDate != "" {
-		end, err := time.ParseInLocation("2006-01-02", c.EndDate, WIB)
+		end, err := time.ParseInLocation("2006-01-02", c.EndDate, Zone)
 		if err == nil && end.Before(monthStart) {
 			return 0
 		}
@@ -62,8 +63,8 @@ func Months(orders []store.PaymentOrder, costs []store.HostingCost, now time.Tim
 	if n < 1 {
 		n = 1
 	}
-	cur := now.In(WIB)
-	first := time.Date(cur.Year(), cur.Month(), 1, 0, 0, 0, 0, WIB).AddDate(0, -(n - 1), 0)
+	cur := now.In(Zone)
+	first := time.Date(cur.Year(), cur.Month(), 1, 0, 0, 0, 0, Zone).AddDate(0, -(n - 1), 0)
 	out := make([]MonthFinance, n)
 	idx := map[string]int{}
 	for i := 0; i < n; i++ {

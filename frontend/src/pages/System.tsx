@@ -8,6 +8,7 @@ import { PageHeader } from "../components/Layout";
 import { Badge, ErrorCard, IconTile, SectionTitle, SegmentedControl, Skeleton } from "../components/ui";
 import { ChartCard, TimeLines } from "../components/charts/TimeSeries";
 import { ICONS } from "../lib/icons";
+import { fmtDate, fmtTime, serverDateISO } from "../lib/serverTime";
 
 // System answers two questions: is this machine healthy, and how much of it
 // is KeiRouter using? Every number comes from the gateway's 5-second
@@ -872,14 +873,13 @@ function fmtDuration(seconds: number) {
 }
 
 function fmtClockSeconds(ms: number) {
-  return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+  return fmtTime(ms, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 }
 
 function fmtDayTime(ms: number) {
-  const d = new Date(ms);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-  return sameDay ? time : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
+  const sameDay = serverDateISO(ms) === serverDateISO(Date.now());
+  const time = fmtTime(ms, { hour: "2-digit", minute: "2-digit", hour12: false });
+  return sameDay ? time : `${fmtDate(ms, { month: "short", day: "numeric" })} ${time}`;
 }
 
 // Short windows need seconds on the axis or every label reads the same
@@ -887,6 +887,6 @@ function fmtDayTime(ms: number) {
 function axisFormat(points: Point[]): (ms: number) => string {
   const span = points.length > 1 ? (points[points.length - 1].t - points[0].t) / 1000 : 0;
   if (span < 600) return fmtClockSeconds;
-  if (span < 36 * 3600) return (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-  return (ms) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (span < 36 * 3600) return (ms) => fmtTime(ms, { hour: "2-digit", minute: "2-digit", hour12: false });
+  return (ms) => fmtDate(ms, { month: "short", day: "numeric" });
 }

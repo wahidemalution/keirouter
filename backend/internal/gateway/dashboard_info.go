@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +22,7 @@ func (s *Server) adminGatewayInfo(w http.ResponseWriter, r *http.Request) {
 		"server_time": now.Format(time.RFC3339Nano),
 		"tz_name":     tzName,
 		"tz_offset_s": tzOffset,
+		"tz_iana":     strings.TrimPrefix(os.Getenv("TZ"), ":"),
 		"name":        "KeiRouter",
 		"version":     s.version,
 		"uptime_s":    uptime,

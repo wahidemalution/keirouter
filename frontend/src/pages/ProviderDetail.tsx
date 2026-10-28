@@ -50,6 +50,7 @@ import { ICONS } from "../lib/icons";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { dashboard } from "../lib/dashboardRoutes";
+import { fmtDate, fmtDateTime } from "../lib/serverTime";
 
 type Tab = "accounts" | "models" | "routing";
 type TestResult = { status: "testing" | "ok" | "error"; message?: string };
@@ -1302,7 +1303,7 @@ function QuotaBar({ quota: q }: { quota: UpstreamQuota }) {
         {reset && !Number.isNaN(reset.getTime()) && (
           <span className="inline-flex items-center gap-1">
             <Clock3 className="h-3 w-3" aria-hidden="true" />
-            Resets {reset.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+            Resets {fmtDateTime(reset, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
           </span>
         )}
       </div>
@@ -1366,7 +1367,7 @@ function CodexResetCreditsSection({ accountId }: { accountId: string }) {
               <span className="text-fg-muted">
                 Earned resets <span className="font-medium tabular-nums text-fg">{available}</span>
               </span>
-              {nextExpiry && <span className="text-fg-faint">Next expires {new Date(nextExpiry).toLocaleDateString()}</span>}
+              {nextExpiry && <span className="text-fg-faint">Next expires {fmtDate(nextExpiry)}</span>}
             </div>
             {available > 0 && (
               <Button
@@ -1399,7 +1400,7 @@ function LimitWindow({ label, used, resetAt }: { label: string; used: number; re
       <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-track" role="progressbar" aria-label={`${label} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
         <div className={cn("h-full rounded-full", fill)} style={{ width: `${pct}%` }} />
       </div>
-      <p className="mt-1.5 text-[11.5px] text-fg-faint">{resetAt > 0 ? `Resets ${new Date(resetAt * 1000).toLocaleString()}` : "Reset time unavailable"}</p>
+      <p className="mt-1.5 text-[11.5px] text-fg-faint">{resetAt > 0 ? `Resets ${fmtDateTime(resetAt * 1000)}` : "Reset time unavailable"}</p>
     </div>
   );
 }

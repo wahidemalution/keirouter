@@ -25,6 +25,7 @@ import { ChartCard, TimeBars, clockLabel, dayLabel } from "./charts/TimeSeries";
 import { useScopeTargetLabels } from "./ScopeIDSelector";
 import { ErrorCard, EmptyState, Kpi, KpiGrid, SectionTitle, SegmentedControl, Skeleton } from "./ui";
 import { dashboard } from "../lib/dashboardRoutes";
+import { fmtDateTime } from "../lib/serverTime";
 
 // Guardrail monitoring: what share of traffic the guardrails blocked, masked
 // or warned on, which detectors and entities drove it, and what they cost in
@@ -341,7 +342,7 @@ function TrendCard({ stats, period }: { stats: GuardrailStats; period: ReportPer
         x={(b) => b.start}
         xFormat={long ? dayLabel : clockLabel}
         tooltipTime={(ms) =>
-          new Date(ms).toLocaleString(undefined, long ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" })
+          fmtDateTime(ms, long ? { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" })
         }
         label="Requests the guardrails acted on, over time"
         series={[

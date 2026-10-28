@@ -2,6 +2,7 @@ import { useId, type ReactNode } from "react";
 import { type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SectionTitle } from "../../components/ui";
+import { fmtDateTime, serverDateISO } from "../../lib/serverTime";
 
 // Every Payments query polls at the same pace so the numbers on the page move together.
 export const REFETCH_MS = 15_000;
@@ -29,7 +30,7 @@ export function dateID(value: string, withTime = false): string {
   if (!value) return "-";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString("en-US", {
+  return fmtDateTime(d, {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -37,18 +38,17 @@ export function dateID(value: string, withTime = false): string {
   });
 }
 
-/** Today's date as YYYY-MM-DD in local time, for <input type="date">. */
+/** Today's date as YYYY-MM-DD in the server zone, for <input type="date">. */
 export function todayISO(): string {
-  return toDateInput(new Date().toISOString());
+  return serverDateISO(Date.now());
 }
 
-/** RFC3339 to YYYY-MM-DD in local time; "" when empty. */
+/** RFC3339 to YYYY-MM-DD in the server zone; "" when empty. */
 export function toDateInput(value: string): string {
   if (!value) return "";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return serverDateISO(d);
 }
 
 export function errorText(e: unknown): string {

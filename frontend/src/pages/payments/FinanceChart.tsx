@@ -6,6 +6,7 @@ import type { FinanceRange, FinanceSeries, FinanceSeriesPoint } from "../../lib/
 import { EmptyState, SegmentedControl } from "../../components/ui";
 import { C_COST, C_PROFIT, C_REV, LegendItem, VIZ_VARS, axisTick } from "../../components/financeChart";
 import { Panel, TH, THEAD, count, usd } from "./shared";
+import { fmtDate, fmtTime } from "../../lib/serverTime";
 
 type Row = FinanceSeriesPoint & { label: string; full: string };
 
@@ -16,25 +17,21 @@ const BUCKET_TEXT: Record<FinanceRange, string> = {
   all: "Per month, all time",
 };
 
-// Bucket starts arrive in WIB; labels are rendered in WIB too so an hour or a
-// day reads the same as on the server, whatever the viewer's timezone.
-const TZ = "Asia/Jakarta";
-
 function labels(start: string, granularity: FinanceSeries["granularity"]): { label: string; full: string } {
   const d = new Date(start);
   if (granularity === "hour") {
-    const h = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: TZ });
-    return { label: h, full: `${d.toLocaleDateString("en-US", { day: "numeric", month: "short", timeZone: TZ })}, ${h}` };
+    const h = fmtTime(d, { hour: "2-digit", minute: "2-digit", hour12: false }, "en-GB");
+    return { label: h, full: `${fmtDate(d, { day: "numeric", month: "short" }, "en-US")}, ${h}` };
   }
   if (granularity === "day") {
     return {
-      label: d.toLocaleDateString("en-US", { day: "numeric", month: "short", timeZone: TZ }),
-      full: d.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: TZ }),
+      label: fmtDate(d, { day: "numeric", month: "short" }, "en-US"),
+      full: fmtDate(d, { weekday: "short", day: "numeric", month: "short", year: "numeric" }, "en-US"),
     };
   }
   return {
-    label: d.toLocaleDateString("en-US", { month: "short", year: "2-digit", timeZone: TZ }),
-    full: d.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: TZ }),
+    label: fmtDate(d, { month: "short", year: "2-digit" }, "en-US"),
+    full: fmtDate(d, { month: "long", year: "numeric" }, "en-US"),
   };
 }
 

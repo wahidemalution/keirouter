@@ -92,7 +92,7 @@ func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("%w: %q", ErrBadRange, rangeName)
 	}
-	pts, err := l.DB.Usage().CostBasisSeries(ctx, store.DefaultTenantID, plan.start, plan.slot, wibOffset)
+	pts, err := l.DB.Usage().CostBasisSeries(ctx, store.DefaultTenantID, plan.start, plan.slot, plan.offset)
 	if err != nil {
 		return Report{}, err
 	}

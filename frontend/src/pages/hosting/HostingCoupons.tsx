@@ -22,6 +22,7 @@ import {
 } from "../../components/ui";
 import { Panel, REFETCH_MS, TH, THEAD, dateID, errorText, idr } from "../payments/shared";
 import { QK_HOSTING } from "./shared";
+import { zonedParts } from "../../lib/serverTime";
 
 const STATE_LABEL: Record<HostingCoupon["state"], string> = {
   active: "Active",
@@ -45,20 +46,25 @@ function benefit(c: Pick<HostingCoupon, "kind" | "discount_type" | "discount_val
   return c.discount_type === "percent" ? `${c.discount_value}% off` : `${idr(c.discount_value)} off`;
 }
 
-/** RFC3339 to the value of a datetime-local input, in the browser's zone. */
+/** RFC3339 to the value of a datetime-local input, in the server zone. */
 function toLocalInput(iso: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
+  const p = zonedParts(d);
   const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
 }
 
-/** A datetime-local value to RFC3339, or "" when empty. */
+/** A datetime-local value, read as server-zone wall time, to RFC3339; "" when empty. */
 function fromLocalInput(v: string): string {
   if (!v) return "";
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  const asUTC = Date.parse(`${v}:00Z`);
+  if (Number.isNaN(asUTC)) return "";
+  // Shift by the zone's offset at that wall time: wall - (wall seen in zone - wall).
+  const p = zonedParts(asUTC);
+  const seen = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+  return new Date(asUTC - (seen - asUTC)).toISOString();
 }
 
 export function CouponsTab() {

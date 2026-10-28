@@ -7,6 +7,7 @@ import { useUpdateInfo } from "../../components/UpdateNotification";
 import { useToast } from "../../components/Toast";
 import { Badge, Button, Skeleton } from "../../components/ui";
 import { SettingsCard } from "./shared";
+import { fmtDate } from "../../lib/serverTime";
 
 export function SystemTab() {
   return (
@@ -42,7 +43,7 @@ function UpdatesSettings() {
   };
 
   const publishedLabel = data?.published_at
-    ? new Date(data.published_at).toLocaleDateString(undefined, {
+    ? fmtDate(data.published_at, {
         year: "numeric",
         month: "short",
         day: "numeric",

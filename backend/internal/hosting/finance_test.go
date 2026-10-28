@@ -8,6 +8,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// WIB pins Zone so results do not depend on the test host.
+var WIB = time.FixedZone("WIB", 7*3600)
+
+func init() { Zone = WIB }
+
 func TestCostInMonth(t *testing.T) {
 	oct := time.Date(2026, 10, 1, 0, 0, 0, 0, WIB)
 	monthly := store.HostingCost{AmountIDR: 100, Period: store.CostMonthly, StartDate: "2026-09-15"}

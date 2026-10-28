@@ -23,6 +23,7 @@ import { ICONS } from "../lib/icons";
 import { CopyButton, HighlightedCode } from "../components/ui/code-block";
 import type { CodeLanguage } from "../lib/highlight";
 import { dashboard } from "../lib/dashboardRoutes";
+import { fmtDateTime, fmtTime, serverDateISO } from "../lib/serverTime";
 
 // ── Period model ─────────────────────────────────────────────────────────────
 
@@ -1301,18 +1302,16 @@ function absUSDDelta(cur: number, prev: number | undefined): Delta | null {
 }
 
 function formatBucket(iso: string, withDate: boolean): string {
-  const d = new Date(iso);
   return withDate
-    ? d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-    : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    ? fmtDateTime(iso, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : fmtTime(iso, { hour: "2-digit", minute: "2-digit" });
 }
 
 function formatClock(iso: string): string {
-  const d = new Date(iso);
-  const sameDay = d.toDateString() === new Date().toDateString();
+  const sameDay = serverDateISO(iso) === serverDateISO(Date.now());
   return sameDay
-    ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
-    : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+    ? fmtTime(iso, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+    : fmtDateTime(iso, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function relativeFuture(iso: string): string {

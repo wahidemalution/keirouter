@@ -9,6 +9,11 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
+// wib pins the finance zone so results do not depend on the test host.
+var wib = time.FixedZone("WIB", 7*3600)
+
+func init() { hosting.Zone = wib }
+
 func near(a, b, eps float64) bool { return math.Abs(a-b) <= eps }
 
 func row() store.CostBasisRow {
@@ -81,12 +86,12 @@ func TestBuildOverview_MarkupExample(t *testing.T) {
 }
 
 func TestBuildSeries_DailyFillsGapsAndEstimates(t *testing.T) {
-	now := time.Date(2026, 10, 28, 10, 0, 0, 0, hosting.WIB)
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, wib)
 	plan, err := planSeries("7d", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	day := func(d int) int64 { return (time.Date(2026, 10, d, 0, 0, 0, 0, hosting.WIB).Unix() + wibOffset) / 86400 }
+	day := func(d int) int64 { return (time.Date(2026, 10, d, 0, 0, 0, 0, wib).Unix() + 7*3600) / 86400 }
 	pts := []store.CostBasisPoint{
 		{Bucket: day(22), CostBasisRow: store.CostBasisRow{ChainID: "c1", Requests: 2, BilledNanos: 15e8, UpstreamNanos: 1e9}},
 		{Bucket: day(28), CostBasisRow: store.CostBasisRow{ChainID: "c1", Requests: 1, BilledNanos: 3e9, UnknownBilledNanos: 3e9}},
@@ -96,7 +101,7 @@ func TestBuildSeries_DailyFillsGapsAndEstimates(t *testing.T) {
 	if s.Granularity != "day" || len(s.Points) != 7 {
 		t.Fatalf("got %s with %d points", s.Granularity, len(s.Points))
 	}
-	if !s.Points[0].Start.Equal(time.Date(2026, 10, 22, 0, 0, 0, 0, hosting.WIB)) {
+	if !s.Points[0].Start.Equal(time.Date(2026, 10, 22, 0, 0, 0, 0, wib)) {
 		t.Fatalf("first bucket starts %v", s.Points[0].Start)
 	}
 	p0, p6 := s.Points[0], s.Points[6]
@@ -113,10 +118,10 @@ func TestBuildSeries_DailyFillsGapsAndEstimates(t *testing.T) {
 }
 
 func TestBuildSeries_AllTimeFoldsMonths(t *testing.T) {
-	now := time.Date(2026, 10, 28, 10, 0, 0, 0, hosting.WIB)
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, wib)
 	plan, _ := planSeries("all", now)
 	day := func(m time.Month, d int) int64 {
-		return (time.Date(2026, m, d, 0, 0, 0, 0, hosting.WIB).Unix() + wibOffset) / 86400
+		return (time.Date(2026, m, d, 0, 0, 0, 0, wib).Unix() + 7*3600) / 86400
 	}
 	pts := []store.CostBasisPoint{
 		{Bucket: day(8, 3), CostBasisRow: store.CostBasisRow{Requests: 1, BilledNanos: 2e9, UpstreamNanos: 1e9}},

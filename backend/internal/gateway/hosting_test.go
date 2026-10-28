@@ -508,7 +508,7 @@ func TestHostingCosts_CRUDAndFinance(t *testing.T) {
 	s, _, _ := hostingTestServer(t)
 	r := chi.NewRouter()
 	s.mountHostingOps(r)
-	today := time.Now().In(hosting.WIB).Format("2006-01-02")
+	today := time.Now().In(hosting.Zone).Format("2006-01-02")
 
 	rec := doJSON(t, r, http.MethodPost, "/hosting/costs", `{"name":"VPS 8GB","category":"vps","amount_idr":150000,"period":"monthly","start_date":"`+today+`"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())

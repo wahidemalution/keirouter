@@ -41,6 +41,7 @@ import { ICONS } from "../lib/icons";
 import { REPORT_PERIODS } from "../lib/periods";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { fmtDate, fmtDateTime } from "../lib/serverTime";
 
 type Tab = "general" | "usage" | "models" | "budget" | "guardrails";
 const TAB_VALUES: Tab[] = ["general", "usage", "models", "budget", "guardrails"];
@@ -69,7 +70,7 @@ function relativeTime(iso?: string | null): string {
   if (h < 24) return `${Math.round(h)} h ago`;
   const d = h / 24;
   if (d < 30) return `${Math.round(d)} d ago`;
-  return new Date(t).toLocaleDateString();
+  return fmtDate(t);
 }
 
 function useCopy() {
@@ -309,7 +310,7 @@ export function KeyDetailPage() {
                 <Copy className="h-3 w-3 shrink-0 text-fg-faint" aria-hidden="true" />
               </button>
               <span aria-hidden="true" className="text-fg-faint">·</span>
-              <span title={new Date(key.created_at).toLocaleString()}>Created {new Date(key.created_at).toLocaleDateString()}</span>
+              <span title={fmtDateTime(key.created_at)}>Created {fmtDate(key.created_at)}</span>
             </p>
           </div>
         </div>
