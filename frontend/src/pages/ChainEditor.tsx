@@ -164,6 +164,13 @@ function EditorSkeleton() {
   );
 }
 
+// stepKey identifies a route step for duplicate checks. Two steps may share a
+// provider/model when their market slugs differ (surplus-fast then
+// surplus-trusted): they route differently upstream.
+function stepKey(step: { provider: string; model: string; marketSlug?: string }): string {
+  return `${step.provider}/${step.model}|${(step.marketSlug ?? "").trim()}`;
+}
+
 export function ChainEditorPage() {
   const { id } = useParams();
   const isEdit = Boolean(id);
@@ -260,7 +267,7 @@ export function ChainEditorPage() {
   const incompleteSteps = steps.some((step) => !step.provider || !step.model);
   const duplicateKeys = new Set<string>();
   const duplicate = completeSteps.some((step) => {
-    const key = `${step.provider}/${step.model}`;
+    const key = stepKey(step);
     if (duplicateKeys.has(key)) return true;
     duplicateKeys.add(key);
     return false;
@@ -279,7 +286,7 @@ export function ChainEditorPage() {
   const offered = hasMarketSlugs ? (existing?.input_per_m ?? 0) + (existing?.output_per_m ?? 0) : chainPrice.inputPerM + chainPrice.outputPerM;
   const officialPreview = officialRef && offered > 0 && offered < officialRef.input + officialRef.output ? Math.floor((1 - offered / (officialRef.input + officialRef.output)) * 100) : 0;
   const officialInvalid = officialManual && (invalidOfficialRate(officialInput) || invalidOfficialRate(officialOutput));
-  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : needsPricing ? "Set both input and output price, or clear all price fields." : "";
+  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : needsPricing ? "Set both input and output price, or clear all price fields." : "";
   const valid = !validationMessage;
   const routeChain = useMemo(() => ({ id: existing?.id ?? "draft", name, strategy, steps: completeSteps.map((step, position) => ({ provider: step.provider, model: step.model, position } as ChainStep)), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" } as Chain), [completeSteps, existing?.id, fallback.model, fallback.provider, fallbackEnabled, name, strategy]);
 
@@ -292,10 +299,10 @@ export function ChainEditorPage() {
   const stepsError = completeSteps.length === 0
     ? (dirty ? "Add at least one model to the route." : "")
     : incompleteSteps ? "Complete or remove every model row before saving."
-    : duplicate ? "Each route step must be a different provider/model target." : "";
+    : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : "";
   const duplicateRowKeys = useMemo(() => {
     const seen = new Map<string, number>();
-    for (const step of steps) if (step.provider && step.model) seen.set(`${step.provider}/${step.model}`, (seen.get(`${step.provider}/${step.model}`) ?? 0) + 1);
+    for (const step of steps) if (step.provider && step.model) seen.set(stepKey(step), (seen.get(stepKey(step)) ?? 0) + 1);
     return new Set([...seen].filter(([, count]) => count > 1).map(([key]) => key));
   }, [steps]);
   const fallbackError = fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : "";
@@ -599,7 +606,7 @@ export function ChainEditorPage() {
             <p id="chain-steps-keyboard-hint" className="sr-only">Press Alt plus Up or Down arrow inside a step to move it.</p>
             <ol className="divide-y divide-line" aria-labelledby="chain-steps-heading" aria-describedby="chain-steps-keyboard-hint">
               {steps.map((step, index) => {
-                const isDuplicate = Boolean(step.provider && step.model && duplicateRowKeys.has(`${step.provider}/${step.model}`));
+                const isDuplicate = Boolean(step.provider && step.model && duplicateRowKeys.has(stepKey(step)));
                 const position = `step ${index + 1} of ${steps.length}`;
                 const model = step.model ? `, ${step.model}` : "";
                 return (
@@ -653,7 +660,7 @@ export function ChainEditorPage() {
                       </div>
                     </div>
                     <div className="sm:pl-8">
-                      <Field label="Market slug" hint="Inferhub market slug for this step (optional)">
+                      <Field label="Market slug" hint="Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:">
                         <Input value={step.marketSlug} onChange={(event) => updateStep(step.id, { marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
                       </Field>
                     </div>
