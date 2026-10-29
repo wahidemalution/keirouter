@@ -141,6 +141,9 @@ type Target struct {
 	// sent upstream as the body field `provider`, so a surplus-trusted step is
 	// served by trusted sellers only. A string keeps Target comparable.
 	UpstreamProviders string
+	// UpstreamProviderOrder, when set, is a comma-separated preferred attempt
+	// order sent upstream as `provider_order` (surplus-fast: fastest first).
+	UpstreamProviderOrder string
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the
@@ -342,18 +345,23 @@ type PlanOptions struct {
 }
 
 // AttemptKey uniquely identifies one routed provider/model/account candidate.
+// MarketSlug is part of it because two chain steps on the same model can route
+// differently upstream (surplus-fast then surplus-trusted): the second must
+// still be tried after the first fails.
 type AttemptKey struct {
-	Provider  string
-	Model     string
-	AccountID string
+	Provider   string
+	Model      string
+	MarketSlug string
+	AccountID  string
 }
 
 // Key returns the stable identity used to exclude an already-tried attempt.
 func (a Attempt) Key() AttemptKey {
 	return AttemptKey{
-		Provider:  a.Target.Provider,
-		Model:     a.Target.Model,
-		AccountID: a.Account.ID,
+		Provider:   a.Target.Provider,
+		Model:      a.Target.Model,
+		MarketSlug: a.Target.MarketSlug,
+		AccountID:  a.Account.ID,
 	}
 }
 
@@ -497,7 +505,7 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 		}
 
 		for _, acc := range accs {
-			key := AttemptKey{Provider: target.Provider, Model: target.Model, AccountID: acc.ID}
+			key := AttemptKey{Provider: target.Provider, Model: target.Model, MarketSlug: target.MarketSlug, AccountID: acc.ID}
 			if _, excluded := opts.ExcludedAttempts[key]; excluded {
 				lastReason = fmt.Sprintf("account %s already attempted for model %s", acc.ID, target.Model)
 				continue

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"strings"
 
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -45,7 +44,7 @@ func applyDiscountFloor(targets []dispatch.Target, floorPct int, model string) (
 	}
 	out := make([]dispatch.Target, 0, len(targets))
 	for _, t := range targets {
-		if !t.BillUpstreamCost || !strings.HasPrefix(t.MarketSlug, market.SurplusTrustedPrefix) {
+		if !t.BillUpstreamCost || !market.IsUpstreamCostSlug(t.MarketSlug) {
 			continue
 		}
 		t.MinDiscountPct = max(t.MinDiscountPct, upstreamDiscountForFloor(floorPct, t.UpstreamCostMult))

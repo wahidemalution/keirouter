@@ -10,7 +10,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 )
 
-// Only surplus-trusted steps are marketplace-routed; the flag must not leak
+// Only surplus-trusted and surplus-fast steps are marketplace-routed; the flag must not leak
 // onto direct provider steps, and the scope is left alone so same-attempt
 // retries of transient faults still apply.
 func TestProviderErrorForAttemptMarksMarketRoutes(t *testing.T) {
@@ -21,6 +21,9 @@ func TestProviderErrorForAttemptMarksMarketRoutes(t *testing.T) {
 	require.True(t, pe.MarketRouted)
 	require.Equal(t, core.FailureScopeProvider, pe.EffectiveScope())
 	require.False(t, upstream.MarketRouted, "the shared upstream error must not be mutated")
+
+	fast := dispatch.Attempt{Target: dispatch.Target{Provider: "custom-openai-surplus", Model: "glm-5.3-flash", MarketSlug: "surplus-fast:glm-5.3-flash"}}
+	require.True(t, providerErrorForAttempt(upstream, fast).MarketRouted)
 
 	direct := dispatch.Attempt{Target: dispatch.Target{Provider: "custom-openai-inferhub", Model: "ali/deepseek-v4.1-flash", MarketSlug: "ali/deepseek-v4.1-flash"}}
 	require.False(t, providerErrorForAttempt(upstream, direct).MarketRouted)

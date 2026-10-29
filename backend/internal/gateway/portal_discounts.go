@@ -172,16 +172,16 @@ func (s *Server) keyChains(r *http.Request, key store.APIKey, planID string) ([]
 }
 
 // chainCanGuaranteeDiscount reports whether any step of the chain routes
-// through a surplus-trusted slug, the only kind of step applyDiscountFloor
+// through a surplus-trusted or surplus-fast slug, the only kind of step applyDiscountFloor
 // keeps. It mirrors how chains bind those slugs (per step, or chain-level
 // slugs matched to a step's model).
 func chainCanGuaranteeDiscount(c store.Chain) bool {
 	for _, st := range c.Steps {
-		if strings.HasPrefix(st.MarketSlug, market.SurplusTrustedPrefix) {
+		if market.IsUpstreamCostSlug(st.MarketSlug) {
 			return true
 		}
 		for _, slug := range c.MarketSlugs {
-			if name, ok := strings.CutPrefix(slug, market.SurplusTrustedPrefix); ok && name == st.Model {
+			if name, ok := market.CutUpstreamCostSlug(slug); ok && name == st.Model {
 				return true
 			}
 		}

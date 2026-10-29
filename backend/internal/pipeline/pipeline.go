@@ -1941,7 +1941,7 @@ func providerErrorForAttempt(err error, attempt dispatch.Attempt) *core.Provider
 // isMarketRouted reports whether the marketplace, not this account, picks the
 // seller that serves the target.
 func isMarketRouted(t dispatch.Target) bool {
-	return strings.HasPrefix(t.MarketSlug, market.SurplusTrustedPrefix)
+	return market.IsUpstreamCostSlug(t.MarketSlug)
 }
 
 func attemptForTargets(targets []dispatch.Target) dispatch.Attempt {
@@ -2159,6 +2159,9 @@ func cloneForTarget(req *core.ChatRequest, target dispatch.Target) *core.ChatReq
 	clone.UpstreamUsage = target.BillUpstreamCost
 	if target.UpstreamProviders != "" {
 		clone.UpstreamProviders = strings.Split(target.UpstreamProviders, ",")
+	}
+	if target.UpstreamProviderOrder != "" {
+		clone.UpstreamProviderOrder = strings.Split(target.UpstreamProviderOrder, ",")
 	}
 	return clone
 }

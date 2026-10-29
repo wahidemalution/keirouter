@@ -29,6 +29,9 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 		SafetyMarginEnabled    *bool    `json:"safety_margin_enabled"`
 		SafetyMarginPercent    *float64 `json:"safety_margin_percent"`
 		SurplusFallbackDepth   *int     `json:"surplus_fallback_depth"`
+		// SurplusFastTolerancePct is the surplus-fast price band above the
+		// cheapest available offer.
+		SurplusFastTolerancePct *float64 `json:"surplus_fast_tolerance_pct"`
 	}
 	if !decodeJSON(w, r, &patch) {
 		return
@@ -69,6 +72,14 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 			return
 		}
 		current.SurplusFallbackDepth = v
+	}
+	if patch.SurplusFastTolerancePct != nil {
+		v := *patch.SurplusFastTolerancePct
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > 1000 {
+			writeError(w, http.StatusBadRequest, "surplus_fast_tolerance_pct must be between 0 and 1000")
+			return
+		}
+		current.SurplusFastTolerancePct = v
 	}
 	if err := market.SaveSettings(r.Context(), s.settings.Set, current); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

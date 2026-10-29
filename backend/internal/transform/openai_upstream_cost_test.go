@@ -107,3 +107,23 @@ func TestOpenAIRequestSendsProviderAllowListOnlyWhenSet(t *testing.T) {
 		t.Fatalf("trusted request must carry the allow-list: %s", body)
 	}
 }
+
+func TestOpenAIRequestSendsProviderOrderOnlyWhenSet(t *testing.T) {
+	base := core.ChatRequest{Model: "m", Messages: []core.Message{{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hi"}}}}}
+	plain, err := renderOAIRequest(&base, reasoningNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), `"provider_order"`) {
+		t.Fatalf("a request without an order must not send provider_order: %s", plain)
+	}
+	fast := base
+	fast.UpstreamProviderOrder = []string{"google", "bedrock"}
+	body, err := renderOAIRequest(&fast, reasoningNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"provider_order":["google","bedrock"]`) {
+		t.Fatalf("fast request must carry the order: %s", body)
+	}
+}

@@ -186,7 +186,7 @@ func surplusSlugs(c store.Chain) []string {
 		if seen[slug] {
 			return
 		}
-		if strings.HasPrefix(slug, market.SurplusTrustedPrefix) || strings.HasPrefix(slug, market.SurplusPrefix) {
+		if market.IsUpstreamCostSlug(slug) || strings.HasPrefix(slug, market.SurplusPrefix) {
 			seen[slug] = true
 			out = append(out, slug)
 		}

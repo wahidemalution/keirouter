@@ -40,6 +40,7 @@ type oaiRequest struct {
 	StreamOpts        *oaiStreamOpt   `json:"stream_options,omitempty"`
 	// Provider is the Surplus body allow-list of seller provider_ids.
 	Provider        []string            `json:"provider,omitempty"`
+	ProviderOrder   []string            `json:"provider_order,omitempty"`
 	ResponseFormat  json.RawMessage     `json:"response_format,omitempty"`
 	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
 	Thinking        *oaiThinking        `json:"thinking,omitempty"`
@@ -746,6 +747,9 @@ func buildOAIRequest(req *core.ChatRequest, scope reasoningScope) (*oaiRequest, 
 	// Surplus's provider allow-list; Surplus strips it before the seller call.
 	if len(req.UpstreamProviders) > 0 {
 		out.Provider = append([]string(nil), req.UpstreamProviders...)
+	}
+	if len(req.UpstreamProviderOrder) > 0 {
+		out.ProviderOrder = append([]string(nil), req.UpstreamProviderOrder...)
 	}
 
 	if req.System != "" {

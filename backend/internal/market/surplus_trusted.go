@@ -52,19 +52,32 @@ type TrustedQuote struct {
 	// offers. It is sent upstream as the body field `provider`, so Surplus
 	// cannot route the request to an untrusted seller.
 	Providers []string
-	Eligible  int
+	// ProviderOrder, when set, is the preferred attempt order sent upstream
+	// as `provider_order` (surplus-fast: fastest first).
+	ProviderOrder []string
+	Eligible      int
 }
 
 // Model converts the quote into a snapshot model keyed surplus-trusted:<name>.
 func (q TrustedQuote) Model(name string) Model {
+	return q.model(SurplusTrustedPrefix + name)
+}
+
+// FastModel converts the quote into a snapshot model keyed surplus-fast:<name>.
+func (q TrustedQuote) FastModel(name string) Model {
+	return q.model(SurplusFastPrefix + name)
+}
+
+func (q TrustedQuote) model(slug string) Model {
 	return Model{
-		Slug:           SurplusTrustedPrefix + name,
+		Slug:           slug,
 		MinAskIn:       q.BestIn,
 		MinAskOut:      q.BestOut,
 		FailoverIn:     q.CapIn,
 		FailoverOut:    q.CapOut,
 		MinDiscountPct: q.MinDiscountPct,
 		Providers:      q.Providers,
+		ProviderOrder:  q.ProviderOrder,
 	}
 }
 

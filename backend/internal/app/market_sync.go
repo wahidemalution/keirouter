@@ -32,10 +32,10 @@ func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
 	var (
 		wg                 sync.WaitGroup
 		inferhub, surplus  []market.Model
-		trusted            []market.Model
+		trusted, fast      []market.Model
 		inferErr, surplErr error
 	)
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		inferhub, inferErr = market.Fetch(ctx, a.marketURL)
@@ -48,15 +48,20 @@ func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
 		defer wg.Done()
 		trusted = a.fetchSurplusTrusted(ctx)
 	}()
+	go func() {
+		defer wg.Done()
+		fast = a.fetchSurplusFast(ctx)
+	}()
 	wg.Wait()
 
 	if surplErr != nil {
 		a.log.Debug("surplus fetch failed", "err", surplErr)
 	}
-	out := make([]market.Model, 0, len(inferhub)+len(surplus)+len(trusted))
+	out := make([]market.Model, 0, len(inferhub)+len(surplus)+len(trusted)+len(fast))
 	out = append(out, inferhub...)
 	out = append(out, surplus...)
 	out = append(out, trusted...)
+	out = append(out, fast...)
 	if len(out) == 0 {
 		if inferErr != nil {
 			return nil, inferErr
@@ -66,18 +71,19 @@ func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
 	return out, nil
 }
 
-// trustedBinding is one surplus-trusted model referenced by the chains, with
-// the /min{N} floor of the provider base URL serving it.
+// trustedBinding is one surplus-trusted or surplus-fast model referenced by
+// the chains, with the /min{N} floor of the provider base URL serving it.
 type trustedBinding struct {
 	name     string
 	floorPct int
 }
 
 // boundTrustedSurplusModels returns the Surplus model names referenced by any
-// chain (chain-level or per-step) through a surplus-trusted: slug. Each carries
-// the lowest /min{N} floor among the step providers serving it, so a quote is
-// never stricter than the most permissive route that can reach Surplus.
-func (a *App) boundTrustedSurplusModels(ctx context.Context) []trustedBinding {
+// chain (chain-level or per-step) through a slug with the given prefix
+// (surplus-trusted: or surplus-fast:). Each carries the lowest /min{N} floor
+// among the step providers serving it, so a quote is never stricter than the
+// most permissive route that can reach Surplus.
+func (a *App) boundTrustedSurplusModels(ctx context.Context, prefix string) []trustedBinding {
 	chains, err := a.db.Chains().ListByTenant(ctx, store.DefaultTenantID)
 	if err != nil {
 		a.log.Debug("surplus trusted: list chains failed", "err", err)
@@ -94,7 +100,7 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context) []trustedBinding {
 	idx := map[string]int{}
 	var out []trustedBinding
 	add := func(slug, provider string) {
-		name, ok := strings.CutPrefix(slug, market.SurplusTrustedPrefix)
+		name, ok := strings.CutPrefix(slug, prefix)
 		if !ok || name == "" {
 			return
 		}
@@ -114,7 +120,7 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context) []trustedBinding {
 				continue
 			}
 			for _, slug := range c.MarketSlugs {
-				if strings.TrimPrefix(slug, market.SurplusTrustedPrefix) == st.Model {
+				if strings.TrimPrefix(slug, prefix) == st.Model {
 					add(slug, st.Provider)
 				}
 			}
@@ -124,7 +130,7 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context) []trustedBinding {
 	// A chain-level slug no step serves is still quoted for display, without a
 	// floor, unless some step already bound it.
 	for _, slug := range unserved {
-		if _, seen := idx[strings.TrimPrefix(slug, market.SurplusTrustedPrefix)]; !seen {
+		if _, seen := idx[strings.TrimPrefix(slug, prefix)]; !seen {
 			add(slug, "")
 		}
 	}
@@ -137,7 +143,7 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context) []trustedBinding {
 // or empty book drops that slug from the snapshot so routing never prices
 // against stale trusted offers.
 func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
-	bound := a.boundTrustedSurplusModels(ctx)
+	bound := a.boundTrustedSurplusModels(ctx, market.SurplusTrustedPrefix)
 	if len(bound) == 0 {
 		return nil
 	}
@@ -176,6 +182,51 @@ func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
 				}
 			}
 			out[i], ok[i] = q.Model(b.name), true
+		}()
+	}
+	wg.Wait()
+	models := out[:0]
+	for i := range out {
+		if ok[i] {
+			models = append(models, out[i])
+		}
+	}
+	return models
+}
+
+// fetchSurplusFast quotes every bound surplus-fast model: available and
+// healthy offers of any trust within the configured price tolerance, with
+// providers ranked by published TTFT. As with trusted quotes, a failed or
+// empty book drops the slug so routing never uses stale offers.
+func (a *App) fetchSurplusFast(ctx context.Context) []market.Model {
+	bound := a.boundTrustedSurplusModels(ctx, market.SurplusFastPrefix)
+	if len(bound) == 0 {
+		return nil
+	}
+	if len(bound) > maxSurplusBooksPerSync {
+		a.log.Warn("surplus fast: order-book fetch capped", "cap", maxSurplusBooksPerSync, "bound", len(bound))
+		bound = bound[:maxSurplusBooksPerSync]
+	}
+	settings := market.LoadSettings(ctx, a.db.Settings().Get)
+	tolerance, depth := settings.SurplusFastTolerancePct, settings.SurplusFallbackDepth
+	out := make([]market.Model, len(bound))
+	ok := make([]bool, len(bound))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for i, b := range bound {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			q, err := market.FetchSurplusFastBook(ctx, a.surplusURL, b.name, tolerance, depth, b.floorPct)
+			if err != nil || !q.Found {
+				if err != nil {
+					a.log.Debug("surplus fast book fetch failed", "model", b.name, "err", err)
+				}
+				return
+			}
+			out[i], ok[i] = q.FastModel(b.name), true
 		}()
 	}
 	wg.Wait()

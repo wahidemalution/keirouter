@@ -14,17 +14,19 @@ export function MarketPricingSection() {
   const [intervalSec, setIntervalSec] = useState("");
   const [safetyPct, setSafetyPct] = useState("");
   const [depth, setDepth] = useState("");
+  const [fastTolerance, setFastTolerance] = useState("");
   useEffect(() => {
     if (settings.data) {
       setMarkup(String(settings.data.markup_percent));
       setIntervalSec(String(settings.data.refresh_interval_seconds));
       setSafetyPct(String(settings.data.safety_margin_percent));
       setDepth(String(settings.data.surplus_fallback_depth ?? 3));
+      setFastTolerance(String(settings.data.surplus_fast_tolerance_pct ?? 30));
     }
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent" | "surplus_fallback_depth">>) =>
+    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent" | "surplus_fallback_depth" | "surplus_fast_tolerance_pct">>) =>
       api.updateMarketPricingSettings(patch),
     onSuccess: (data) => {
       qc.setQueryData(["market-pricing-settings"], data);
@@ -58,6 +60,11 @@ export function MarketPricingSection() {
     safetyTrim === "" || !Number.isFinite(Number(safetyPct)) || Number(safetyPct) < 0 || Number(safetyPct) > 1000;
   const depthInvalid =
     depth.trim() === "" || !Number.isInteger(Number(depth)) || Number(depth) < 0 || Number(depth) > 20;
+  const fastToleranceInvalid =
+    fastTolerance.trim() === "" ||
+    !Number.isFinite(Number(fastTolerance)) ||
+    Number(fastTolerance) < 0 ||
+    Number(fastTolerance) > 1000;
 
   return (
     <div className="space-y-4">
@@ -139,8 +146,24 @@ export function MarketPricingSection() {
                 />
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
                   For <code>surplus-trusted:</code> slugs: Surplus may fail over across this many trusted
-                  price levels (sent as X-Min-Discount). Users are billed Surplus's reported cost plus markup.
-                  0 = no ceiling.
+                  price levels (sent as X-Min-Discount). For <code>surplus-fast:</code> slugs: this many price
+                  levels above the tolerance band stay as backup when every offer in the band is refused. Users
+                  are billed Surplus's reported cost plus markup. 0 = no ceiling.
+                </p>
+              </Field>
+              <Field label="Surplus fast price tolerance %">
+                <Input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={fastTolerance}
+                  onChange={(e) => setFastTolerance(e.target.value)}
+                  className="w-24"
+                />
+                <p className="mt-1 text-xs text-[var(--text-muted)]">
+                  For <code>surplus-fast:</code> slugs: an available, healthy offer (trusted or not) may ask up
+                  to this much above the cheapest one. Among those, the provider with the lowest time to first
+                  token goes first. 0 = always the cheapest.
                 </p>
               </Field>
             </div>
@@ -154,9 +177,10 @@ export function MarketPricingSection() {
                   refresh_interval_seconds: Number(intervalSec),
                   safety_margin_percent: Number(safetyPct),
                   surplus_fallback_depth: Number(depth),
+                  surplus_fast_tolerance_pct: Number(fastTolerance),
                 })
               }
-              disabled={save.isPending || markupInvalid || intervalInvalid || safetyInvalid || depthInvalid}
+              disabled={save.isPending || markupInvalid || intervalInvalid || safetyInvalid || depthInvalid || fastToleranceInvalid}
             >
               {save.isPending ? "Saving…" : "Save"}
             </Button>
