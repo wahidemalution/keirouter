@@ -240,6 +240,8 @@ export interface MarketPricingSettings {
   surplus_fallback_depth: number;
   /** surplus-fast price band above the cheapest available offer, in percent (0 = cheapest only). */
   surplus_fast_tolerance_pct: number;
+  /** Surplus provider ids left out of surplus-trusted and surplus-fast quotes. */
+  surplus_blocked_providers: string[];
   last_fetched_at: string;
   last_fetch_error?: string;
   last_synced_count: number;

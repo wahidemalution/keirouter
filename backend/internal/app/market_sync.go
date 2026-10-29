@@ -151,7 +151,8 @@ func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
 		a.log.Warn("surplus trusted: order-book fetch capped", "cap", maxSurplusBooksPerSync, "bound", len(bound))
 		bound = bound[:maxSurplusBooksPerSync]
 	}
-	depth := market.LoadSettings(ctx, a.db.Settings().Get).SurplusFallbackDepth
+	settings := market.LoadSettings(ctx, a.db.Settings().Get)
+	depth, blocked := settings.SurplusFallbackDepth, settings.SurplusBlockedProviders
 	ceiling := depth > 0
 	if !ceiling {
 		depth = 1
@@ -166,7 +167,7 @@ func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			q, err := market.FetchSurplusTrustedBook(ctx, a.surplusURL, b.name, depth, b.floorPct)
+			q, err := market.FetchSurplusTrustedBook(ctx, a.surplusURL, b.name, depth, b.floorPct, blocked)
 			if err != nil || !q.Found {
 				if err != nil {
 					a.log.Debug("surplus trusted book fetch failed", "model", b.name, "err", err)
@@ -208,7 +209,7 @@ func (a *App) fetchSurplusFast(ctx context.Context) []market.Model {
 		bound = bound[:maxSurplusBooksPerSync]
 	}
 	settings := market.LoadSettings(ctx, a.db.Settings().Get)
-	tolerance, depth := settings.SurplusFastTolerancePct, settings.SurplusFallbackDepth
+	tolerance, depth, blocked := settings.SurplusFastTolerancePct, settings.SurplusFallbackDepth, settings.SurplusBlockedProviders
 	out := make([]market.Model, len(bound))
 	ok := make([]bool, len(bound))
 	var wg sync.WaitGroup
@@ -219,7 +220,7 @@ func (a *App) fetchSurplusFast(ctx context.Context) []market.Model {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			q, err := market.FetchSurplusFastBook(ctx, a.surplusURL, b.name, tolerance, depth, b.floorPct)
+			q, err := market.FetchSurplusFastBook(ctx, a.surplusURL, b.name, tolerance, depth, b.floorPct, blocked)
 			if err != nil || !q.Found {
 				if err != nil {
 					a.log.Debug("surplus fast book fetch failed", "model", b.name, "err", err)

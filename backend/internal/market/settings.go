@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"slices"
+	"strings"
 )
 
 const SettingsKey = "market_pricing_settings"
@@ -24,13 +26,18 @@ type Settings struct {
 	// SurplusFastTolerancePct is how far above the cheapest available offer a
 	// surplus-fast offer may ask and still be routed to (0 = cheapest only).
 	SurplusFastTolerancePct float64 `json:"surplus_fast_tolerance_pct"`
-	LastFetchedAt           string  `json:"last_fetched_at"`
-	LastFetchError          string  `json:"last_fetch_error,omitempty"`
-	LastSyncedCount         int     `json:"last_synced_count"`
+	// SurplusBlockedProviders are Surplus provider ids (order-book
+	// provider_id) left out of surplus-trusted and surplus-fast quotes. Block
+	// them on the Surplus account too: this only keeps them out of the shown
+	// price, the allow-list and the ceiling.
+	SurplusBlockedProviders []string `json:"surplus_blocked_providers"`
+	LastFetchedAt           string   `json:"last_fetched_at"`
+	LastFetchError          string   `json:"last_fetch_error,omitempty"`
+	LastSyncedCount         int      `json:"last_synced_count"`
 }
 
 func DefaultSettings() Settings {
-	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10, SafetyMarginEnabled: false, SafetyMarginPercent: 10, SurplusFallbackDepth: DefaultSurplusFallbackDepth, SurplusFastTolerancePct: DefaultSurplusFastTolerancePct}
+	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10, SafetyMarginEnabled: false, SafetyMarginPercent: 10, SurplusFallbackDepth: DefaultSurplusFallbackDepth, SurplusFastTolerancePct: DefaultSurplusFastTolerancePct, SurplusBlockedProviders: []string{}}
 }
 
 func LoadSettings(ctx context.Context, get func(context.Context, string) (string, error)) Settings {
@@ -58,6 +65,7 @@ func LoadSettings(ctx context.Context, get func(context.Context, string) (string
 	if s.SafetyMarginPercent < 0 {
 		s.SafetyMarginPercent = def.SafetyMarginPercent
 	}
+	s.SurplusBlockedProviders = NormalizeProviderIDs(s.SurplusBlockedProviders)
 	return s
 }
 
@@ -76,4 +84,26 @@ func EffectiveMarkup(override *float64, global float64) float64 {
 		return global
 	}
 	return *override
+}
+
+// NormalizeProviderIDs trims, lowercases and dedupes provider ids, dropping
+// empty ones. The result is sorted and never nil.
+func NormalizeProviderIDs(ids []string) []string {
+	out := []string{}
+	for _, id := range ids {
+		if id = strings.ToLower(strings.TrimSpace(id)); id != "" {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// providerSet indexes provider ids for blocked-provider lookups.
+func providerSet(ids []string) map[string]bool {
+	set := map[string]bool{}
+	for _, id := range NormalizeProviderIDs(ids) {
+		set[id] = true
+	}
+	return set
 }

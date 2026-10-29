@@ -106,7 +106,8 @@ func FetchSurplusPerformance(ctx context.Context, marketsURL, model string) (map
 
 // ParseSurplusFastBook reads GET /api/markets/:model and quotes the offers that
 // are available and healthy (trust is not required). floorPct > 0 drops offers
-// that cannot prove the provider's /min{N} floor.
+// that cannot prove the provider's /min{N} floor. Offers from blocked
+// providers are ignored, so they never set the band or the ceiling.
 //
 // The band is every offer asking at most tolerancePct above the cheapest one,
 // comparing input + output per 1M. Its providers go first, ranked by perf:
@@ -126,7 +127,7 @@ func FetchSurplusPerformance(ctx context.Context, marketsURL, model string) (map
 // MinDiscountPct is the X-Min-Discount ceiling that admits every kept offer,
 // so Surplus cannot route above them. It is zero (no ceiling) when some kept
 // offer has no list price, as a ceiling would then exclude it.
-func ParseSurplusFastBook(r io.Reader, perf map[string]ProviderPerf, tolerancePct float64, depth, floorPct int) (TrustedQuote, error) {
+func ParseSurplusFastBook(r io.Reader, perf map[string]ProviderPerf, tolerancePct float64, depth, floorPct int, blocked []string) (TrustedQuote, error) {
 	var body trustedBookEnvelope
 	if err := json.NewDecoder(r).Decode(&body); err != nil {
 		return TrustedQuote{}, err
@@ -139,8 +140,9 @@ func ParseSurplusFastBook(r io.Reader, perf map[string]ProviderPerf, tolerancePc
 		in, out, directIn, directOut float64
 	}
 	var asks []ask
+	skip := providerSet(blocked)
 	for _, o := range body.Offers {
-		if !o.Available || !o.Healthy || o.ProviderID == "" {
+		if !o.Available || !o.Healthy || o.ProviderID == "" || skip[strings.ToLower(o.ProviderID)] {
 			continue
 		}
 		if o.PriceInputPer1M == nil || o.PriceOutputPer1M == nil {
@@ -283,7 +285,7 @@ func cmpKnownFirst(a, b *float64) int {
 // FetchSurplusFastBook downloads one model's order book and performance and
 // quotes it for surplus-fast routing. A failed performance fetch is not fatal:
 // providers then rank by price.
-func FetchSurplusFastBook(ctx context.Context, marketsURL, model string, tolerancePct float64, depth, floorPct int) (TrustedQuote, error) {
+func FetchSurplusFastBook(ctx context.Context, marketsURL, model string, tolerancePct float64, depth, floorPct int, blocked []string) (TrustedQuote, error) {
 	perf, err := FetchSurplusPerformance(ctx, marketsURL, model)
 	if err != nil {
 		perf = nil
@@ -301,5 +303,5 @@ func FetchSurplusFastBook(ctx context.Context, marketsURL, model string, toleran
 	if resp.StatusCode != http.StatusOK {
 		return TrustedQuote{}, fmt.Errorf("surplus book status %d", resp.StatusCode)
 	}
-	return ParseSurplusFastBook(resp.Body, perf, tolerancePct, depth, floorPct)
+	return ParseSurplusFastBook(resp.Body, perf, tolerancePct, depth, floorPct, blocked)
 }

@@ -21,7 +21,7 @@ const trustedBookFixture = `{"model":"gpt-5.6-luna","offers":[
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
 
 func TestParseSurplusTrustedBookUsesOnlyTrustedAvailableHealthy(t *testing.T) {
-	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 3, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestParseSurplusTrustedBookUsesOnlyTrustedAvailableHealthy(t *testing.T) {
 }
 
 func TestParseSurplusTrustedBookDepthCapsAtThirdDistinctLevel(t *testing.T) {
-	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 3, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestParseSurplusTrustedBookDepthCapsAtThirdDistinctLevel(t *testing.T) {
 func TestParseSurplusTrustedBookCapNeverBelowLevel(t *testing.T) {
 	// Level 1 discount is 98.7525% → ceiling 98-2 = 96 → cap 4% of list, which must be
 	// at least the level price itself so the fallback bill can never undercut.
-	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 1, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 1, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestParseSurplusTrustedBookCapNeverBelowLevel(t *testing.T) {
 }
 
 func TestParseSurplusTrustedBookDepthBeyondLevelsUsesDeepest(t *testing.T) {
-	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 10, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 10, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestParseSurplusTrustedBookDepthBeyondLevelsUsesDeepest(t *testing.T) {
 
 func TestParseSurplusTrustedBookNoEligible(t *testing.T) {
 	const fixture = `{"offers":[{"price_input_per_1m":1,"price_output_per_1m":2,"direct_input_per_1m":10,"direct_output_per_1m":20,"available":true,"healthy":true,"trusted":false}]}`
-	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestParseSurplusTrustedBookNoEligible(t *testing.T) {
 
 func TestParseSurplusTrustedBookMissingDirectDisablesCap(t *testing.T) {
 	const fixture = `{"offers":[{"provider_id":"google","price_input_per_1m":100,"price_output_per_1m":200,"available":true,"healthy":true,"trusted":true}]}`
-	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestTrustedModelCarriesQuote(t *testing.T) {
 }
 
 func TestParseSurplusTrustedBookProviderAllowList(t *testing.T) {
-	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 3, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestParseSurplusTrustedBookProviderAllowList(t *testing.T) {
 
 func TestParseSurplusTrustedBookSkipsOfferWithoutProviderID(t *testing.T) {
 	const fixture = `{"offers":[{"price_input_per_1m":100,"price_output_per_1m":200,"direct_input_per_1m":1000,"direct_output_per_1m":2000,"available":true,"healthy":true,"trusted":true}]}`
-	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 0)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestParseSurplusTrustedBookFloorDropsShallowOffers(t *testing.T) {
 	  {"provider_id":"bedrock","price_input_per_1m":600000,"price_output_per_1m":2400000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true},
 	  {"provider_id":"google","price_input_per_1m":700000,"price_output_per_1m":2800000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true}
 	]}`
-	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 30)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 30, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestParseSurplusTrustedBookFloorDropsShallowOffers(t *testing.T) {
 
 func TestParseSurplusTrustedBookFloorNeedsListPrice(t *testing.T) {
 	const fixture = `{"offers":[{"provider_id":"google","price_input_per_1m":100,"price_output_per_1m":200,"available":true,"healthy":true,"trusted":true}]}`
-	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 30)
+	q, err := ParseSurplusTrustedBook(strings.NewReader(fixture), 3, 30, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,5 +204,23 @@ func TestMinDiscountFloor(t *testing.T) {
 		if got := MinDiscountFloor(in); got != want {
 			t.Errorf("MinDiscountFloor(%q) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+// A provider the Surplus account blocks would refuse the request; quoting it
+// shows a price nobody can buy and sets a ceiling the real sellers fail.
+func TestParseSurplusTrustedBookSkipsBlockedProvider(t *testing.T) {
+	q, err := ParseSurplusTrustedBook(strings.NewReader(trustedBookFixture), 1, 0, []string{" Bedrock "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approx(q.BestIn, 0.009) || !approx(q.BestOut, 0.054) {
+		t.Fatalf("best = (%v,%v), want openai's 0.009/0.054", q.BestIn, q.BestOut)
+	}
+	if len(q.Providers) != 1 || q.Providers[0] != "openai" {
+		t.Fatalf("allow-list = %v, want [openai]", q.Providers)
+	}
+	if q.MinDiscountPct != 93 {
+		t.Fatalf("ceiling = %d, want 93 from openai's 95.5%%", q.MinDiscountPct)
 	}
 }

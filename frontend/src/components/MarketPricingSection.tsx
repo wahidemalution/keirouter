@@ -15,6 +15,7 @@ export function MarketPricingSection() {
   const [safetyPct, setSafetyPct] = useState("");
   const [depth, setDepth] = useState("");
   const [fastTolerance, setFastTolerance] = useState("");
+  const [blocked, setBlocked] = useState("");
   useEffect(() => {
     if (settings.data) {
       setMarkup(String(settings.data.markup_percent));
@@ -22,11 +23,12 @@ export function MarketPricingSection() {
       setSafetyPct(String(settings.data.safety_margin_percent));
       setDepth(String(settings.data.surplus_fallback_depth ?? 3));
       setFastTolerance(String(settings.data.surplus_fast_tolerance_pct ?? 30));
+      setBlocked((settings.data.surplus_blocked_providers ?? []).join(", "));
     }
   }, [settings.data]);
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent" | "surplus_fallback_depth" | "surplus_fast_tolerance_pct">>) =>
+    mutationFn: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent" | "surplus_fallback_depth" | "surplus_fast_tolerance_pct" | "surplus_blocked_providers">>) =>
       api.updateMarketPricingSettings(patch),
     onSuccess: (data) => {
       qc.setQueryData(["market-pricing-settings"], data);
@@ -166,6 +168,22 @@ export function MarketPricingSection() {
                   token goes first. 0 = always the cheapest.
                 </p>
               </Field>
+              <div className="sm:col-span-2">
+                <Field label="Surplus blocked providers">
+                  <Input
+                    value={blocked}
+                    onChange={(e) => setBlocked(e.target.value)}
+                    placeholder="dashscope-cn, baseten"
+                    className="w-full max-w-md"
+                  />
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Provider ids, comma separated. Their offers are skipped when pricing and routing{" "}
+                    <code>surplus-trusted:</code> and <code>surplus-fast:</code> slugs. Block them on your Surplus
+                    account as well. Plain <code>surplus:</code> slugs use the aggregate market price and are not
+                    affected.
+                  </p>
+                </Field>
+              </div>
             </div>
           </div>
 
@@ -178,6 +196,7 @@ export function MarketPricingSection() {
                   safety_margin_percent: Number(safetyPct),
                   surplus_fallback_depth: Number(depth),
                   surplus_fast_tolerance_pct: Number(fastTolerance),
+                  surplus_blocked_providers: blocked.split(",").map((p) => p.trim()).filter(Boolean),
                 })
               }
               disabled={save.isPending || markupInvalid || intervalInvalid || safetyInvalid || depthInvalid || fastToleranceInvalid}

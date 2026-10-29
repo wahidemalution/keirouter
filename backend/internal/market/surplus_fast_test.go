@@ -30,7 +30,7 @@ func fastPerf() map[string]ProviderPerf {
 }
 
 func TestParseSurplusFastBookRanksBandByTTFTThenLatency(t *testing.T) {
-	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 30, 3, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 30, 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestParseSurplusFastBookRanksBandByTTFTThenLatency(t *testing.T) {
 }
 
 func TestParseSurplusFastBookZeroToleranceLeadsWithCheapest(t *testing.T) {
-	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 0, 1, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 0, 1, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestParseSurplusFastBookZeroToleranceLeadsWithCheapest(t *testing.T) {
 // The cheapest offer is often one Surplus will not route to. Overflow levels
 // keep a request from failing when the whole band is refused.
 func TestParseSurplusFastBookOverflowFollowsBandCheapestFirst(t *testing.T) {
-	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 0, 10, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 0, 10, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestParseSurplusFastBookOverflowFollowsBandCheapestFirst(t *testing.T) {
 }
 
 func TestParseSurplusFastBookDepthZeroKeepsAllWithoutCeiling(t *testing.T) {
-	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 0, 0, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 0, 0, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestParseSurplusFastBookDepthZeroKeepsAllWithoutCeiling(t *testing.T) {
 }
 
 func TestParseSurplusFastBookWithoutPerfRanksByPrice(t *testing.T) {
-	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), nil, 30, 3, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), nil, 30, 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestParseSurplusFastBookUnknownPerfRanksLast(t *testing.T) {
 	perf := fastPerf()
 	perf["inferhub"] = ProviderPerf{}
 	perf["google"] = ProviderPerf{LatencyP50MS: ms(100)}
-	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), perf, 30, 3, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), perf, 30, 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestParseSurplusFastBookSkipsCeilingWithoutListPrice(t *testing.T) {
 	  {"provider_id":"a","price_input_per_1m":1000,"price_output_per_1m":2000,"direct_input_per_1m":100000,"direct_output_per_1m":200000,"available":true,"healthy":true},
 	  {"provider_id":"b","price_input_per_1m":1100,"price_output_per_1m":2100,"available":true,"healthy":true}
 	]}`
-	q, err := ParseSurplusFastBook(strings.NewReader(book), nil, 30, 3, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(book), nil, 30, 3, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestParseSurplusFastBookSkipsCeilingWithoutListPrice(t *testing.T) {
 }
 
 func TestParseSurplusFastBookEmpty(t *testing.T) {
-	q, err := ParseSurplusFastBook(strings.NewReader(`{"offers":[{"provider_id":"a","available":false,"healthy":true,"price_input_per_1m":1,"price_output_per_1m":1}]}`), nil, 30, 3, 0)
+	q, err := ParseSurplusFastBook(strings.NewReader(`{"offers":[{"provider_id":"a","available":false,"healthy":true,"price_input_per_1m":1,"price_output_per_1m":1}]}`), nil, 30, 3, 0, nil)
 	if err != nil || q.Found {
 		t.Fatalf("q = %+v err = %v, want not found", q, err)
 	}
@@ -197,5 +197,20 @@ func TestFastModelKeysSlugAndCarriesOrder(t *testing.T) {
 	m := TrustedQuote{Found: true, BestIn: 1, BestOut: 2, ProviderOrder: []string{"b", "a"}}.FastModel("m")
 	if m.Slug != "surplus-fast:m" || !slices.Equal(m.ProviderOrder, []string{"b", "a"}) {
 		t.Fatalf("model = %+v", m)
+	}
+}
+
+func TestParseSurplusFastBookSkipsBlockedProvider(t *testing.T) {
+	q, err := ParseSurplusFastBook(strings.NewReader(fastBookFixture), fastPerf(), 30, 3, 0, []string{"inferhub"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without inferhub the cheapest is bedrock (sum 17464); the band now
+	// reaches venice (21000 <= 22703), the fastest.
+	if want := []string{"venice", "google", "bedrock"}; !slices.Equal(q.ProviderOrder, want) {
+		t.Fatalf("order = %v, want %v", q.ProviderOrder, want)
+	}
+	if slices.Contains(q.Providers, "inferhub") {
+		t.Fatalf("allow-list = %v still has the blocked provider", q.Providers)
 	}
 }
