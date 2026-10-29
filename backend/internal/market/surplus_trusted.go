@@ -99,8 +99,8 @@ type trustedBookEnvelope struct {
 // distinct price levels the ceiling admits; fewer levels use the deepest.
 // floorPct > 0 is the provider's /min{N} floor: offers that cannot prove at
 // least that discount below list on both rates are dropped, as Surplus would
-// skip them.
-func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int) (TrustedQuote, error) {
+// skip them. Offers from blocked providers are ignored.
+func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int, blocked []string) (TrustedQuote, error) {
 	var body trustedBookEnvelope
 	if err := json.NewDecoder(r).Decode(&body); err != nil {
 		return TrustedQuote{}, err
@@ -111,8 +111,9 @@ func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int) (TrustedQuote, er
 	type ask struct{ in, out, directIn, directOut float64 }
 	var asks []ask
 	providers := map[string]bool{}
+	skip := providerSet(blocked)
 	for _, o := range body.Offers {
-		if !o.Trusted || !o.Available || !o.Healthy || o.ProviderID == "" {
+		if !o.Trusted || !o.Available || !o.Healthy || o.ProviderID == "" || skip[strings.ToLower(o.ProviderID)] {
 			continue
 		}
 		if o.PriceInputPer1M == nil || o.PriceOutputPer1M == nil {
@@ -243,7 +244,7 @@ func SurplusBookURL(marketsURL, model string) string {
 
 // FetchSurplusTrustedBook downloads one model's order book and quotes its
 // trusted-only offers.
-func FetchSurplusTrustedBook(ctx context.Context, marketsURL, model string, depth, floorPct int) (TrustedQuote, error) {
+func FetchSurplusTrustedBook(ctx context.Context, marketsURL, model string, depth, floorPct int, blocked []string) (TrustedQuote, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, SurplusBookURL(marketsURL, model), nil)
 	if err != nil {
 		return TrustedQuote{}, err
@@ -257,5 +258,5 @@ func FetchSurplusTrustedBook(ctx context.Context, marketsURL, model string, dept
 	if resp.StatusCode != http.StatusOK {
 		return TrustedQuote{}, fmt.Errorf("surplus book status %d", resp.StatusCode)
 	}
-	return ParseSurplusTrustedBook(resp.Body, depth, floorPct)
+	return ParseSurplusTrustedBook(resp.Body, depth, floorPct, blocked)
 }

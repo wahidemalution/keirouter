@@ -114,3 +114,24 @@ func TestMarketRefreshErrorRecords(t *testing.T) {
 	rec = marketRequest(t, s, cookie, http.MethodGet, "/api/market-pricing/settings", "")
 	require.Contains(t, rec.Body.String(), "market down")
 }
+
+func TestMarketPricingBlockedProvidersPatch(t *testing.T) {
+	s, _, cookie := newMarketPricingTestServer(t)
+
+	rec := marketRequest(t, s, cookie, http.MethodGet, "/api/market-pricing/settings", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"surplus_blocked_providers":[]`)
+
+	rec = marketRequest(t, s, cookie, http.MethodPatch, "/api/market-pricing/settings", `{"surplus_blocked_providers":["DashScope-CN"," ","dashscope-cn"]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"surplus_blocked_providers":["dashscope-cn"]`)
+
+	// A patch without the field keeps the list.
+	rec = marketRequest(t, s, cookie, http.MethodPatch, "/api/market-pricing/settings", `{"markup_percent":12}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"surplus_blocked_providers":["dashscope-cn"]`)
+
+	rec = marketRequest(t, s, cookie, http.MethodPatch, "/api/market-pricing/settings", `{"surplus_blocked_providers":[]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"surplus_blocked_providers":[]`)
+}

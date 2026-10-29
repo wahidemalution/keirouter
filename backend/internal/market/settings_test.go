@@ -2,6 +2,7 @@ package market
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -33,5 +34,15 @@ func TestEffectiveMarkupPrefersChainOverride(t *testing.T) {
 	bad := -5.0
 	if got := EffectiveMarkup(&bad, 10); got != 10 {
 		t.Fatalf("invalid override = %v, want global", got)
+	}
+}
+
+func TestLoadSettingsNormalizesBlockedProviders(t *testing.T) {
+	get := func(context.Context, string) (string, error) {
+		return `{"surplus_blocked_providers":[" DashScope-CN ","","dashscope-cn","baseten"]}`, nil
+	}
+	s := LoadSettings(context.Background(), get)
+	if want := []string{"baseten", "dashscope-cn"}; !slices.Equal(s.SurplusBlockedProviders, want) {
+		t.Fatalf("blocked = %v, want %v", s.SurplusBlockedProviders, want)
 	}
 }

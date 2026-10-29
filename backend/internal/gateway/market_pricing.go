@@ -32,6 +32,8 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 		// SurplusFastTolerancePct is the surplus-fast price band above the
 		// cheapest available offer.
 		SurplusFastTolerancePct *float64 `json:"surplus_fast_tolerance_pct"`
+		// SurplusBlockedProviders replaces the whole list; [] clears it.
+		SurplusBlockedProviders *[]string `json:"surplus_blocked_providers"`
 	}
 	if !decodeJSON(w, r, &patch) {
 		return
@@ -80,6 +82,14 @@ func (s *Server) adminUpdateMarketPricingSettings(w http.ResponseWriter, r *http
 			return
 		}
 		current.SurplusFastTolerancePct = v
+	}
+	if patch.SurplusBlockedProviders != nil {
+		ids := market.NormalizeProviderIDs(*patch.SurplusBlockedProviders)
+		if len(ids) > 100 {
+			writeError(w, http.StatusBadRequest, "surplus_blocked_providers allows at most 100 providers")
+			return
+		}
+		current.SurplusBlockedProviders = ids
 	}
 	if err := market.SaveSettings(r.Context(), s.settings.Set, current); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
