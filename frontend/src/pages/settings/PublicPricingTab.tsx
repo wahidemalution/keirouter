@@ -103,7 +103,7 @@ export function PublicPricingTab() {
           <p className="mb-2 text-[12.5px] font-medium text-fg">Published models</p>
           {data.models.length === 0 ? (
             <p className="text-[12.5px] text-fg-muted">
-              No chain is priced by Surplus yet. Add a surplus-trusted market slug to a chain to publish it here.
+              No chain is priced by Surplus yet. Add a surplus-trusted or surplus-fast market slug to a chain to publish it here.
             </p>
           ) : (
             <ul className="divide-y divide-line rounded-lg border border-line">

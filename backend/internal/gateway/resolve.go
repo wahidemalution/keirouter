@@ -317,7 +317,7 @@ func priceMarketSteps(steps []dispatch.Target, cache *market.SnapshotCache, mark
 	mult := 1 + markupPercent/100
 	out := make([]dispatch.Target, 0, len(steps))
 	for _, t := range steps {
-		if t.MarketSlug == "" || strings.HasPrefix(t.MarketSlug, market.SurplusTrustedPrefix) {
+		if t.MarketSlug == "" || market.IsUpstreamCostSlug(t.MarketSlug) {
 			out = append(out, t)
 			continue
 		}
@@ -347,7 +347,7 @@ func priceMarketSteps(steps []dispatch.Target, cache *market.SnapshotCache, mark
 // else, including a slug without a live quote, routes unpriced as before.
 func directMarketTarget(provider, model string, cache *market.SnapshotCache, markupPercent float64) dispatch.Target {
 	t := dispatch.Target{Provider: provider, Model: model}
-	if cache == nil || strings.HasPrefix(model, market.SurplusPrefix) || strings.HasPrefix(model, market.SurplusTrustedPrefix) {
+	if cache == nil || strings.HasPrefix(model, market.SurplusPrefix) || market.IsUpstreamCostSlug(model) {
 		return t
 	}
 	if _, ok := cache.Lookup(model); !ok {
@@ -382,19 +382,20 @@ func stampMarketRate(t *dispatch.Target, r market.Rate, mult float64) {
 	t.UpstreamReasoningRate = r.ReasoningPerM
 }
 
-// stampSurplusTrusted marks every surplus-trusted step for upstream-cost
-// billing. A step without its own slug adopts a chain-level surplus-trusted
-// slug naming the same model. The Market*/Upstream* rates carry the X-Min-Discount
+// stampSurplusTrusted marks every surplus-trusted and surplus-fast step for
+// upstream-cost billing. A step without its own slug adopts a chain-level
+// slug of either kind naming the same model. The Market*/Upstream* rates carry the X-Min-Discount
 // ceiling price (the most Surplus can charge), used only when a response
 // reports no cost, so the fallback bill can never undercut a Surplus failover.
 // Each step also carries the trusted provider allow-list; a step with no live
 // trusted quote is dropped, since without that list Surplus could route the
-// request to an untrusted seller.
+// request to an untrusted seller. surplus-fast steps also carry the provider
+// order, fastest first.
 // It runs after any market reordering so the ceiling overrides cheapest-ask stamps.
 func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
 	byModel := map[string]string{}
 	for _, slug := range chainSlugs {
-		if name, ok := strings.CutPrefix(slug, market.SurplusTrustedPrefix); ok && name != "" {
+		if name, ok := market.CutUpstreamCostSlug(slug); ok {
 			byModel[name] = slug
 		}
 	}
@@ -406,7 +407,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		if slug == "" {
 			slug = byModel[steps[i].Model]
 		}
-		if !strings.HasPrefix(slug, market.SurplusTrustedPrefix) {
+		if !market.IsUpstreamCostSlug(slug) {
 			if copied {
 				out = append(out, steps[i])
 			}
@@ -430,6 +431,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		t.UpstreamCostMult = mult
 		t.MinDiscountPct = m.MinDiscountPct
 		t.UpstreamProviders = strings.Join(m.Providers, ",")
+		t.UpstreamProviderOrder = strings.Join(m.ProviderOrder, ",")
 		capIn, capOut := m.FailoverIn, m.FailoverOut
 		if capIn <= 0 || capOut <= 0 {
 			capIn, capOut = m.MinAskIn, m.MinAskOut

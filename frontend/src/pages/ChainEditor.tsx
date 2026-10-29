@@ -490,7 +490,7 @@ export function ChainEditorPage() {
 
           <Panel title="Market slugs" titleId="chain-market-heading" icon={Store} subtitle="Price this chain from the market.">
             <div className="space-y-3 p-4">
-              <p className="text-[12px] leading-5 text-fg-muted">One slug per line. Use an inferhub.dev slug (e.g. <span className="font-mono text-fg">cbcn/deepseek-v4.1-flash</span>) or a Surplus Intelligence model as <span className="font-mono text-fg">surplus:&lt;model&gt;</span>. Use <span className="font-mono text-fg">surplus-trusted:&lt;model&gt;</span> to price only from trusted, available, healthy Surplus offers; requests on it are billed Surplus's reported cost plus markup. KeiRouter prices this chain from the cheapest of these plus markup. Leave empty to set the price manually.</p>
+              <p className="text-[12px] leading-5 text-fg-muted">One slug per line. Use an inferhub.dev slug (e.g. <span className="font-mono text-fg">cbcn/deepseek-v4.1-flash</span>) or a Surplus Intelligence model as <span className="font-mono text-fg">surplus:&lt;model&gt;</span>. Use <span className="font-mono text-fg">surplus-trusted:&lt;model&gt;</span> to price only from trusted, available, healthy Surplus offers, or <span className="font-mono text-fg">surplus-fast:&lt;model&gt;</span> to route to the provider with the lowest time to first token among available, healthy offers (trusted or not) within the Surplus fast price tolerance. Requests on either are billed Surplus's reported cost plus markup. KeiRouter prices this chain from the cheapest of these plus markup. Leave empty to set the price manually.</p>
               <Field label="Slugs">
                 <Textarea
                   value={marketSlugs}

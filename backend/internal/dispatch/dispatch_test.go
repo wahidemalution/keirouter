@@ -464,6 +464,26 @@ func TestPlanWith_ExcludedAttemptStillAllowsOtherModelOnSameAccount(t *testing.T
 	require.Equal(t, "acc-1", attempts[0].Account.ID)
 }
 
+// A surplus-fast step that fails must not hide a surplus-trusted step on the
+// same model and account: they route differently upstream.
+func TestPlanWith_ExcludedAttemptStillAllowsOtherSlugOnSameModel(t *testing.T) {
+	ctx := context.Background()
+	d, _ := newDispatchTest(t, testAccount("acc-1", 10))
+	targets := []Target{
+		{Provider: "openai", Model: "gpt-4o", MarketSlug: "surplus-fast:gpt-4o"},
+		{Provider: "openai", Model: "gpt-4o", MarketSlug: "surplus-trusted:gpt-4o"},
+	}
+
+	attempts, err := d.PlanWith(ctx, store.DefaultTenantID, targets, core.NewCapabilitySet(),
+		PlanOptions{ExcludedAttempts: map[AttemptKey]struct{}{
+			{Provider: "openai", Model: "gpt-4o", MarketSlug: "surplus-fast:gpt-4o", AccountID: "acc-1"}: {},
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, attempts, 1)
+	require.Equal(t, "surplus-trusted:gpt-4o", attempts[0].Target.MarketSlug)
+}
+
 func TestPlanWith_AllCandidatesCoolingReturnsTypedRetry(t *testing.T) {
 	ctx := context.Background()
 	d, _ := newDispatchTest(t, testAccount("acc-1", 10))

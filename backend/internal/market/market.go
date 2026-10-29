@@ -42,6 +42,9 @@ type Model struct {
 	// Providers is the surplus-trusted provider allow-list sent upstream so
 	// routing cannot leave the trusted offers this rate was quoted from.
 	Providers []string `json:"-"`
+	// ProviderOrder is the surplus-fast preferred attempt order (fastest
+	// first), sent upstream as `provider_order`.
+	ProviderOrder []string `json:"-"`
 }
 
 func ParseSnapshot(r io.Reader) ([]Model, error) {

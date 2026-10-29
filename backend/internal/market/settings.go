@@ -21,13 +21,16 @@ type Settings struct {
 	// fail over across for surplus-trusted slugs (sent as X-Min-Discount).
 	// Zero disables the ceiling: Surplus may then fail over to any trusted offer.
 	SurplusFallbackDepth int `json:"surplus_fallback_depth"`
-	LastFetchedAt       string  `json:"last_fetched_at"`
-	LastFetchError      string  `json:"last_fetch_error,omitempty"`
-	LastSyncedCount     int     `json:"last_synced_count"`
+	// SurplusFastTolerancePct is how far above the cheapest available offer a
+	// surplus-fast offer may ask and still be routed to (0 = cheapest only).
+	SurplusFastTolerancePct float64 `json:"surplus_fast_tolerance_pct"`
+	LastFetchedAt           string  `json:"last_fetched_at"`
+	LastFetchError          string  `json:"last_fetch_error,omitempty"`
+	LastSyncedCount         int     `json:"last_synced_count"`
 }
 
 func DefaultSettings() Settings {
-	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10, SafetyMarginEnabled: false, SafetyMarginPercent: 10, SurplusFallbackDepth: DefaultSurplusFallbackDepth}
+	return Settings{AutoRefresh: false, RefreshIntervalSeconds: 30, MarkupPercent: 10, SafetyMarginEnabled: false, SafetyMarginPercent: 10, SurplusFallbackDepth: DefaultSurplusFallbackDepth, SurplusFastTolerancePct: DefaultSurplusFastTolerancePct}
 }
 
 func LoadSettings(ctx context.Context, get func(context.Context, string) (string, error)) Settings {
@@ -49,6 +52,9 @@ func LoadSettings(ctx context.Context, get func(context.Context, string) (string
 	if s.SurplusFallbackDepth < 0 {
 		s.SurplusFallbackDepth = def.SurplusFallbackDepth
 	}
+	if s.SurplusFastTolerancePct < 0 || math.IsNaN(s.SurplusFastTolerancePct) || math.IsInf(s.SurplusFastTolerancePct, 0) {
+		s.SurplusFastTolerancePct = def.SurplusFastTolerancePct
+	}
 	if s.SafetyMarginPercent < 0 {
 		s.SafetyMarginPercent = def.SafetyMarginPercent
 	}
@@ -62,6 +68,7 @@ func SaveSettings(ctx context.Context, set func(context.Context, string, string)
 	}
 	return set(ctx, SettingsKey, string(raw))
 }
+
 // EffectiveMarkup returns a chain's markup: its own override when set and
 // valid, otherwise the global setting.
 func EffectiveMarkup(override *float64, global float64) float64 {

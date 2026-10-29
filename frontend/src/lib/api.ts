@@ -236,8 +236,10 @@ export interface MarketPricingSettings {
   markup_percent: number;
   safety_margin_enabled: boolean;
   safety_margin_percent: number;
-  /** Distinct trusted price levels Surplus may fail over across for surplus-trusted slugs (0 = no ceiling). */
+  /** Price levels Surplus may fail over across: trusted levels for surplus-trusted, levels above the band for surplus-fast (0 = no ceiling). */
   surplus_fallback_depth: number;
+  /** surplus-fast price band above the cheapest available offer, in percent (0 = cheapest only). */
+  surplus_fast_tolerance_pct: number;
   last_fetched_at: string;
   last_fetch_error?: string;
   last_synced_count: number;
