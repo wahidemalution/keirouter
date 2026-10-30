@@ -293,15 +293,23 @@ func (r *ChainRepo) Create(ctx context.Context, c Chain) error {
 		return fmt.Errorf("store: create chain: %w", err)
 	}
 
-	sq := r.db.rebind(`INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	sq := r.db.rebind(insertChainStepSQL)
 	for _, s := range c.Steps {
-		if _, err := tx.ExecContext(ctx, sq, s.ID, c.ID, s.Position, s.Provider, s.Model,
-			s.MarketSlug, formatTime(s.CreatedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, sq, chainStepArgs(c.ID, s, s.CreatedAt)...); err != nil {
 			return fmt.Errorf("store: create chain step: %w", err)
 		}
 	}
 	return tx.Commit()
+}
+
+const insertChainStepSQL = `INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug,
+	static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+func chainStepArgs(chainID string, s ChainStep, created time.Time) []any {
+	return []any{s.ID, chainID, s.Position, s.Provider, s.Model, s.MarketSlug,
+		s.StaticInputPerM, s.StaticOutputPerM, nullableFloat(s.StaticCacheReadPerM), nullableFloat(s.StaticCacheWritePerM),
+		nullableFloat(s.MarkupPercent), formatTime(created)}
 }
 
 // Get returns a chain with its ordered steps.
@@ -435,11 +443,9 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 		return fmt.Errorf("store: delete chain steps: %w", err)
 	}
 
-	sq := r.db.rebind(`INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	sq := r.db.rebind(insertChainStepSQL)
 	for _, s := range c.Steps {
-		if _, err := tx.ExecContext(ctx, sq, s.ID, c.ID, s.Position, s.Provider, s.Model,
-			s.MarketSlug, formatTime(time.Now())); err != nil {
+		if _, err := tx.ExecContext(ctx, sq, chainStepArgs(c.ID, s, time.Now())...); err != nil {
 			return fmt.Errorf("store: create chain step: %w", err)
 		}
 	}
@@ -447,7 +453,9 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 }
 
 func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, error) {
-	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, market_slug, created_at FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
+	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, market_slug,
+		static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, created_at
+		FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
 	rows, err := r.db.sql.QueryContext(ctx, q, chainID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list chain steps: %w", err)
@@ -457,12 +465,17 @@ func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, err
 	var out []ChainStep
 	for rows.Next() {
 		var (
-			s       ChainStep
-			created string
+			s                         ChainStep
+			created                   string
+			cacheRead, cacheWrite, mk sql.NullFloat64
 		)
-		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &s.MarketSlug, &created); err != nil {
+		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &s.MarketSlug,
+			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &created); err != nil {
 			return nil, err
 		}
+		s.StaticCacheReadPerM = floatPtr(cacheRead)
+		s.StaticCacheWritePerM = floatPtr(cacheWrite)
+		s.MarkupPercent = floatPtr(mk)
 		s.CreatedAt = parseTime(created)
 		out = append(out, s)
 	}

@@ -99,3 +99,49 @@ func TestChainOfficialPriceRoundTrip(t *testing.T) {
 	require.Nil(t, list[0].OfficialInputPerM)
 	require.Nil(t, list[0].OfficialOutputPerM)
 }
+
+func TestChainRepoPersistsStepStaticPrice(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	f := func(v float64) *float64 { return &v }
+	c := Chain{
+		ID: "c-static", TenantID: DefaultTenantID, Name: "static", Strategy: "priority",
+		CreatedAt: now, UpdatedAt: now,
+		Steps: []ChainStep{
+			{ID: "s0", ChainID: "c-static", Position: 0, Provider: "openai", Model: "glm-5", MarketSlug: "surplus-fast:glm-5", CreatedAt: now},
+			{ID: "s1", ChainID: "c-static", Position: 1, Provider: "openai", Model: "glm-5", CreatedAt: now,
+				StaticInputPerM: 0.5, StaticOutputPerM: 2, StaticCacheReadPerM: f(0.04), MarkupPercent: f(0)},
+		},
+	}
+	require.NoError(t, db.Chains().Create(ctx, c))
+
+	check := func(got Chain) {
+		t.Helper()
+		require.Len(t, got.Steps, 2)
+		require.Equal(t, 0.5, got.Steps[1].StaticInputPerM)
+		require.Equal(t, 2.0, got.Steps[1].StaticOutputPerM)
+		require.Equal(t, 0.04, *got.Steps[1].StaticCacheReadPerM)
+		require.Nil(t, got.Steps[1].StaticCacheWritePerM)
+		require.Equal(t, 0.0, *got.Steps[1].MarkupPercent)
+		require.Nil(t, got.Steps[0].MarkupPercent)
+		require.False(t, got.Steps[0].HasStaticPrice())
+		require.True(t, got.Steps[1].HasStaticPrice())
+	}
+	got, err := db.Chains().Get(ctx, "c-static")
+	require.NoError(t, err)
+	check(got)
+	list, err := db.Chains().ListByTenant(ctx, DefaultTenantID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	check(list[0])
+
+	c.Steps[1].MarkupPercent = f(15)
+	c.Steps[1].StaticCacheReadPerM = nil
+	require.NoError(t, db.Chains().Update(ctx, c))
+	again, err := db.Chains().Get(ctx, "c-static")
+	require.NoError(t, err)
+	require.Equal(t, 15.0, *again.Steps[1].MarkupPercent)
+	require.Nil(t, again.Steps[1].StaticCacheReadPerM)
+	require.Equal(t, 0.5, again.Steps[1].StaticInputPerM)
+}
