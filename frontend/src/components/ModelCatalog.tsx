@@ -120,21 +120,20 @@ function Price({
   );
 }
 
-// What the shown prices mean, so a customer comparing them with their bill
-// knows which number to expect. Fixed chain prices need no note.
-function priceNote(model: PublicModel): string | null {
+// The discount a card may show: for a market price only the best case,
+// labelled as such; for a fixed price the exact one.
+function cardDiscount(model: PublicModel): { pct: number; upTo: boolean } | null {
   if (model.price_basis === "live") {
-    const hasMax = model.max_input_per_m != null && model.max_output_per_m != null;
-    return hasMax
-      ? "Harga tiap request bisa berubah sesuai ketersediaan penyedia. Yang ditampilkan adalah harga termurah dan harga maksimal saat ini."
-      : "Harga tiap request bisa berubah sesuai ketersediaan penyedia. Yang ditampilkan adalah harga termurah saat ini.";
+    const pct = model.discount_up_to_pct ?? 0;
+    return pct > 0 ? { pct, upTo: true } : null;
   }
-  return null;
+  const pct = model.discount_pct ?? 0;
+  return pct > 0 ? { pct, upTo: false } : null;
 }
 
 export function ModelCard({ model }: { model: PublicModel }) {
   const live = model.price_basis === "live";
-  const note = priceNote(model);
+  const discount = cardDiscount(model);
   return (
     <article className="group flex flex-col rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--line-strong)] hover:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.18)]">
       <div className="flex items-start gap-3">
@@ -174,7 +173,16 @@ export function ModelCard({ model }: { model: PublicModel }) {
         </p>
       ) : (
         <>
-          <div className="mt-4 border-t border-[var(--line)] pt-3">
+          {discount && (
+            <p
+              className="-mx-4 mt-4 border-y border-[var(--line)] bg-[var(--tag-bg)] py-2 text-center font-mono text-[14px] font-bold uppercase tracking-[1.5px] tabular-nums text-[var(--tag-ink)]"
+              title={discount.upTo ? "Diskon terbesar saat ini, untuk request yang dapat harga termurah" : "Dibanding harga resmi model"}
+            >
+              {discount.upTo ? `Up to ${discount.pct}% OFF` : `${discount.pct}% OFF`}
+              <span className="sr-only"> dari harga resmi</span>
+            </p>
+          )}
+          <div className={discount ? "pt-3" : "mt-4 border-t border-[var(--line)] pt-3"}>
             <div className="grid grid-cols-2 gap-3">
               <Price
                 label="Input / 1M token"
@@ -193,7 +201,6 @@ export function ModelCard({ model }: { model: PublicModel }) {
               <Price label="Cache read / 1M" value={model.cached_per_m} />
               <Price label="Cache write / 1M" value={model.cache_write_per_m} />
             </div>
-            {note && <p className="mt-2.5 text-[11.5px] leading-[1.45] text-[var(--muted)]">{note}</p>}
           </div>
         </>
       )}
@@ -290,6 +297,10 @@ export function ModelBrowser({ models, loading = false }: { models: PublicModel[
       </div>
       <p className="mt-3 text-[12px] text-[var(--muted)]" aria-live="polite">
         Menampilkan {fmtCount(Math.min(visible, filtered.length))} dari {fmtCount(filtered.length)} model
+      </p>
+      <p className="mt-1 text-[12px] leading-[1.5] text-[var(--muted)]">
+        Harga tiap request bisa berubah sesuai ketersediaan penyedia. Yang tampil adalah harga termurah dan maksimal saat
+        ini, diskon dihitung dari harga termurah.
       </p>
       {filtered.length === 0 ? (
         <p className="mt-4 rounded-xl border border-dashed border-[var(--line)] p-8 text-center text-sm text-[var(--muted)]">
