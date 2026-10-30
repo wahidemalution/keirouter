@@ -164,11 +164,14 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			// sink last. Runs before the declared strategy switch so it
 			// composes with the fallback/round-robin handling below.
 			if c.ReorderByMarket {
-				steps = orderStepsByMarket(steps, cache, markupPercent)
+				steps = pinStaticSteps(steps, func(rest []dispatch.Target) []dispatch.Target {
+					return orderStepsByMarket(rest, cache, markupPercent)
+				})
 			}
 			// Every slugged step is billed for itself, whatever the ordering; a
 			// step whose slug has no live quote is dropped.
 			steps = priceMarketSteps(steps, cache, markupPercent)
+			steps = priceStaticSteps(steps, markupPercent)
 			steps = stampSurplusTrusted(steps, c.MarketSlugs, cache, markupPercent)
 			if len(steps) == 0 && (c.FallbackProvider == "" || c.FallbackModel == "") {
 				return resolveResult{}, errSoldOut(name)
@@ -181,7 +184,7 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			case string(dispatch.StrategyRoundRobin), "round_robin", "roundrobin":
 				opts.Strategy = dispatch.StrategyRoundRobin
 			case chainStrategyCost:
-				steps = orderStepsByCost(steps)
+				steps = pinStaticSteps(steps, orderStepsByCost)
 				opts.Strategy = dispatch.StrategyFallback
 				opts.FixedOrder = true
 			case chainStrategyLatency:
@@ -404,7 +407,8 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 	copied := false
 	for i := range steps {
 		slug := steps[i].MarketSlug
-		if slug == "" {
+		// A static step has its own price; it never adopts a chain-level slug.
+		if slug == "" && !steps[i].StaticPrice {
 			slug = byModel[steps[i].Model]
 		}
 		if !market.IsUpstreamCostSlug(slug) {
