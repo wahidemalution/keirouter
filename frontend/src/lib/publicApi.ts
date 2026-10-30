@@ -38,12 +38,14 @@ export interface PublicModel {
   official_input_per_m?: number | null;
   official_output_per_m?: number | null;
   /** Whole-percent discount from the official price; null when none. For
-   * average_7d it is the billed 7-day average, not the best live quote. */
+   * live prices it is the 7-day billed average, null until there is enough
+   * traffic. Not shown on the model cards. */
   discount_pct?: number | null;
-  /** average_7d: prices are what customers were billed over the last 7 days.
-   * live: today's best market quote, a request may bill up to max_*_per_m.
+  /** live: today's best market quote, a request may bill up to max_*_per_m.
    * fixed: a chain price that does not follow the market. Null when sold out. */
-  price_basis?: "average_7d" | "live" | "fixed" | null;
+  price_basis?: "live" | "fixed" | null;
+  avg_input_per_m?: number | null;
+  avg_output_per_m?: number | null;
   avg_window_days?: number | null;
   avg_sample_tokens?: number | null;
   max_input_per_m?: number | null;

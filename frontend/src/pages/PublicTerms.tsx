@@ -59,11 +59,10 @@ const SECTIONS: TermsSection[] = [
       <>
         <p>
           Harga tiap model mengikuti pasar dan dapat naik atau turun kapan saja, tergantung ketersediaan dan biaya dari
-          penyedia. Untuk model yang cukup sering dipakai, harga dan diskon di halaman{" "}
-          <a href="/model" className={LINK}>Model &amp; harga</a> adalah rata-rata yang ditagihkan ke pengguna selama 7 hari
-          terakhir. Untuk model lain, yang tampil adalah harga pasar saat halaman itu Anda buka beserta batas atasnya. Saldo
-          dipotong dengan harga yang berlaku saat permintaan diproses, jadi biaya satu permintaan bisa lebih murah atau lebih
-          mahal dari angka yang Anda lihat.
+          penyedia. Halaman{" "}
+          <a href="/model" className={LINK}>Model &amp; harga</a> menampilkan harga termurah dan harga maksimal saat halaman
+          itu Anda buka. Saldo dipotong dengan harga yang berlaku saat permintaan diproses, jadi biaya satu permintaan bisa
+          berbeda dari angka yang Anda lihat.
         </p>
         <p>
           Kami berupaya mengirim setiap permintaan ke penyedia termurah yang tersedia saat itu. Jika penyedia tersebut penuh

@@ -103,12 +103,3 @@ func chainMarketPriced(c store.Chain) bool {
 	}
 	return false
 }
-
-// scaleRate moves a cache rate by the same factor the input rate moved, so
-// cache prices stay in the market's ratio to input.
-func scaleRate(rate, from, to float64) float64 {
-	if from <= 0 {
-		return rate
-	}
-	return rate * to / from
-}
