@@ -99,7 +99,8 @@ func TestPricingSurplusOnlyAndKeyScoped(t *testing.T) {
 	require.InDelta(t, 1.0, glm["output_per_m"], 1e-9)
 	require.InDelta(t, 0.5, glm["max_input_per_m"], 1e-9)
 	require.InDelta(t, 2.0, glm["max_output_per_m"], 1e-9)
-	require.InDelta(t, 75, glm["discount_pct"], 1e-9)
+	require.Nil(t, glm["discount_pct"], "no billed traffic yet, so no average discount to claim")
+	require.Nil(t, glm["avg_input_per_m"])
 	for _, hidden := range []string{"markup_percent", "providers", "price_source"} {
 		require.NotContains(t, glm, hidden)
 	}
@@ -150,4 +151,24 @@ func TestPricingRequiresKeyAndLimitsPerKey(t *testing.T) {
 	rec, _ = getPricing(t, h, key, "")
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
 	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+}
+
+// Once a chain has enough billed traffic, the discount is the billed average,
+// not the live quote's.
+func TestPricingDiscountIsBilledAverage(t *testing.T) {
+	gw, _, key := pricingFixture(t)
+	now := time.Now().UTC()
+	// 1M input at $0.50 and 100k output at $0.20/100k: $0.70 of a $1.40 list.
+	require.NoError(t, gw.usage.RecordBatch(context.Background(), []store.UsageRecord{
+		{ID: "g1", TenantID: store.DefaultTenantID, ChainID: "glm", Status: "success", PromptTokens: 1_000_000, CompletionTokens: 100_000,
+			InputCostNanos: 500_000_000, OutputCostNanos: 200_000_000, CostNanos: 700_000_000, CreatedAt: now},
+	}))
+	rec, out := getPricing(t, gw.routes(), key, "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	glm := out.Models[0]
+	require.InDelta(t, 50, glm["discount_pct"], 1e-9)
+	require.InDelta(t, 0.5, glm["avg_input_per_m"], 1e-9)
+	require.InDelta(t, 2.0, glm["avg_output_per_m"], 1e-9)
+	require.InDelta(t, 7, glm["avg_window_days"], 1e-9)
+	require.InDelta(t, 0.25, glm["input_per_m"], 1e-9, "live quote is still reported")
 }

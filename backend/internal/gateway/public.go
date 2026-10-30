@@ -84,6 +84,14 @@ type publicModelRow struct {
 	// no reference is known. DiscountPct is 0 when there is nothing to show.
 	Official    *officialPrice
 	DiscountPct int
+	// PriceBasis says what the prices are: average_7d (what customers were
+	// billed over the last 7 days), live (today's best market quote; a
+	// request may cost up to MaxInputPerM/MaxOutputPerM) or fixed (a chain
+	// price that does not follow a market).
+	PriceBasis    string
+	MaxInputPerM  float64
+	MaxOutputPerM float64
+	AvgTokens     int64
 	// Context is the model's context window in tokens from models.dev (0 = unknown).
 	Context  int
 	Requests int64
@@ -146,6 +154,14 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 	for _, c := range cats {
 		labels[c.ID] = c.Label
 	}
+	billed, err := s.chainBilled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live, err := s.surplusPrices(ctx)
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]publicModelRow, 0, len(chains))
 	for _, c := range chains {
 		if len(c.Steps) == 0 {
@@ -173,10 +189,31 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 		}
 		var official *officialPrice
 		discount := 0
+		basis := ""
+		var maxIn, maxOut float64
+		var avgTokens int64
 		if !soldOut {
 			if ref, ok := s.chainOfficialPrice(c); ok {
 				official = &ref
-				discount = discountPercent(inputPerM, outputPerM, ref)
+			}
+			if rp, ok := realizedFrom(billed[c.ID], official); ok {
+				// Publish what customers were billed, not today's best quote.
+				cachedPerM = scaleRate(cachedPerM, inputPerM, rp.InputPerM)
+				cacheWritePerM = scaleRate(cacheWritePerM, inputPerM, rp.InputPerM)
+				inputPerM, outputPerM = rp.InputPerM, rp.OutputPerM
+				discount, basis, avgTokens = rp.DiscountPct, "average_7d", rp.Tokens
+			} else if chainMarketPriced(c) {
+				// Too little traffic for an average: show the live quote as a
+				// range and no discount, since requests can bill above it.
+				basis = "live"
+				if p, ok := live.byName[strings.ToLower(c.Name)]; ok && p.MaxInputPerM != nil && p.MaxOutputPerM != nil {
+					maxIn, maxOut = atLeast(*p.MaxInputPerM, inputPerM), atLeast(*p.MaxOutputPerM, outputPerM)
+				}
+			} else {
+				basis = "fixed"
+				if official != nil {
+					discount = discountPercent(inputPerM, outputPerM, *official)
+				}
 			}
 		}
 		u := usage[c.ID]
@@ -195,10 +232,13 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			SoldOut:      soldOut,
 			Official:     official,
 			DiscountPct:  discount,
-			Context:      s.chainContextTokens(c),
-			Requests:     u.TotalRequests,
-			Tokens:       u.PromptTokens + u.CompletionTokens,
-			Users:        u.DistinctKeys,
+			PriceBasis:   basis,
+			MaxInputPerM: maxIn, MaxOutputPerM: maxOut,
+			AvgTokens: avgTokens,
+			Context:   s.chainContextTokens(c),
+			Requests:  u.TotalRequests,
+			Tokens:    u.PromptTokens + u.CompletionTokens,
+			Users:     u.DistinctKeys,
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -211,9 +251,10 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 }
 
 // publicModels serves GET /v1/public/models: one entry per routing chain, with
-// per-1M list prices (the chain's configured rates when set, otherwise the
-// first step's catalog price), capabilities, and all-time usage aggregated by
-// chain_id. Aggregate only.
+// per-1M prices, capabilities, and all-time usage aggregated by chain_id.
+// Prices are the 7-day billed average when the chain has enough traffic,
+// otherwise the chain's configured rates (or the first step's catalog price);
+// price_basis says which. Aggregate only.
 func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 	if s.cacheHit(w, "public-models") {
 		return
@@ -238,6 +279,16 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 		if m.Context > 0 {
 			contextTokens = m.Context
 		}
+		var maxIn, maxOut, basis, windowDays, sampleTokens any
+		if m.MaxInputPerM > 0 && m.MaxOutputPerM > 0 {
+			maxIn, maxOut = m.MaxInputPerM, m.MaxOutputPerM
+		}
+		if m.PriceBasis != "" {
+			basis = m.PriceBasis
+		}
+		if m.PriceBasis == "average_7d" {
+			windowDays, sampleTokens = realizedWindowDays, m.AvgTokens
+		}
 		out = append(out, map[string]any{
 			"name":              m.Name,
 			"model_id":          m.ModelID,
@@ -253,8 +304,15 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 			"official_input_per_m":  officialIn,
 			"official_output_per_m": officialOut,
 			"discount_pct":          discount,
-			"context_tokens":        contextTokens,
-			"capabilities":          caps,
+			// price_basis: average_7d | live | fixed (null when sold out).
+			// For live, max_*_per_m bound what a request can cost.
+			"price_basis":       basis,
+			"avg_window_days":   windowDays,
+			"avg_sample_tokens": sampleTokens,
+			"max_input_per_m":   maxIn,
+			"max_output_per_m":  maxOut,
+			"context_tokens":    contextTokens,
+			"capabilities":      caps,
 			"usage": map[string]any{
 				"users":    m.Users,
 				"requests": m.Requests,
