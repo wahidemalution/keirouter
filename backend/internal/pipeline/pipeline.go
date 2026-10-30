@@ -72,6 +72,7 @@ type Pipeline struct {
 	log        *slog.Logger
 	telemetry  *health.Service
 	inflight   *inflight.Tracker
+	fastHealth *market.FastHealth
 
 	requestTimeout     time.Duration // upper bound on non-streaming upstream calls
 	streamStallTimeout time.Duration // aborts a stream with no bytes for this long
@@ -104,6 +105,8 @@ type Deps struct {
 	// Inflight counts upstream attempts currently running per provider.
 	// Optional; nil disables tracking.
 	Inflight *inflight.Tracker
+	// FastHealth receives each surplus-fast attempt's outcome. Optional.
+	FastHealth *market.FastHealth
 }
 
 // New builds a Pipeline.
@@ -126,6 +129,7 @@ func New(d Deps) *Pipeline {
 		log:        log,
 		telemetry:  d.Telemetry,
 		inflight:   d.Inflight,
+		fastHealth: d.FastHealth,
 
 		requestTimeout:     d.RequestTimeout,
 		streamStallTimeout: d.StreamStallTimeout,
@@ -425,6 +429,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		// Inject proxy config from credentials into context so the connector's
 		// HTTP client uses the right proxy/relay for this account.
 		callCtx, cancelTimeout := withRequestDeadline(core.WithProxy(upstreamCtx, attempt.Creds))
+		callCtx, reportFast := p.watchFastAttempt(callCtx, attempt.Target)
 		resp, callErr := attempt.Conn.Chat(callCtx, attemptReq, attempt.Creds)
 		cancelTimeout() // cancel immediately to avoid timer goroutine leak
 		if callErr != nil && ctx.Err() == nil && isUnsupportedCloudflareImageError(callErr, attempt.Target.Provider, attempt.Target.Model, attemptReq) {
@@ -474,6 +479,9 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		if callErr != nil {
 			pe := providerErrorForAttempt(callErr, attempt)
 			lastErr = pe
+			if pe.Fallbackable() {
+				reportFast(0, false)
+			}
 			if pe.AttemptUsage != nil {
 				priorAttemptUsage = addAttemptUsage(priorAttemptUsage, *pe.AttemptUsage)
 			}
@@ -529,6 +537,12 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 					restorer.restore(resp.Message.Content[i].ToolCall)
 				}
 			}
+		}
+
+		// A unary answer has no first-token time; one that finished within the
+		// slow threshold still proves its provider is serving fast.
+		if latency <= market.FastSlowTTFT {
+			reportFast(latency, true)
 		}
 
 		// Reset backoff and clear model cooldown on success.
@@ -845,6 +859,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		// the direct response body cancels it on completion, client disconnect,
 		// policy block, or stall so connector goroutines cannot leak.
 		callCtx, cancelUpstream := p.trackedStreamCallContext(ctx, attempt.Creds, attempt.Target.Provider)
+		callCtx, reportFast := p.watchFastAttempt(callCtx, attempt.Target)
 
 		// Zero-copy fast path: when the client dialect matches the upstream
 		// dialect, no tools are present (so no argument sanitization needed),
@@ -998,6 +1013,9 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 			cancelUpstream()
 			pe := providerErrorForAttempt(callErr, attempt)
 			lastErr = pe
+			if pe.Fallbackable() {
+				reportFast(0, false)
+			}
 			p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
 			if p.metrics != nil {
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
@@ -1027,12 +1045,15 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 			continue
 		}
 
-		upstream, callErr = admitStreamNotify(callCtx, upstream, p.resolvedStallTimeout(), attempt.Target.Provider, attempt.Target.Model,
+		upstream, callErr = admitStreamNotify(callCtx, upstream, admissionTimeout(p.resolvedStallTimeout(), attempt.Target), attempt.Target.Provider, attempt.Target.Model,
 			opts.OnStreamPending, streamPendingNotifyAfter)
 		if callErr != nil {
 			cancelUpstream()
 			pe := providerErrorForAttempt(callErr, attempt)
 			lastErr = pe
+			if pe.Fallbackable() {
+				reportFast(0, false)
+			}
 			p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
 			if p.metrics != nil {
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
@@ -1060,6 +1081,8 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 			attempt = nextAttempt
 			continue
 		}
+
+		reportFast(time.Since(started), true)
 
 		p.log.Debug("stream connected", "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)

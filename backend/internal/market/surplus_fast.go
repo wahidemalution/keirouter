@@ -23,6 +23,14 @@ const (
 	// offer (input + output per 1M) a surplus-fast offer may ask and still be
 	// routed to.
 	DefaultSurplusFastTolerancePct = 30
+	// SurplusFastMinUptimePct drops providers whose published 24h uptime shows
+	// they fail most requests. Short-term slowness is left to FastHealth, which
+	// judges providers on KeiRouter's own recent traffic. An unpublished uptime
+	// never drops a provider.
+	SurplusFastMinUptimePct = 50
+	// SurplusFastFirstOutputTimeout is how long a surplus-fast stream may go
+	// without model output before the chain moves to its next step.
+	SurplusFastFirstOutputTimeout = 20 * time.Second
 )
 
 // CutUpstreamCostSlug returns the Surplus model name of a slug billed from the
@@ -46,6 +54,7 @@ func IsUpstreamCostSlug(slug string) bool {
 // ProviderPerf is one provider's published 24h performance for a model.
 // Nil means Surplus has too few samples to publish the figure.
 type ProviderPerf struct {
+	UptimePct    *float64 `json:"uptime_pct"`
 	TTFTP50MS    *float64 `json:"ttft_p50_ms"`
 	LatencyP50MS *float64 `json:"p50_latency_ms"`
 }
@@ -104,8 +113,16 @@ func FetchSurplusPerformance(ctx context.Context, marketsURL, model string) (map
 	return ParseSurplusPerformance(resp.Body)
 }
 
+// unreliableForFast reports whether perf shows a provider below the
+// surplus-fast uptime floor.
+func unreliableForFast(p ProviderPerf) bool {
+	return p.UptimePct != nil && *p.UptimePct < SurplusFastMinUptimePct
+}
+
 // ParseSurplusFastBook reads GET /api/markets/:model and quotes the offers that
-// are available and healthy (trust is not required). floorPct > 0 drops offers
+// are available and healthy (trust is not required). Providers whose 24h
+// uptime falls below SurplusFastMinUptimePct are dropped before the band is
+// set. floorPct > 0 drops offers
 // that cannot prove the provider's /min{N} floor. Offers from blocked
 // providers are ignored, so they never set the band or the ceiling.
 //
@@ -117,12 +134,12 @@ func FetchSurplusPerformance(ctx context.Context, marketsURL, model string) (map
 //
 // The cheapest offers are often ones Surplus will not route to (seller
 // credentials denied, thin books), which the order book does not show. So the
-// next depth distinct price levels above the band are kept as overflow: their
-// providers follow the band's, cheapest first, and Surplus fails over to them
-// within the request instead of answering no_healthy_sellers. Overflow ranks
-// by price rather than speed because it can reach far dearer offers, and it
-// only serves when the band failed. depth 0 keeps every eligible offer and
-// sends no ceiling.
+// offers above the band are kept as overflow up to the depth-th price level
+// that brings a new provider: their providers follow the band's, cheapest
+// first, and Surplus fails over to them within the request instead of
+// answering no_healthy_sellers. Overflow ranks by price because it can reach
+// far dearer offers; FastHealth already sets aside the ones slow right now.
+// depth 0 keeps every eligible offer and sends no ceiling.
 //
 // MinDiscountPct is the X-Min-Discount ceiling that admits every kept offer,
 // so Surplus cannot route above them. It is zero (no ceiling) when some kept
@@ -143,6 +160,9 @@ func ParseSurplusFastBook(r io.Reader, perf map[string]ProviderPerf, tolerancePc
 	skip := providerSet(blocked)
 	for _, o := range body.Offers {
 		if !o.Available || !o.Healthy || o.ProviderID == "" || skip[strings.ToLower(o.ProviderID)] {
+			continue
+		}
+		if unreliableForFast(perf[o.ProviderID]) {
 			continue
 		}
 		if o.PriceInputPer1M == nil || o.PriceOutputPer1M == nil {
@@ -178,15 +198,31 @@ func ParseSurplusFastBook(r io.Reader, perf map[string]ProviderPerf, tolerancePc
 	}
 	kept := len(asks)
 	if depth > 0 {
+		// Only a price level that brings a provider not yet kept counts toward
+		// depth, so one provider's many offers cannot fill every backup slot.
+		// Levels in between stay: they are other sellers of kept providers.
+		have := map[string]bool{}
+		for _, a := range asks[:bandLen] {
+			have[a.provider] = true
+		}
 		levels := 0
-		for i := bandLen; i < len(asks); i++ {
-			if i == bandLen || asks[i].in != asks[i-1].in || asks[i].out != asks[i-1].out {
+		for i := bandLen; i < len(asks); {
+			end, adds := i, false
+			for end < len(asks) && asks[end].in == asks[i].in && asks[end].out == asks[i].out {
+				adds = adds || !have[asks[end].provider]
+				end++
+			}
+			if adds {
 				if levels == depth {
 					kept = i
 					break
 				}
 				levels++
 			}
+			for _, a := range asks[i:end] {
+				have[a.provider] = true
+			}
+			i = end
 		}
 	}
 	band, overflow := asks[:bandLen], asks[bandLen:kept]

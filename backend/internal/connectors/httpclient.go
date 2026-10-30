@@ -423,6 +423,7 @@ func sendOnce(ctx context.Context, provider, model string, build requestBuilder,
 		if err != nil {
 			return nil, transportError(ctx, provider, model, err)
 		}
+		core.ObserveResponseHeader(ctx, resp.Header)
 		return resp, nil
 	}
 
@@ -442,6 +443,7 @@ func sendOnce(ctx context.Context, provider, model string, build requestBuilder,
 		return nil, transportError(ctx, provider, model, err)
 	}
 	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	core.ObserveResponseHeader(ctx, resp.Header)
 	return resp, nil
 }
 

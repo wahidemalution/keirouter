@@ -214,3 +214,75 @@ func TestParseSurplusFastBookSkipsBlockedProvider(t *testing.T) {
 		t.Fatalf("allow-list = %v still has the blocked provider", q.Providers)
 	}
 }
+
+// Shaped like the deepseek-v4.1-flash book on 2026-10-29: the cheap offers
+// beyond dashscope-cn belonged to oneapi (10.9% uptime, 18s TTFT) and inferhub
+// (79% uptime), so surplus-fast routed most requests to them.
+const slowSellersBook = `{"offers":[
+  {"provider_id":"dashscope-cn","price_input_per_1m":179,"price_output_per_1m":1374,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"oneapi","price_input_per_1m":144,"price_output_per_1m":2736,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"inferhub","price_input_per_1m":1500,"price_output_per_1m":6000,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"inferhub","price_input_per_1m":656,"price_output_per_1m":7286,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"dashscope-cn","price_input_per_1m":1000,"price_output_per_1m":50000,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"openrouter","price_input_per_1m":13048,"price_output_per_1m":39144,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"dashscope-cn","price_input_per_1m":6727,"price_output_per_1m":74750,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true},
+  {"provider_id":"deepseek","price_input_per_1m":45000,"price_output_per_1m":500000,"direct_input_per_1m":45000,"direct_output_per_1m":500000,"available":true,"healthy":true}
+]}`
+
+func TestParseSurplusFastBookDropsChronicallyUnreliableProviders(t *testing.T) {
+	perf := map[string]ProviderPerf{
+		"dashscope-cn": {UptimePct: ms(98.3), TTFTP50MS: ms(5546)},
+		"oneapi":       {UptimePct: ms(10.9), TTFTP50MS: ms(18420)},
+		"inferhub":     {UptimePct: ms(79.3), TTFTP50MS: ms(5546)},
+		"openrouter":   {UptimePct: ms(97.9), TTFTP50MS: ms(3043)},
+		"deepseek":     {UptimePct: ms(99.5), TTFTP50MS: ms(2254)},
+	}
+	q, err := ParseSurplusFastBook(strings.NewReader(slowSellersBook), perf, 30, 3, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// oneapi fails most requests and is dropped. inferhub stays: whether it
+	// is fast right now is FastHealth's call, from live traffic. Depth 3
+	// reaches three new providers past the band, cheapest first.
+	if want := []string{"dashscope-cn", "inferhub", "openrouter", "deepseek"}; !slices.Equal(q.ProviderOrder, want) {
+		t.Fatalf("order = %v, want %v", q.ProviderOrder, want)
+	}
+}
+
+// With dashscope-cn blocked, inferhub owns the band and the next price level
+// too. Counting that level toward depth would leave inferhub alone, and when
+// its sellers refuse, Surplus answers no_healthy_sellers.
+func TestParseSurplusFastBookDepthCountsNewProvidersOnly(t *testing.T) {
+	perf := map[string]ProviderPerf{"oneapi": {UptimePct: ms(10.9)}}
+	q, err := ParseSurplusFastBook(strings.NewReader(slowSellersBook), perf, 0, 1, 0, []string{"dashscope-cn"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"inferhub", "openrouter"}; !slices.Equal(q.ProviderOrder, want) {
+		t.Fatalf("order = %v, want %v", q.ProviderOrder, want)
+	}
+	if q.Eligible != 3 {
+		t.Fatalf("eligible = %d, want both inferhub offers and openrouter", q.Eligible)
+	}
+}
+
+func TestParseSurplusFastBookAllProvidersUnreliableFindsNothing(t *testing.T) {
+	perf := map[string]ProviderPerf{}
+	for _, p := range []string{"dashscope-cn", "oneapi", "inferhub", "openrouter", "deepseek"} {
+		perf[p] = ProviderPerf{UptimePct: ms(30)}
+	}
+	q, err := ParseSurplusFastBook(strings.NewReader(slowSellersBook), perf, 30, 3, 0, nil)
+	if err != nil || q.Found {
+		t.Fatalf("q = %+v err = %v, want not found so the chain moves on", q, err)
+	}
+}
+
+func TestParseSurplusPerformanceReadsUptime(t *testing.T) {
+	perf, err := ParseSurplusPerformance(strings.NewReader(`{"providers":[{"provider":"oneapi","uptime_pct":10.9,"ttft_p50_ms":18420}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := perf["oneapi"]; p.UptimePct == nil || *p.UptimePct != 10.9 {
+		t.Fatalf("oneapi = %+v, want uptime 10.9", p)
+	}
+}

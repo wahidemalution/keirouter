@@ -3,11 +3,13 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/stretchr/testify/require"
 )
@@ -262,4 +264,108 @@ func TestPipelineDropsPingsFromClientStream(t *testing.T) {
 		types = append(types, chunk.Type)
 	}
 	require.Equal(t, []core.ChunkType{core.ChunkText, core.ChunkFinish}, types)
+}
+
+// silentFirstConnector streams nothing on acc-1 (an upstream stuck before its
+// first token) and answers normally on acc-2.
+type silentFirstConnector struct{ admissionFallbackConnector }
+
+func (silentFirstConnector) Stream(ctx context.Context, _ *core.ChatRequest, creds core.Credentials, _ core.StreamConfig) (<-chan core.StreamChunk, error) {
+	if creds.AccountID == "acc-1" {
+		out := make(chan core.StreamChunk)
+		go func() { <-ctx.Done(); close(out) }()
+		return out, nil
+	}
+	return streamOf(
+		core.StreamChunk{Type: core.ChunkText, Delta: "from fallback"},
+		core.StreamChunk{Type: core.ChunkFinish, FinishReason: core.FinishStop},
+	), nil
+}
+
+func TestPipelineFallsBackWhenTargetFirstOutputTimeoutPasses(t *testing.T) {
+	d := newPlannerDispatcherWithConnector(t, silentFirstConnector{}, "acc-1", "acc-2")
+	p := New(Deps{Dispatcher: d, StreamStallTimeout: time.Minute})
+	req := &core.ChatRequest{
+		Model: "gpt-4o",
+		Messages: []core.Message{{
+			Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hello"}},
+		}},
+		Metadata: core.RequestMetadata{TenantID: store.DefaultTenantID, SourceDialect: core.DialectOpenAI},
+	}
+
+	started := time.Now()
+	result, err := p.Stream(context.Background(), req, Options{
+		Targets: []dispatch.Target{{Provider: "openai", Model: "gpt-4o", FirstOutputTimeout: 50 * time.Millisecond}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "acc-2", result.AccountID)
+	require.Less(t, time.Since(started), 5*time.Second)
+	for range result.Chunks {
+	}
+}
+
+// surplusFamilyConnector reports a Surplus serving provider per account:
+// acc-1 is served by a stuck inferhub, acc-2 by a fast openrouter.
+type surplusFamilyConnector struct{ admissionFallbackConnector }
+
+func (surplusFamilyConnector) Stream(ctx context.Context, _ *core.ChatRequest, creds core.Credentials, _ core.StreamConfig) (<-chan core.StreamChunk, error) {
+	if creds.AccountID == "acc-1" {
+		core.ObserveResponseHeader(ctx, http.Header{"X-Si-Provider-Family": {"inferhub"}})
+		out := make(chan core.StreamChunk)
+		go func() { <-ctx.Done(); close(out) }()
+		return out, nil
+	}
+	core.ObserveResponseHeader(ctx, http.Header{"X-Si-Provider-Family": {"openrouter"}})
+	return streamOf(
+		core.StreamChunk{Type: core.ChunkText, Delta: "fast"},
+		core.StreamChunk{Type: core.ChunkFinish, FinishReason: core.FinishStop},
+	), nil
+}
+
+func TestPipelineReportsSurplusFastProvidersToFastHealth(t *testing.T) {
+	d := newPlannerDispatcherWithConnector(t, surplusFamilyConnector{}, "acc-1", "acc-2")
+	fh := market.NewFastHealth()
+	p := New(Deps{Dispatcher: d, StreamStallTimeout: time.Minute, FastHealth: fh})
+	req := &core.ChatRequest{
+		Model: "gpt-4o",
+		Messages: []core.Message{{
+			Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hello"}},
+		}},
+		Metadata: core.RequestMetadata{TenantID: store.DefaultTenantID, SourceDialect: core.DialectOpenAI},
+	}
+	result, err := p.Stream(context.Background(), req, Options{
+		Targets: []dispatch.Target{{Provider: "openai", Model: "gpt-4o", MarketSlug: "surplus-fast:m", FirstOutputTimeout: 50 * time.Millisecond}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "acc-2", result.AccountID)
+	for range result.Chunks {
+	}
+	require.Equal(t, []string{"openrouter"}, fh.Filter("m", []string{"inferhub", "openrouter"}))
+}
+
+// soldOutConnector answers like Surplus with no healthy seller: provider
+// "unknown" and a 503, on every account.
+type soldOutConnector struct{ admissionFallbackConnector }
+
+func (soldOutConnector) Stream(ctx context.Context, _ *core.ChatRequest, _ core.Credentials, _ core.StreamConfig) (<-chan core.StreamChunk, error) {
+	core.ObserveResponseHeader(ctx, http.Header{"X-Si-Provider-Family": {"unknown"}})
+	return nil, &core.ProviderError{Kind: core.ErrModelUnavailable, StatusCode: 503, Message: "no_healthy_sellers"}
+}
+
+func TestPipelineSetsAsideNoProviderWhenSurplusNamesNone(t *testing.T) {
+	d := newPlannerDispatcherWithConnector(t, soldOutConnector{}, "acc-1")
+	fh := market.NewFastHealth()
+	p := New(Deps{Dispatcher: d, FastHealth: fh})
+	req := &core.ChatRequest{
+		Model: "gpt-4o",
+		Messages: []core.Message{{
+			Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hello"}},
+		}},
+		Metadata: core.RequestMetadata{TenantID: store.DefaultTenantID, SourceDialect: core.DialectOpenAI},
+	}
+	_, err := p.Stream(context.Background(), req, Options{
+		Targets: []dispatch.Target{{Provider: "openai", Model: "gpt-4o", MarketSlug: "surplus-fast:m", UpstreamProviders: "inferhub,openrouter"}},
+	})
+	require.Error(t, err)
+	require.Equal(t, []string{"inferhub", "openrouter"}, fh.Filter("m", []string{"inferhub", "openrouter"}))
 }

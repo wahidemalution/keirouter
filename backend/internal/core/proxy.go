@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -42,4 +43,22 @@ func WithResponseHeaderTimeout(ctx context.Context, d time.Duration) context.Con
 func ResponseHeaderTimeoutFromContext(ctx context.Context) time.Duration {
 	d, _ := ctx.Value(responseHeaderTimeoutKey{}).(time.Duration)
 	return d
+}
+
+type responseHeaderObserverKey struct{}
+
+// WithResponseHeaderObserver returns a context whose upstream calls report
+// their response headers to fn as soon as they arrive, whatever the status.
+func WithResponseHeaderObserver(ctx context.Context, fn func(http.Header)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, responseHeaderObserverKey{}, fn)
+}
+
+// ObserveResponseHeader hands h to the observer carried by ctx, if any.
+func ObserveResponseHeader(ctx context.Context, h http.Header) {
+	if fn, ok := ctx.Value(responseHeaderObserverKey{}).(func(http.Header)); ok {
+		fn(h)
+	}
 }

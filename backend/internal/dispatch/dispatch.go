@@ -144,6 +144,10 @@ type Target struct {
 	// UpstreamProviderOrder, when set, is a comma-separated preferred attempt
 	// order sent upstream as `provider_order` (surplus-fast: fastest first).
 	UpstreamProviderOrder string
+	// FirstOutputTimeout, when > 0, caps how long a streaming attempt may go
+	// without model output before the chain moves to the next step. It
+	// replaces the global stall timeout during admission only.
+	FirstOutputTimeout time.Duration
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the

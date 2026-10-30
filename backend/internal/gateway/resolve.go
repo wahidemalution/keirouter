@@ -390,7 +390,9 @@ func stampMarketRate(t *dispatch.Target, r market.Rate, mult float64) {
 // Each step also carries the trusted provider allow-list; a step with no live
 // trusted quote is dropped, since without that list Surplus could route the
 // request to an untrusted seller. surplus-fast steps also carry the provider
-// order, fastest first.
+// order, fastest first, minus providers FastHealth has set aside (a step
+// left with none is dropped), and a short first-output timeout so a stuck
+// seller hands over to the next step quickly.
 // It runs after any market reordering so the ceiling overrides cheapest-ask stamps.
 func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
 	byModel := map[string]string{}
@@ -425,13 +427,24 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		if !ok || len(m.Providers) == 0 {
 			continue
 		}
+		providers, order := m.Providers, m.ProviderOrder
+		fast := strings.HasPrefix(slug, market.SurplusFastPrefix)
+		if fast {
+			name, _ := market.CutUpstreamCostSlug(slug)
+			if providers, order = liveFastProviders(cache.FastHealth(), name, providers, order); len(providers) == 0 {
+				continue
+			}
+		}
 		t := steps[i]
 		t.MarketSlug = slug
 		t.BillUpstreamCost = true
 		t.UpstreamCostMult = mult
 		t.MinDiscountPct = m.MinDiscountPct
-		t.UpstreamProviders = strings.Join(m.Providers, ",")
-		t.UpstreamProviderOrder = strings.Join(m.ProviderOrder, ",")
+		t.UpstreamProviders = strings.Join(providers, ",")
+		t.UpstreamProviderOrder = strings.Join(order, ",")
+		if fast {
+			t.FirstOutputTimeout = market.SurplusFastFirstOutputTimeout
+		}
 		capIn, capOut := m.FailoverIn, m.FailoverOut
 		if capIn <= 0 || capOut <= 0 {
 			capIn, capOut = m.MinAskIn, m.MinAskOut
@@ -448,6 +461,26 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		return steps
 	}
 	return out
+}
+
+// liveFastProviders drops the providers h has set aside for model from the
+// allow-list and the attempt order alike.
+func liveFastProviders(h *market.FastHealth, model string, providers, order []string) ([]string, []string) {
+	kept := h.Filter(model, providers)
+	if len(kept) == len(providers) {
+		return providers, order
+	}
+	keep := make(map[string]bool, len(kept))
+	for _, p := range kept {
+		keep[p] = true
+	}
+	var liveOrder []string
+	for _, p := range order {
+		if keep[p] {
+			liveOrder = append(liveOrder, p)
+		}
+	}
+	return kept, liveOrder
 }
 
 // badModelError signals a model string that cannot be routed. status is the

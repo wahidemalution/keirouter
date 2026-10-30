@@ -148,9 +148,9 @@ export function MarketPricingSection() {
                 />
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
                   For <code>surplus-trusted:</code> slugs: Surplus may fail over across this many trusted
-                  price levels (sent as X-Min-Discount). For <code>surplus-fast:</code> slugs: this many price
-                  levels above the tolerance band stay as backup when every offer in the band is refused. Users
-                  are billed Surplus's reported cost plus markup. 0 = no ceiling.
+                  price levels (sent as X-Min-Discount). For <code>surplus-fast:</code> slugs: this many more
+                  providers above the tolerance band stay as backup, cheapest first, for when every offer in
+                  the band is refused. Users are billed Surplus's reported cost plus markup. 0 = no ceiling.
                 </p>
               </Field>
               <Field label="Surplus fast price tolerance %">
@@ -165,7 +165,8 @@ export function MarketPricingSection() {
                 <p className="mt-1 text-xs text-[var(--text-muted)]">
                   For <code>surplus-fast:</code> slugs: an available, healthy offer (trusted or not) may ask up
                   to this much above the cheapest one. Among those, the provider with the lowest time to first
-                  token goes first. 0 = always the cheapest.
+                  token goes first. A provider that answers slower than 8s or fails sits out 2 to 10 minutes,
+                  then gets trial requests until it is fast again. 0 = always the cheapest.
                 </p>
               </Field>
               <div className="sm:col-span-2">

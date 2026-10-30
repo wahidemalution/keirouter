@@ -395,6 +395,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		cfg.ProviderHealth.LatencyThresholds, cfg.ProviderHealth.ProbeTimeout)
 	probeRunner.SetCredentialPreparer(disp)
 
+	// The market cache also carries the live surplus-fast provider tracker,
+	// which the pipeline feeds and the gateway reads when resolving chains.
+	marketCache := market.NewSnapshotCache()
+
 	// One tracker shared by the pipeline (writer) and the gateway (reader).
 	inflightTracker := inflight.New()
 
@@ -414,6 +418,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		TimeoutReader:      timeoutNotifier,
 		Telemetry:          healthSvc,
 		Inflight:           inflightTracker,
+		FastHealth:         marketCache.FastHealth(),
 	})
 
 	// Resolve frontend dist directory. Check common install locations, then cwd.
@@ -456,7 +461,6 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		return nil
 	}
 
-	marketCache := market.NewSnapshotCache()
 	references := market.NewReferenceCache()
 
 	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/dispatch"
 )
 
 const defaultStreamAdmissionTimeout = 60 * time.Second
@@ -19,6 +20,15 @@ const trailingUsageGrace = 2 * time.Second
 // the first canonical chunks before the gateway commits bytes to the client.
 func requiresParsedStreamAdmission(provider string) bool {
 	return provider == "codex"
+}
+
+// admissionTimeout is how long a streaming attempt may go without model
+// output: the target's FirstOutputTimeout when it is shorter than stall.
+func admissionTimeout(stall time.Duration, t dispatch.Target) time.Duration {
+	if t.FirstOutputTimeout > 0 && (stall <= 0 || t.FirstOutputTimeout < stall) {
+		return t.FirstOutputTimeout
+	}
+	return stall
 }
 
 // admitStream delays committing a streaming attempt until it produces actual

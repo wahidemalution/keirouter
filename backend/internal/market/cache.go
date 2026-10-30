@@ -11,10 +11,19 @@ type SnapshotCache struct {
 	mu      sync.RWMutex
 	bySlug  map[string]Model
 	fetched time.Time
+	fast    *FastHealth
 }
 
 func NewSnapshotCache() *SnapshotCache {
-	return &SnapshotCache{bySlug: map[string]Model{}}
+	return &SnapshotCache{bySlug: map[string]Model{}, fast: NewFastHealth()}
+}
+
+// FastHealth returns the live surplus-fast provider tracker, or nil.
+func (c *SnapshotCache) FastHealth() *FastHealth {
+	if c == nil {
+		return nil
+	}
+	return c.fast
 }
 
 // Replace installs a new snapshot.
