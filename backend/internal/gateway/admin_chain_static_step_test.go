@@ -40,6 +40,7 @@ func TestAdminChainStaticStepRejects(t *testing.T) {
 		{"negative", `"static_input_per_m":-1,"static_output_per_m":2`, "rates must be finite and non-negative"},
 		{"markup without price", `"markup_percent":25`, "only apply to a static-price step"},
 		{"cache without price", `"static_cache_read_per_m":0.1`, "only apply to a static-price step"},
+		{"zero cache override", `"static_input_per_m":1,"static_output_per_m":2,"static_cache_read_per_m":0`, "cache overrides must be greater than 0"},
 		{"markup too high", `"static_input_per_m":1,"static_output_per_m":2,"markup_percent":2000`, "markup_percent must be between 0 and 1000"},
 	}
 	for _, tc := range cases {

@@ -125,12 +125,23 @@ test("makeDraftStep reads a static step from the API", () => {
   assert.equal(makeDraftStep({ provider: "a", model: "b", market_slug: "s" }).priceSource, "market");
 });
 
-test("stepKey separates a static step from a slug step on the same model", () => {
-  const slug = { ...makeDraftStep({ provider: "openai", model: "gpt-4o", market_slug: "surplus-fast:gpt-4o" }) };
+// The dispatcher identifies an attempt by provider, model and market slug, so
+// a static step on the same provider/model as a slugless step (or another
+// static step) would never be tried: the editor must flag it as a duplicate.
+test("stepKey treats a static step like a slugless step on the same model", () => {
+  const slug = makeDraftStep({ provider: "openai", model: "gpt-4o", market_slug: "surplus-fast:gpt-4o" });
   const plain = makeDraftStep({ provider: "openai", model: "gpt-4o" });
   const stat = staticDraft();
   assert.notEqual(stepKey(slug), stepKey(stat));
-  assert.notEqual(stepKey(plain), stepKey(stat));
-  assert.equal(stepKey(stat), stepKey(staticDraft()));
-  assert.notEqual(stepKey(stat), stepKey(staticDraft({ staticOutputPerM: "3" })));
+  assert.equal(stepKey(plain), stepKey(stat));
+  assert.equal(stepKey(stat), stepKey(staticDraft({ staticOutputPerM: "3" })));
+});
+
+test("stepKey ignores a slug left over on a static step", () => {
+  assert.equal(stepKey({ ...staticDraft(), marketSlug: "surplus-fast:gpt-4o" }), stepKey(makeDraftStep({ provider: "openai", model: "gpt-4o" })));
+});
+
+test("staticStepPreview rejects a zero cache override", () => {
+  assert.deepEqual(staticStepPreview(staticDraft({ staticCacheReadPerM: "0" }), 0), { ok: false, error: "Cache prices must be above 0, or leave them empty." });
+  assert.deepEqual(staticStepPreview(staticDraft({ staticCacheWritePerM: "0" }), 0), { ok: false, error: "Cache prices must be above 0, or leave them empty." });
 });

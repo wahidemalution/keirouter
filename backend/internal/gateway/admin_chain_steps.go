@@ -51,6 +51,13 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 	if in.StaticInputPerM <= 0 || in.StaticOutputPerM <= 0 {
 		return st, prefix + "static input and output price must be greater than 0"
 	}
+	// The meter reads a zero cache rate as unset and bills the input rate, so
+	// a zero override would bill more than the editor shows. Empty = derived.
+	for _, r := range []*float64{in.StaticCacheReadPerM, in.StaticCacheWritePerM} {
+		if r != nil && *r <= 0 {
+			return st, prefix + "cache overrides must be greater than 0; leave them empty to derive them from the input price"
+		}
+	}
 	if in.MarkupPercent != nil && !validMarkup(*in.MarkupPercent) {
 		return st, prefix + "markup_percent must be between 0 and 1000"
 	}

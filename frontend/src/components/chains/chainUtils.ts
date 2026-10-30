@@ -134,6 +134,9 @@ export const staticStepPreview = (step: DraftChainStep, inheritedMarkup: number)
   const prices = [input, output, cacheRead ?? 0, cacheWrite ?? 0];
   if (prices.some((v) => !Number.isFinite(v) || v < 0)) return { ok: false, error: "Prices must be 0 or more." };
   if (!(input > 0 && output > 0)) return { ok: false, error: "Enter an input and output price above 0." };
+  // The gateway bills a zero cache rate at the input rate, so 0 is refused
+  // rather than previewed as free. Empty derives from the input price.
+  if (cacheRead === 0 || cacheWrite === 0) return { ok: false, error: "Cache prices must be above 0, or leave them empty." };
   if (stepMarkup !== undefined && !(Number.isFinite(stepMarkup) && stepMarkup >= 0 && stepMarkup <= 1000)) {
     return { ok: false, error: "Markup must be between 0 and 1000." };
   }
@@ -149,13 +152,14 @@ export const staticStepPreview = (step: DraftChainStep, inheritedMarkup: number)
   };
 };
 
-// stepKey identifies a route step for duplicate checks. Two steps may share a
-// provider/model when they are priced differently: different market slugs
-// (surplus-fast then surplus-trusted) or a static price.
+// stepKey identifies a route step for duplicate checks. It mirrors the
+// dispatcher's attempt key (provider, model, market slug): two steps may share
+// a provider/model only when their market slugs differ (surplus-fast then
+// surplus-trusted). A static step sends no slug, so it collides with a
+// slugless or another static step on the same provider/model.
 export const stepKey = (step: Pick<DraftChainStep, "provider" | "model" | "marketSlug"> & Partial<DraftChainStep>): string => {
-  const base = `${step.provider}/${step.model}`;
-  if (step.priceSource === "static") return `${base}|static:${(step.staticInputPerM ?? "").trim()}/${(step.staticOutputPerM ?? "").trim()}`;
-  return `${base}|${(step.marketSlug ?? "").trim()}`;
+  const slug = step.priceSource === "static" ? "" : (step.marketSlug ?? "").trim();
+  return `${step.provider}/${step.model}|${slug}`;
 };
 
 // stepPayload builds the API step for the chosen price source only, so a

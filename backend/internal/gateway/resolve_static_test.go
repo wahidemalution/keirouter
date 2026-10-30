@@ -127,3 +127,13 @@ func TestStaticStepDroppedByDiscountFloor(t *testing.T) {
 	_, err := applyDiscountFloor(got, 10, "static")
 	require.Error(t, err)
 }
+
+func TestStaticStepIsNotDiscountCapable(t *testing.T) {
+	c := store.Chain{
+		MarketSlugs: []string{"surplus-trusted:gpt-4o"},
+		Steps:       []store.ChainStep{staticStep(nil)},
+	}
+	require.False(t, chainCanGuaranteeDiscount(c), "a static step cannot honour a discount floor")
+	c.Steps = append(c.Steps, store.ChainStep{Provider: "openai", Model: "gpt-4o"})
+	require.True(t, chainCanGuaranteeDiscount(c), "a slugless step on the trusted model still adopts the chain slug")
+}
