@@ -106,3 +106,31 @@ func TestFastHealthNilIsNoop(t *testing.T) {
 		t.Fatalf("filter = %v, want all", got)
 	}
 }
+
+// TestSurplusFastTimingPolicy pins the agreed surplus-fast timings: a stream
+// hands over after 10s without output, an answer within 8s counts as fast,
+// and a slow provider sits out 30s, then 1m, then at most 2m per strike, and
+// is retried on one request in three once its cooldown ends.
+func TestSurplusFastTimingPolicy(t *testing.T) {
+	if SurplusFastFirstOutputTimeout != 10*time.Second {
+		t.Fatalf("first output timeout = %v, want 10s", SurplusFastFirstOutputTimeout)
+	}
+	if FastSlowTTFT != 8*time.Second {
+		t.Fatalf("slow TTFT = %v, want 8s", FastSlowTTFT)
+	}
+	if FastTrialEvery != 3 {
+		t.Fatalf("trial every = %d, want 3", FastTrialEvery)
+	}
+	h, clock := newTestHealth()
+	for i, want := range []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 2 * time.Minute} {
+		h.Observe("m", "p", 0, false)
+		clock.advance(want - time.Second)
+		if got := h.Filter("m", []string{"p"}); len(got) != 0 {
+			t.Fatalf("strike %d: provider back after %v, want cooldown %v", i+1, want-time.Second, want)
+		}
+		clock.advance(time.Second)
+		if got := h.Filter("m", []string{"p"}); len(got) != 1 {
+			t.Fatalf("strike %d: provider not retried after cooldown %v", i+1, want)
+		}
+	}
+}

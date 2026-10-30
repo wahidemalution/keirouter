@@ -12,11 +12,13 @@ const (
 	FastSlowTTFT = 8 * time.Second
 	// FastCooldownBase is how long a provider sits out after its first slow
 	// or failed answer. Each further strike doubles it, up to FastCooldownMax.
-	FastCooldownBase = 2 * time.Minute
-	FastCooldownMax  = 10 * time.Minute
+	// Kept short: Surplus providers swing between fast and slow, so one slow
+	// answer should not bench a provider that is fast again a minute later.
+	FastCooldownBase = 30 * time.Second
+	FastCooldownMax  = 2 * time.Minute
 	// FastTrialEvery is how often a provider whose cooldown ended is offered
 	// again: one request in this many, until one answer decides it.
-	FastTrialEvery = 10
+	FastTrialEvery = 3
 )
 
 // FastHealth tracks how each Surplus provider is serving a model right now,
