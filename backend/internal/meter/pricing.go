@@ -392,7 +392,7 @@ func chainPrice(ev Event) (Price, bool) {
 // marketPrice returns the billable price for a winning step's market slug. The
 // rates are already markup-adjusted by the caller; all-zero rates mean unset.
 func marketPrice(ev Event) (Price, bool) {
-	if ev.MarketSlug == "" || (ev.MarketRateIn <= 0 && ev.MarketRateOut <= 0) {
+	if !hasStepPrice(ev) || (ev.MarketRateIn <= 0 && ev.MarketRateOut <= 0) {
 		return Price{}, false
 	}
 	cacheRead := ev.MarketCacheReadRate
@@ -406,21 +406,42 @@ func marketPrice(ev Event) (Price, bool) {
 	return Price{
 		InputPerM: ev.MarketRateIn, OutputPerM: ev.MarketRateOut,
 		CachedInputPerM: cacheRead, CacheWritePerM: cacheWrite,
-		ReasoningPerM: rateOr(ev.MarketReasoningRate, ev.MarketRateOut), Source: "market_slug",
+		ReasoningPerM: rateOr(ev.MarketReasoningRate, ev.MarketRateOut), Source: stepPriceSource(ev),
 	}, true
+}
+
+// hasStepPrice reports whether the winning step carries its own rates: a
+// market slug or a static price.
+func hasStepPrice(ev Event) bool {
+	return ev.MarketSlug != "" || ev.StaticPrice
+}
+
+func stepPriceSource(ev Event) string {
+	if ev.StaticPrice {
+		return "static_step"
+	}
+	return "market_slug"
+}
+
+// stepPriceKey is the pricing-match key and kind for a step-priced event.
+func stepPriceKey(ev Event) (string, string) {
+	if ev.StaticPrice {
+		return "static:" + ev.Provider + "/" + ev.Model, "static_step"
+	}
+	return ev.MarketSlug, "market_slug"
 }
 
 // providerPrice returns the pre-markup market cost basis for a winning step's
 // slug: what the operator pays the upstream provider. It returns false when the
 // request carried no market slug, meaning upstream cost is unknown (not zero).
 func providerPrice(ev Event) (Price, bool) {
-	if ev.MarketSlug == "" || (ev.UpstreamRateIn <= 0 && ev.UpstreamRateOut <= 0) {
+	if !hasStepPrice(ev) || (ev.UpstreamRateIn <= 0 && ev.UpstreamRateOut <= 0) {
 		return Price{}, false
 	}
 	return Price{
 		InputPerM: ev.UpstreamRateIn, OutputPerM: ev.UpstreamRateOut,
 		CachedInputPerM: ev.UpstreamCacheReadRate, CacheWritePerM: ev.UpstreamCacheWriteRate,
-		ReasoningPerM: rateOr(ev.UpstreamReasoningRate, ev.UpstreamRateOut), Source: "market_slug",
+		ReasoningPerM: rateOr(ev.UpstreamReasoningRate, ev.UpstreamRateOut), Source: stepPriceSource(ev),
 	}, true
 }
 
@@ -451,7 +472,8 @@ func upstreamCostForEvent(ev Event) CostBreakdown {
 	if ev.HeadroomStats != nil {
 		savedTokens += ev.HeadroomStats.TokensSaved
 	}
-	out := calculateCostFromPrice(pricingMatch(ev.MarketSlug, price, "market_slug", false), u, ev.CacheHit, savedTokens)
+	key, kind := stepPriceKey(ev)
+	out := calculateCostFromPrice(pricingMatch(key, price, kind, false), u, ev.CacheHit, savedTokens)
 	return floorMinCharge(out, u, ev.MinChargeMicro)
 }
 

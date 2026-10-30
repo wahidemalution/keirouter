@@ -2040,6 +2040,7 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 		CacheWritePerM:         attempt.Target.CacheWritePerM,
 		CacheReadPerM:          attempt.Target.CacheReadPerM,
 		MarketSlug:             attempt.Target.MarketSlug,
+		StaticPrice:            attempt.Target.StaticPrice,
 		MarketRateIn:           attempt.Target.MarketRateIn,
 		MarketRateOut:          attempt.Target.MarketRateOut,
 		MarketCacheReadRate:    attempt.Target.MarketCacheReadRate,
