@@ -44,6 +44,9 @@ export interface PublicModel {
   /** live: today's best market quote, a request may bill up to max_*_per_m.
    * fixed: a chain price that does not follow the market. Null when sold out. */
   price_basis?: "live" | "fixed" | null;
+  /** Live quote's discount off the official price: the best case, which only
+   * some requests get. Null when none. */
+  discount_up_to_pct?: number | null;
   avg_input_per_m?: number | null;
   avg_output_per_m?: number | null;
   avg_window_days?: number | null;

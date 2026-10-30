@@ -94,6 +94,9 @@ type publicModelRow struct {
 	AvgInputPerM  float64
 	AvgOutputPerM float64
 	AvgTokens     int64
+	// UpToDiscountPct is the live quote's discount off the official price:
+	// the best case, which only some requests get. 0 when none.
+	UpToDiscountPct int
 	// Context is the model's context window in tokens from models.dev (0 = unknown).
 	Context  int
 	Requests int64
@@ -194,6 +197,7 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 		basis := ""
 		var maxIn, maxOut, avgIn, avgOut float64
 		var avgTokens int64
+		upTo := 0
 		if !soldOut {
 			if ref, ok := s.chainOfficialPrice(c); ok {
 				official = &ref
@@ -205,6 +209,9 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 				basis = "live"
 				if p, ok := live.byName[strings.ToLower(c.Name)]; ok && p.MaxInputPerM != nil && p.MaxOutputPerM != nil {
 					maxIn, maxOut = atLeast(*p.MaxInputPerM, inputPerM), atLeast(*p.MaxOutputPerM, outputPerM)
+				}
+				if official != nil {
+					upTo = discountPercent(inputPerM, outputPerM, *official)
 				}
 				if rp, ok := realizedFrom(billed[c.ID], official); ok {
 					avgIn, avgOut, avgTokens, discount = rp.InputPerM, rp.OutputPerM, rp.Tokens, rp.DiscountPct
@@ -235,11 +242,11 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			PriceBasis:   basis,
 			MaxInputPerM: maxIn, MaxOutputPerM: maxOut,
 			AvgInputPerM: avgIn, AvgOutputPerM: avgOut,
-			AvgTokens: avgTokens,
-			Context:   s.chainContextTokens(c),
-			Requests:  u.TotalRequests,
-			Tokens:    u.PromptTokens + u.CompletionTokens,
-			Users:     u.DistinctKeys,
+			AvgTokens: avgTokens, UpToDiscountPct: upTo,
+			Context:  s.chainContextTokens(c),
+			Requests: u.TotalRequests,
+			Tokens:   u.PromptTokens + u.CompletionTokens,
+			Users:    u.DistinctKeys,
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -287,6 +294,10 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 		if m.PriceBasis != "" {
 			basis = m.PriceBasis
 		}
+		var upTo any
+		if m.UpToDiscountPct > 0 {
+			upTo = m.UpToDiscountPct
+		}
 		if m.AvgTokens > 0 {
 			avgIn, avgOut = m.AvgInputPerM, m.AvgOutputPerM
 			windowDays, sampleTokens = realizedWindowDays, m.AvgTokens
@@ -310,15 +321,18 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 			// max_*_per_m bound what a request can cost now, and
 			// discount_pct is the 7-day billed average (null until the
 			// chain has enough traffic), with avg_*_per_m behind it.
-			"price_basis":       basis,
-			"avg_input_per_m":   avgIn,
-			"avg_output_per_m":  avgOut,
-			"avg_window_days":   windowDays,
-			"avg_sample_tokens": sampleTokens,
-			"max_input_per_m":   maxIn,
-			"max_output_per_m":  maxOut,
-			"context_tokens":    contextTokens,
-			"capabilities":      caps,
+			"price_basis": basis,
+			// discount_up_to_pct: the live quote's discount, the best case
+			// only some requests get; null when none.
+			"discount_up_to_pct": upTo,
+			"avg_input_per_m":    avgIn,
+			"avg_output_per_m":   avgOut,
+			"avg_window_days":    windowDays,
+			"avg_sample_tokens":  sampleTokens,
+			"max_input_per_m":    maxIn,
+			"max_output_per_m":   maxOut,
+			"context_tokens":     contextTokens,
+			"capabilities":       caps,
 			"usage": map[string]any{
 				"users":    m.Users,
 				"requests": m.Requests,

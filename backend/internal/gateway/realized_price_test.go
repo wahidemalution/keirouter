@@ -82,6 +82,7 @@ func TestPublicModelsUsesBilledAverage(t *testing.T) {
 	require.InDelta(t, 0.44, busy.MaxInputPerM, 1e-9, "failover cap with the 10% default markup")
 	require.InDelta(t, 0.5, busy.AvgInputPerM, 1e-9)
 	require.Equal(t, 35, busy.DiscountPct, "discount is the billed average")
+	require.Equal(t, 99, busy.UpToDiscountPct, "best case: 0.11 of an 11 list")
 	require.Equal(t, "live", quiet.PriceBasis)
 	require.Zero(t, quiet.DiscountPct, "too little traffic for an average")
 	require.Zero(t, quiet.AvgTokens)
