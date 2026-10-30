@@ -289,6 +289,46 @@ func (r *UsageRepo) ChainUsageAccurate(ctx context.Context, tenantID string, sin
 	return out, rows.Err()
 }
 
+// ChainBilledUsage is what customers were billed on a chain for standard
+// (uncached) input and for output, with the token counts behind it. Cache
+// reads and writes are left out: they bill at their own rates and have no
+// official price to compare against.
+type ChainBilledUsage struct {
+	ChainID      string
+	InputTokens  int64 // prompt tokens minus cache reads and cache writes
+	OutputTokens int64 // completion tokens, reasoning included
+	InputNanos   int64
+	OutputNanos  int64 // output plus reasoning cost
+}
+
+// ChainBilled sums billed successful requests per chain since the given time.
+// Unbilled rows (cost 0) are skipped so a request with no price cannot pull
+// the average down.
+func (r *UsageRepo) ChainBilled(ctx context.Context, tenantID string, since time.Time) (map[string]ChainBilledUsage, error) {
+	q := r.db.rebind(`SELECT chain_id,
+			COALESCE(SUM(prompt_tokens - cached_tokens - cache_write_tokens),0),
+			COALESCE(SUM(completion_tokens),0),
+			COALESCE(SUM(input_cost_nanos),0),
+			COALESCE(SUM(output_cost_nanos + reasoning_cost_nanos),0)
+		FROM usage_records
+		WHERE tenant_id=? AND created_at>=? AND chain_id<>'' AND status='success' AND cost_nanos>0
+		GROUP BY chain_id`)
+	rows, err := r.db.sql.QueryContext(ctx, q, tenantID, formatTime(since))
+	if err != nil {
+		return nil, fmt.Errorf("store: chain billed: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]ChainBilledUsage{}
+	for rows.Next() {
+		var u ChainBilledUsage
+		if err := rows.Scan(&u.ChainID, &u.InputTokens, &u.OutputTokens, &u.InputNanos, &u.OutputNanos); err != nil {
+			return nil, err
+		}
+		out[u.ChainID] = u
+	}
+	return out, rows.Err()
+}
+
 // rangeWhere builds the tenant + time-window predicate shared by the range
 // aggregate queries. until is exclusive and omitted when zero.
 func rangeWhere(tenantID string, since, until time.Time) (string, []any) {

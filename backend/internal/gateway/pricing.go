@@ -43,7 +43,16 @@ type keyPrice struct {
 	MaxOutputPerM      *float64 `json:"max_output_per_m"`
 	OfficialInputPerM  *float64 `json:"official_input_per_m"`
 	OfficialOutputPerM *float64 `json:"official_output_per_m"`
-	DiscountPct        *int     `json:"discount_pct"`
+	// DiscountPct is the 7-day average discount customers were billed, not
+	// the discount of the live quote, which few requests may get. Null until
+	// the chain has enough traffic for a stable average.
+	DiscountPct *int `json:"discount_pct"`
+	// AvgInputPerM/AvgOutputPerM are the 7-day average billed rates for
+	// uncached input and output; null with DiscountPct.
+	AvgInputPerM    *float64 `json:"avg_input_per_m"`
+	AvgOutputPerM   *float64 `json:"avg_output_per_m"`
+	AvgWindowDays   *int     `json:"avg_window_days"`
+	AvgSampleTokens *int64   `json:"avg_sample_tokens"`
 }
 
 // pricingCache holds the last priced list of every Surplus chain for
@@ -158,6 +167,10 @@ func (s *Server) surplusPrices(ctx context.Context) (priceList, error) {
 	if s.settings != nil {
 		settings = market.LoadSettings(ctx, s.settings.Get)
 	}
+	billed, err := s.chainBilled(ctx)
+	if err != nil {
+		return priceList{}, err
+	}
 	byName := make(map[string]keyPrice, len(chains))
 	idToName := make(map[string]string, len(chains))
 	for _, ch := range chains {
@@ -166,7 +179,9 @@ func (s *Server) surplusPrices(ctx context.Context) (priceList, error) {
 			continue
 		}
 		name := strings.ToLower(ch.Name)
-		byName[name] = s.surplusChainPrice(ch, slugs, settings)
+		p := s.surplusChainPrice(ch, slugs, settings)
+		s.applyRealized(&p, ch, billed[ch.ID])
+		byName[name] = p
 		idToName[ch.ID] = name
 	}
 	var asOf time.Time
@@ -222,11 +237,32 @@ func (s *Server) surplusChainPrice(c store.Chain, slugs []string, settings marke
 	}
 	if ref, ok := s.chainOfficialPrice(c); ok {
 		p.OfficialInputPerM, p.OfficialOutputPerM = price(ref.InputPerM), price(ref.OutputPerM)
-		if d := discountPercent(rate.InputPerM, rate.OutputPerM, ref); d > 0 {
-			p.DiscountPct = &d
-		}
 	}
 	return p
+}
+
+// applyRealized adds the chain's 7-day billed average to an available price,
+// and sets the discount from it. A chain without enough traffic keeps a null
+// discount.
+func (s *Server) applyRealized(p *keyPrice, c store.Chain, b store.ChainBilledUsage) {
+	if !p.Available {
+		return
+	}
+	var official *officialPrice
+	if ref, ok := s.chainOfficialPrice(c); ok {
+		official = &ref
+	}
+	rp, ok := realizedFrom(b, official)
+	if !ok {
+		return
+	}
+	days, tokens := realizedWindowDays, rp.Tokens
+	p.AvgInputPerM, p.AvgOutputPerM = price(rp.InputPerM), price(rp.OutputPerM)
+	p.AvgWindowDays, p.AvgSampleTokens = &days, &tokens
+	if rp.DiscountPct > 0 {
+		d := rp.DiscountPct
+		p.DiscountPct = &d
+	}
 }
 
 // chainMaxRate is the most a request can be billed per 1M tokens on the

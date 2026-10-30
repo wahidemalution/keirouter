@@ -107,7 +107,9 @@ type Server struct {
 	updates          *update.Checker
 	insightsCache    *ttlCache
 	// pricing caches the live Surplus price list behind /v1/pricing.
-	pricing             pricingCache
+	pricing pricingCache
+	// realized caches the 7-day billed totals behind the average prices.
+	realized            realizedCache
 	liveModels          *liveModelCache
 	guardrails          *guardrails.Engine
 	guardrailRepo       *store.GuardrailRepo
