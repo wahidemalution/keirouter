@@ -176,7 +176,14 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 		// Chain-configured rates take precedence; all-zero means unset.
 		inputPerM, outputPerM, cachedPerM, cacheWritePerM := c.InputPerM, c.OutputPerM, c.CacheReadPerM, c.CacheWritePerM
 		soldOut := false
-		if s.chainSoldOut(c) {
+		lead, leadStatic := s.leadStaticTarget(ctx, c)
+		if leadStatic {
+			// A fixed-price first step sets the price; the market steps
+			// behind it are backups and do not decide availability.
+			inputPerM, outputPerM = lead.MarketRateIn, lead.MarketRateOut
+			cachedPerM, cacheWritePerM = lead.MarketCacheReadRate, lead.MarketCacheWriteRate
+			soldOut = c.Disabled
+		} else if s.chainSoldOut(c) {
 			// Every bound market slug is missing: the model is sold out.
 			// Do not surface a catalog price the market cannot honour.
 			soldOut = true
@@ -202,7 +209,7 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			if ref, ok := s.chainOfficialPrice(c); ok {
 				official = &ref
 			}
-			if chainMarketPriced(c) {
+			if !leadStatic && chainMarketPriced(c) {
 				// Show the live quote with its upper bound. Its discount is
 				// not what most requests get, so only the billed average may
 				// carry one.

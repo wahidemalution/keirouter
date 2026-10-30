@@ -298,10 +298,6 @@ export function ModelBrowser({ models, loading = false }: { models: PublicModel[
       <p className="mt-3 text-[12px] text-[var(--muted)]" aria-live="polite">
         Menampilkan {fmtCount(Math.min(visible, filtered.length))} dari {fmtCount(filtered.length)} model
       </p>
-      <p className="mt-1 text-[12px] leading-[1.5] text-[var(--muted)]">
-        Harga tiap request bisa berubah sesuai ketersediaan penyedia. Yang tampil adalah harga termurah dan maksimal saat
-        ini, diskon dihitung dari harga termurah.
-      </p>
       {filtered.length === 0 ? (
         <p className="mt-4 rounded-xl border border-dashed border-[var(--line)] p-8 text-center text-sm text-[var(--muted)]">
           Tidak ada model yang cocok dengan pencarian ini.
