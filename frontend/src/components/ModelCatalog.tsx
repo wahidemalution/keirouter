@@ -96,13 +96,28 @@ function CopyId({ id }: { id: string }) {
   );
 }
 
-function Price({ label, value, strong = false, official }: { label: string; value: number; strong?: boolean; official?: number | null }) {
+function Price({
+  label,
+  value,
+  strong = false,
+  official,
+  max,
+}: {
+  label: string;
+  value: number;
+  strong?: boolean;
+  official?: number | null;
+  max?: number | null;
+}) {
   return (
     <div className="min-w-0">
       <p className="text-[11px] text-[var(--muted)]">{label}</p>
       <p className={`truncate font-mono tabular-nums ${strong ? "text-[15px] font-semibold text-[var(--ink)]" : "text-[12.5px] text-[var(--ink)]"}`}>
         {fmtRate(value)}
       </p>
+      {max != null && max > value && (
+        <p className="truncate font-mono text-[11px] tabular-nums text-[var(--muted)]">maks. {fmtRate(max)}</p>
+      )}
       {official != null && official > value && (
         <p className="truncate font-mono text-[11px] tabular-nums text-[var(--muted)]">
           <span className="sr-only">Harga resmi </span>
@@ -113,8 +128,24 @@ function Price({ label, value, strong = false, official }: { label: string; valu
   );
 }
 
+// What the shown prices mean, so a customer comparing them with their bill
+// knows which number to expect. Fixed chain prices need no note.
+function priceNote(model: PublicModel): string | null {
+  if (model.price_basis === "average_7d") {
+    const days = model.avg_window_days ?? 7;
+    return `Ini harga rata-rata yang dibayar pengguna dalam ${days} hari terakhir. Harga bisa sedikit naik atau turun tiap request.`;
+  }
+  if (model.price_basis === "live") {
+    return "Harga tiap request bisa berubah sesuai ketersediaan penyedia. Yang ditampilkan adalah harga termurah dan harga maksimal saat ini.";
+  }
+  return null;
+}
+
 export function ModelCard({ model }: { model: PublicModel }) {
   const discount = model.discount_pct ?? 0;
+  const average = model.price_basis === "average_7d";
+  const live = model.price_basis === "live";
+  const note = priceNote(model);
   return (
     <article className="group flex flex-col rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--line-strong)] hover:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.18)]">
       <div className="flex items-start gap-3">
@@ -157,21 +188,39 @@ export function ModelCard({ model }: { model: PublicModel }) {
           {discount > 0 && (
             <p
               className="-mx-4 mt-4 border-y border-[var(--line)] bg-[var(--tag-bg)] py-2 text-center font-mono text-[14px] font-bold uppercase tracking-[1.5px] tabular-nums text-[var(--tag-ink)]"
-              title="Dibanding harga resmi model"
+              title={average ? `Rata-rata ${model.avg_window_days ?? 7} hari terakhir, dibanding harga resmi model` : "Dibanding harga resmi model"}
             >
               {discount}% OFF
-              <span className="sr-only"> dari harga resmi</span>
+              <span className="sr-only">{average ? " rata-rata, dari harga resmi" : " dari harga resmi"}</span>
+              {average && (
+                <span className="mt-0.5 block font-sans text-[11px] font-medium normal-case tracking-normal" aria-hidden="true">
+                  rata-rata {model.avg_window_days ?? 7} hari
+                </span>
+              )}
             </p>
           )}
           <div className={discount > 0 ? "pt-3" : "mt-4 border-t border-[var(--line)] pt-3"}>
             <div className="grid grid-cols-2 gap-3">
-              <Price label="Input / 1M token" value={model.input_per_m} strong official={discount > 0 ? model.official_input_per_m : null} />
-              <Price label="Output / 1M token" value={model.output_per_m} strong official={discount > 0 ? model.official_output_per_m : null} />
+              <Price
+                label="Input / 1M token"
+                value={model.input_per_m}
+                strong
+                official={discount > 0 ? model.official_input_per_m : null}
+                max={live ? model.max_input_per_m : null}
+              />
+              <Price
+                label="Output / 1M token"
+                value={model.output_per_m}
+                strong
+                official={discount > 0 ? model.official_output_per_m : null}
+                max={live ? model.max_output_per_m : null}
+              />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 rounded-lg bg-[var(--bg)] px-2.5 py-2">
               <Price label="Cache read / 1M" value={model.cached_per_m} />
               <Price label="Cache write / 1M" value={model.cache_write_per_m} />
             </div>
+            {note && <p className="mt-2.5 text-[11.5px] leading-[1.45] text-[var(--muted)]">{note}</p>}
           </div>
         </>
       )}
