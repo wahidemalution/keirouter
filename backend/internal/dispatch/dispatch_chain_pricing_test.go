@@ -27,3 +27,25 @@ func TestTargetsFromChainSpreadsChainRateToEveryStep(t *testing.T) {
 	require.Equal(t, "openai", targets[0].Provider)
 	require.Equal(t, "anthropic", targets[1].Provider)
 }
+
+func TestTargetsFromChainCopiesStaticStepPrice(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	chain := store.Chain{Steps: []store.ChainStep{
+		{Provider: "openai", Model: "gpt-4o", MarketSlug: "surplus-fast:gpt-4o"},
+		{Provider: "openai", Model: "gpt-4o", StaticInputPerM: 0.5, StaticOutputPerM: 2,
+			StaticCacheReadPerM: f(0.04), MarkupPercent: f(10)},
+	}}
+	targets := TargetsFromChain(chain)
+	require.Len(t, targets, 2)
+	st := targets[1]
+	require.Equal(t, 0.5, st.StaticInputPerM)
+	require.Equal(t, 2.0, st.StaticOutputPerM)
+	require.True(t, st.StaticCacheReadSet)
+	require.Equal(t, 0.04, st.StaticCacheReadPerM)
+	require.False(t, st.StaticCacheWriteSet)
+	require.True(t, st.StepMarkupSet)
+	require.Equal(t, 10.0, st.StepMarkupPercent)
+	require.False(t, st.StaticPrice, "StaticPrice is set by the gateway once rates are stamped")
+	require.False(t, targets[0].StepMarkupSet)
+	require.Zero(t, targets[0].StaticInputPerM)
+}

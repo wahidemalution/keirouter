@@ -80,3 +80,40 @@ func TestPipelineForwardsChainStepPrice(t *testing.T) {
 	require.Equal(t, "c1", chainID)
 	require.Equal(t, int64(7_500_000), costNanos)
 }
+
+// TestPipelineForwardsStaticStepPrice proves a request served by a static
+// step (for example after the slug steps before it failed over) is billed at
+// that step's own rates, not the chain rate the target also carries.
+func TestPipelineForwardsStaticStepPrice(t *testing.T) {
+	ctx := context.Background()
+	db := newPipelineTestDB(t)
+	m := meter.New(db.Usage(), nil, nil)
+	p := New(Deps{Meter: m})
+
+	att := dispatch.Attempt{
+		Target: dispatch.Target{
+			Provider: "openai", Model: "gpt-4o",
+			InputPerM: 2.5, OutputPerM: 10,
+			StaticPrice:  true,
+			MarketRateIn: 0.6, MarketRateOut: 2.4,
+			UpstreamRateIn: 0.5, UpstreamRateOut: 2,
+		},
+		Account: store.Account{ID: "acc-1"},
+	}
+	meta := core.RequestMetadata{TenantID: store.DefaultTenantID, ChainID: "c1", FallbackCount: 2}
+	p.recordOutcomeWithTTFT(ctx, meta, att,
+		core.Usage{PromptTokens: 1_000_000, CompletionTokens: 1_000_000}, "success", "", false,
+		5*time.Millisecond, 6*time.Millisecond, 0, nil)
+
+	var (
+		pricing        string
+		costNanos, upN int64
+	)
+	err := db.SQL().QueryRowContext(ctx,
+		`SELECT pricing_source, cost_nanos, upstream_cost_nanos FROM usage_records WHERE tenant_id = ?`,
+		store.DefaultTenantID).Scan(&pricing, &costNanos, &upN)
+	require.NoError(t, err)
+	require.Equal(t, "static_step", pricing)
+	require.Equal(t, int64(3_000_000_000), costNanos)
+	require.Equal(t, int64(2_500_000_000), upN)
+}

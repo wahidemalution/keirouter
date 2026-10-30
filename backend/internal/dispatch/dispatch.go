@@ -148,6 +148,24 @@ type Target struct {
 	// without model output before the chain moves to the next step. It
 	// replaces the global stall timeout during admission only.
 	FirstOutputTimeout time.Duration
+
+	// StaticPrice marks a step billed at its own fixed price: the gateway has
+	// stamped the Market* (billable) and Upstream* (cost) rates from the
+	// Static* fields below. MarketSlug stays empty.
+	StaticPrice bool
+	// Static*PerM are the step's fixed provider price (USD per 1M), copied
+	// from the chain step. A cache rate counts only when its Set flag is true;
+	// otherwise it is derived from the input price. Values, not pointers, so
+	// Target stays comparable.
+	StaticInputPerM      float64
+	StaticOutputPerM     float64
+	StaticCacheReadPerM  float64
+	StaticCacheWritePerM float64
+	StaticCacheReadSet   bool
+	StaticCacheWriteSet  bool
+	// StepMarkupPercent overrides the chain markup when StepMarkupSet.
+	StepMarkupPercent float64
+	StepMarkupSet     bool
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the
@@ -1313,11 +1331,22 @@ func advanceRotationState(length, lastIndex, hitCount, stickyLimit int) (cursor 
 func TargetsFromChain(chain store.Chain) []Target {
 	out := make([]Target, 0, len(chain.Steps))
 	for _, s := range chain.Steps {
-		out = append(out, Target{
+		t := Target{
 			Provider: s.Provider, Model: s.Model, MarketSlug: s.MarketSlug,
 			InputPerM: chain.InputPerM, OutputPerM: chain.OutputPerM,
 			CacheWritePerM: chain.CacheWritePerM, CacheReadPerM: chain.CacheReadPerM,
-		})
+			StaticInputPerM: s.StaticInputPerM, StaticOutputPerM: s.StaticOutputPerM,
+		}
+		if s.StaticCacheReadPerM != nil {
+			t.StaticCacheReadPerM, t.StaticCacheReadSet = *s.StaticCacheReadPerM, true
+		}
+		if s.StaticCacheWritePerM != nil {
+			t.StaticCacheWritePerM, t.StaticCacheWriteSet = *s.StaticCacheWritePerM, true
+		}
+		if s.MarkupPercent != nil {
+			t.StepMarkupPercent, t.StepMarkupSet = *s.MarkupPercent, true
+		}
+		out = append(out, t)
 	}
 	return out
 }

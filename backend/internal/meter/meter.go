@@ -143,7 +143,10 @@ type Event struct {
 
 	// Winning step's bound market slug and its billable (post-markup) rates.
 	// When set, these take precedence over the chain-level rates above.
-	MarketSlug    string
+	MarketSlug string
+	// StaticPrice marks a winning step with its own fixed price: the Market*
+	// and Upstream* rates below carry it, with no MarketSlug.
+	StaticPrice   bool
 	MarketRateIn  float64
 	MarketRateOut float64
 	// Cache-aware derived rates for the market slug. Zero means the meter
@@ -358,7 +361,8 @@ func (m *Meter) costForEvent(ev Event) CostBreakdown {
 		return upstreamBilledCost(ev, micro*mult, savedTokens)
 	}
 	if price, ok := marketPrice(ev); ok {
-		out := calculateCostFromPrice(pricingMatch(ev.MarketSlug, price, "market_slug", false), u, ev.CacheHit, savedTokens)
+		key, kind := stepPriceKey(ev)
+		out := calculateCostFromPrice(pricingMatch(key, price, kind, false), u, ev.CacheHit, savedTokens)
 		out = floorMinCharge(out, u, ev.MinChargeMicro*mult)
 		if ev.CheapestRateIn > 0 && price.InputPerM > ev.CheapestRateIn {
 			out.FallbackRatePerM = ev.CheapestRateIn

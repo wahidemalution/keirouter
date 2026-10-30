@@ -177,6 +177,10 @@ func (s *Server) keyChains(r *http.Request, key store.APIKey, planID string) ([]
 // slugs matched to a step's model).
 func chainCanGuaranteeDiscount(c store.Chain) bool {
 	for _, st := range c.Steps {
+		// A static step has its own price and never adopts a chain-level slug.
+		if st.HasStaticPrice() {
+			continue
+		}
 		if market.IsUpstreamCostSlug(st.MarketSlug) {
 			return true
 		}

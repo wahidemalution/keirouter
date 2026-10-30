@@ -1977,10 +1977,7 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 	for _, c := range chains {
 		steps := make([]map[string]any, 0, len(c.Steps))
 		for _, st := range c.Steps {
-			steps = append(steps, map[string]any{
-				"provider": st.Provider, "model": st.Model, "position": st.Position,
-				"market_slug": st.MarketSlug,
-			})
+			steps = append(steps, chainStepJSON(st))
 		}
 		entry := map[string]any{
 			"id": c.ID, "name": c.Name, "strategy": c.Strategy, "steps": steps,
@@ -2015,26 +2012,22 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name                string   `json:"name"`
-		Strategy            string   `json:"strategy"`
-		FallbackProvider    string   `json:"fallback_provider"`
-		FallbackModel       string   `json:"fallback_model"`
-		DisplayProvider     string   `json:"display_provider"`
-		CapabilityOverrides string   `json:"capability_overrides"`
-		InputPerM           float64  `json:"input_per_m"`
-		OutputPerM          float64  `json:"output_per_m"`
-		CacheWritePerM      float64  `json:"cache_write_per_m"`
-		CacheReadPerM       float64  `json:"cache_read_per_m"`
-		MarketSlugs         []string `json:"market_slugs"`
-		ReorderByMarket     bool     `json:"reorder_by_market"`
-		MarkupPercent       *float64 `json:"markup_percent"`
-		OfficialInputPerM   *float64 `json:"official_input_per_m"`
-		OfficialOutputPerM  *float64 `json:"official_output_per_m"`
-		Steps               []struct {
-			Provider   string `json:"provider"`
-			Model      string `json:"model"`
-			MarketSlug string `json:"market_slug"`
-		} `json:"steps"`
+		Name                string           `json:"name"`
+		Strategy            string           `json:"strategy"`
+		FallbackProvider    string           `json:"fallback_provider"`
+		FallbackModel       string           `json:"fallback_model"`
+		DisplayProvider     string           `json:"display_provider"`
+		CapabilityOverrides string           `json:"capability_overrides"`
+		InputPerM           float64          `json:"input_per_m"`
+		OutputPerM          float64          `json:"output_per_m"`
+		CacheWritePerM      float64          `json:"cache_write_per_m"`
+		CacheReadPerM       float64          `json:"cache_read_per_m"`
+		MarketSlugs         []string         `json:"market_slugs"`
+		ReorderByMarket     bool             `json:"reorder_by_market"`
+		MarkupPercent       *float64         `json:"markup_percent"`
+		OfficialInputPerM   *float64         `json:"official_input_per_m"`
+		OfficialOutputPerM  *float64         `json:"official_output_per_m"`
+		Steps               []chainStepInput `json:"steps"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -2110,11 +2103,12 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "unknown provider in step: "+st.Provider)
 			return
 		}
-		chain.Steps = append(chain.Steps, store.ChainStep{
-			ID: uuid.NewString(), ChainID: chain.ID, Position: i,
-			Provider: st.Provider, Model: st.Model, CreatedAt: now,
-			MarketSlug: strings.TrimSpace(st.MarketSlug),
-		})
+		step, msg := st.toStore(chain.ID, i, now)
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		chain.Steps = append(chain.Steps, step)
 	}
 	if err := s.chains.Create(r.Context(), chain); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -2157,13 +2151,9 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		// markup_percent: absent = unchanged, null = follow global, number = override.
 		MarkupPercent json.RawMessage `json:"markup_percent"`
 		// official_*_per_m: absent = unchanged, null = automatic, number = manual.
-		OfficialInputPerM  json.RawMessage `json:"official_input_per_m"`
-		OfficialOutputPerM json.RawMessage `json:"official_output_per_m"`
-		Steps              *[]struct {
-			Provider   string `json:"provider"`
-			Model      string `json:"model"`
-			MarketSlug string `json:"market_slug"`
-		} `json:"steps"`
+		OfficialInputPerM  json.RawMessage   `json:"official_input_per_m"`
+		OfficialOutputPerM json.RawMessage   `json:"official_output_per_m"`
+		Steps              *[]chainStepInput `json:"steps"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -2268,15 +2258,12 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		existing.Steps = make([]store.ChainStep, len(*body.Steps))
 		for i, st := range *body.Steps {
-			existing.Steps[i] = store.ChainStep{
-				ID:         uuid.NewString(),
-				ChainID:    id,
-				Position:   i,
-				Provider:   st.Provider,
-				Model:      st.Model,
-				CreatedAt:  now,
-				MarketSlug: strings.TrimSpace(st.MarketSlug),
+			step, msg := st.toStore(id, i, now)
+			if msg != "" {
+				writeError(w, http.StatusBadRequest, msg)
+				return
 			}
+			existing.Steps[i] = step
 		}
 	}
 

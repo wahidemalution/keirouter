@@ -432,7 +432,25 @@ export interface ChainStep {
   model: string;
   position: number;
   market_slug?: string;
+  static_input_per_m?: number;
+  static_output_per_m?: number;
+  static_cache_read_per_m?: number | null;
+  static_cache_write_per_m?: number | null;
+  markup_percent?: number | null;
 }
+
+// ChainStepPayload is one step in a chain create/update body: a market slug
+// or a static price, never both. Null cache rates derive; null markup inherits.
+export type ChainStepPayload = {
+  provider: string;
+  model: string;
+  market_slug: string;
+  static_input_per_m?: number;
+  static_output_per_m?: number;
+  static_cache_read_per_m?: number | null;
+  static_cache_write_per_m?: number | null;
+  markup_percent?: number | null;
+};
 
 export interface Chain {
   id: string;
@@ -2769,9 +2787,9 @@ export const api = {
     request<CodexUsageDetails>("GET", `/accounts/${id}/codex-usage-details`),
 
   listChains: () => request<{ chains: Chain[] }>("GET", "/chains"),
-  createChain: (input: { name: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; steps: { provider: string; model: string; market_slug?: string }[] }) =>
+  createChain: (input: { name: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; steps: ChainStepPayload[] }) =>
     request<{ id: string }>("POST", "/chains", input),
-  updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; steps?: { provider: string; model: string; market_slug?: string }[] }) =>
+  updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; steps?: ChainStepPayload[] }) =>
     request<{ id: string }>("PATCH", `/chains/${id}`, patch),
   deleteChain: (id: string) => request<void>("DELETE", `/chains/${id}`),
 

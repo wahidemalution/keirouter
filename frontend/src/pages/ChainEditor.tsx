@@ -11,8 +11,10 @@ import { Button, ErrorBanner, Field, IconTile, Input, Modal, ModalFooter, Sectio
 import { ICONS } from "../lib/icons";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { ChainModelPicker } from "../components/chains/ChainModelPicker";
+import { FieldMessage } from "../components/chains/FieldMessage";
+import { StepPriceSource } from "../components/chains/StepPriceSource";
 import { ChainRoutePreview, StepNumber } from "../components/chains/ChainRoutePreview";
-import { type ChainStrategy, type DraftChainStep, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
+import { type ChainStrategy, type DraftChainStep, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
 const parseMarketSlugs = (raw: string): string[] => {
   const seen = new Set<string>();
@@ -79,15 +81,6 @@ function Panel({ title, titleId, icon, subtitle, action, children, className }: 
       </div>
       {children}
     </section>
-  );
-}
-
-function FieldMessage({ id, tone = "bad", children }: { id?: string; tone?: "bad" | "muted"; children: ReactNode }) {
-  return (
-    <p id={id} className={cn("flex items-start gap-1.5 text-[12px] leading-5", tone === "bad" ? "text-bad" : "text-fg-muted")}>
-      {tone === "bad" && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden="true" />}
-      {children}
-    </p>
   );
 }
 
@@ -162,13 +155,6 @@ function EditorSkeleton() {
       </div>
     </div>
   );
-}
-
-// stepKey identifies a route step for duplicate checks. Two steps may share a
-// provider/model when their market slugs differ (surplus-fast then
-// surplus-trusted): they route differently upstream.
-function stepKey(step: { provider: string; model: string; marketSlug?: string }): string {
-  return `${step.provider}/${step.model}|${(step.marketSlug ?? "").trim()}`;
 }
 
 export function ChainEditorPage() {
@@ -277,6 +263,11 @@ export function ChainEditorPage() {
   const needsPricing = priced && (chainPrice.inputPerM <= 0 || chainPrice.outputPerM <= 0);
   const markupNumber = Number(markupValue);
   const markupInvalid = markupEnabled && (markupValue.trim() === "" || !Number.isFinite(markupNumber) || markupNumber < 0 || markupNumber > 1000);
+  // A static step without its own markup follows the chain markup, then the
+  // global one; null while the global setting is still loading.
+  const inheritedMarkup = markupEnabled && !markupInvalid ? markupNumber : (marketSettings.data?.markup_percent ?? null);
+  const inheritedMarkupLabel = markupEnabled ? "chain markup" : "global markup";
+  const badStaticStep = completeSteps.findIndex((step) => step.priceSource === "static" && !staticStepPreview(step, inheritedMarkup ?? 0).ok);
   const officialInputNumber = Number(officialInput);
   const officialOutputNumber = Number(officialOutput);
   const officialAuto = existing?.official_auto ?? null;
@@ -286,7 +277,7 @@ export function ChainEditorPage() {
   const offered = hasMarketSlugs ? (existing?.input_per_m ?? 0) + (existing?.output_per_m ?? 0) : chainPrice.inputPerM + chainPrice.outputPerM;
   const officialPreview = officialRef && offered > 0 && offered < officialRef.input + officialRef.output ? Math.floor((1 - offered / (officialRef.input + officialRef.output)) * 100) : 0;
   const officialInvalid = officialManual && (invalidOfficialRate(officialInput) || invalidOfficialRate(officialOutput));
-  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : needsPricing ? "Set both input and output price, or clear all price fields." : "";
+  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : badStaticStep >= 0 ? `Fix the static price on step ${steps.indexOf(completeSteps[badStaticStep]) + 1}.` : needsPricing ? "Set both input and output price, or clear all price fields." : "";
   const valid = !validationMessage;
   const routeChain = useMemo(() => ({ id: existing?.id ?? "draft", name, strategy, steps: completeSteps.map((step, position) => ({ provider: step.provider, model: step.model, position } as ChainStep)), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" } as Chain), [completeSteps, existing?.id, fallback.model, fallback.provider, fallbackEnabled, name, strategy]);
 
@@ -309,7 +300,7 @@ export function ChainEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, markup_percent: markupEnabled ? markupNumber : null, official_input_per_m: officialManual ? officialInputNumber : null, official_output_per_m: officialManual ? officialOutputNumber : null, steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model, market_slug: step.marketSlug ?? "" })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
+      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, markup_percent: markupEnabled ? markupNumber : null, official_input_per_m: officialManual ? officialInputNumber : null, official_output_per_m: officialManual ? officialOutputNumber : null, steps: completeSteps.map(stepPayload), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
       return isEdit ? api.updateChain(id!, payload) : api.createChain(payload);
     },
     onSuccess: () => {
@@ -660,9 +651,13 @@ export function ChainEditorPage() {
                       </div>
                     </div>
                     <div className="sm:pl-8">
-                      <Field label="Market slug" hint="Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:">
-                        <Input value={step.marketSlug} onChange={(event) => updateStep(step.id, { marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
-                      </Field>
+                      <StepPriceSource
+                        step={step}
+                        stepNumber={index + 1}
+                        inheritedMarkup={inheritedMarkup}
+                        inheritedLabel={inheritedMarkupLabel}
+                        onChange={(next) => updateStep(step.id, next)}
+                      />
                     </div>
                   </li>
                 );

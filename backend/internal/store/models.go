@@ -195,7 +195,23 @@ type ChainStep struct {
 	Provider   string
 	Model      string
 	MarketSlug string
-	CreatedAt  time.Time
+	// StaticInputPerM/StaticOutputPerM are the provider's fixed price (USD per
+	// 1M tokens) for a step with no market slug. Both zero = not a static step.
+	StaticInputPerM  float64
+	StaticOutputPerM float64
+	// StaticCacheReadPerM/StaticCacheWritePerM override the cache rates derived
+	// from the static input price. Nil = derived.
+	StaticCacheReadPerM  *float64
+	StaticCacheWritePerM *float64
+	// MarkupPercent overrides the chain markup for a static step. Nil follows
+	// the chain (then global) markup; 0 is an explicit no-markup override.
+	MarkupPercent *float64
+	CreatedAt     time.Time
+}
+
+// HasStaticPrice reports whether the step is billed at its own fixed price.
+func (s ChainStep) HasStaticPrice() bool {
+	return s.StaticInputPerM > 0 || s.StaticOutputPerM > 0
 }
 
 // ProviderCategory is an operator-managed display provider label used by the
