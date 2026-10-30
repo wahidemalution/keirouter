@@ -30,7 +30,7 @@ const (
 	SurplusFastMinUptimePct = 50
 	// SurplusFastFirstOutputTimeout is how long a surplus-fast stream may go
 	// without model output before the chain moves to its next step.
-	SurplusFastFirstOutputTimeout = 20 * time.Second
+	SurplusFastFirstOutputTimeout = 10 * time.Second
 )
 
 // CutUpstreamCostSlug returns the Surplus model name of a slug billed from the
