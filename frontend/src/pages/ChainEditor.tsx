@@ -12,7 +12,7 @@ import { ICONS } from "../lib/icons";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { ChainModelPicker } from "../components/chains/ChainModelPicker";
 import { ChainRoutePreview, StepNumber } from "../components/chains/ChainRoutePreview";
-import { type ChainStrategy, type DraftChainStep, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
+import { type ChainStrategy, type DraftChainStep, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
 const parseMarketSlugs = (raw: string): string[] => {
   const seen = new Set<string>();
@@ -164,13 +164,6 @@ function EditorSkeleton() {
   );
 }
 
-// stepKey identifies a route step for duplicate checks. Two steps may share a
-// provider/model when their market slugs differ (surplus-fast then
-// surplus-trusted): they route differently upstream.
-function stepKey(step: { provider: string; model: string; marketSlug?: string }): string {
-  return `${step.provider}/${step.model}|${(step.marketSlug ?? "").trim()}`;
-}
-
 export function ChainEditorPage() {
   const { id } = useParams();
   const isEdit = Boolean(id);
@@ -309,7 +302,7 @@ export function ChainEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, markup_percent: markupEnabled ? markupNumber : null, official_input_per_m: officialManual ? officialInputNumber : null, official_output_per_m: officialManual ? officialOutputNumber : null, steps: completeSteps.map((step) => ({ provider: step.provider, model: step.model, market_slug: step.marketSlug ?? "" })), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
+      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, markup_percent: markupEnabled ? markupNumber : null, official_input_per_m: officialManual ? officialInputNumber : null, official_output_per_m: officialManual ? officialOutputNumber : null, steps: completeSteps.map(stepPayload), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
       return isEdit ? api.updateChain(id!, payload) : api.createChain(payload);
     },
     onSuccess: () => {
