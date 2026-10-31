@@ -176,6 +176,63 @@ func (r *UsageRepo) KnownUpstreamRequestIDs(ctx context.Context, provider string
 	return known, nil
 }
 
+// OverCeilingGroup counts rows of one chain and model whose logged cost
+// exceeded the step's ceiling price.
+type OverCeilingGroup struct {
+	ChainID string `json:"chain_id"`
+	Model   string `json:"model"`
+	Count   int    `json:"count"`
+}
+
+// ReconcileDaySummary aggregates one provider's reconciliation over [from, to).
+type ReconcileDaySummary struct {
+	UpstreamCostNanos               int64
+	Pending, Reconciled, Unverified int
+	OverCeiling                     []OverCeilingGroup
+	OrphanCount                     int
+	OrphanQuota                     int64
+}
+
+// ReconcileDaySummary sums the recorded upstream cost and counts rows by
+// reconcile status, plus orphans, for provider over [from, to).
+func (r *UsageRepo) ReconcileDaySummary(ctx context.Context, provider string, from, to time.Time) (ReconcileDaySummary, error) {
+	var out ReconcileDaySummary
+	f, t := formatTime(from), formatTime(to)
+	q := r.db.rebind(`SELECT COALESCE(SUM(upstream_cost_nanos), 0),
+		COALESCE(SUM(CASE WHEN reconcile_status = 'pending' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN reconcile_status IN ('reconciled', 'over_ceiling') THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN reconcile_status = 'unverified' THEN 1 ELSE 0 END), 0)
+		FROM usage_records WHERE provider = ? AND created_at >= ? AND created_at < ?`)
+	if err := r.db.sql.QueryRowContext(ctx, q, provider, f, t).Scan(&out.UpstreamCostNanos, &out.Pending, &out.Reconciled, &out.Unverified); err != nil {
+		return out, fmt.Errorf("store: reconcile summary: %w", err)
+	}
+	q = r.db.rebind(`SELECT COALESCE(chain_id, ''), model, COUNT(*) FROM usage_records
+		WHERE provider = ? AND reconcile_status = 'over_ceiling' AND created_at >= ? AND created_at < ?
+		GROUP BY COALESCE(chain_id, ''), model ORDER BY COALESCE(chain_id, ''), model`)
+	rows, err := r.db.sql.QueryContext(ctx, q, provider, f, t)
+	if err != nil {
+		return out, fmt.Errorf("store: over ceiling groups: %w", err)
+	}
+	for rows.Next() {
+		var g OverCeilingGroup
+		if err := rows.Scan(&g.ChainID, &g.Model, &g.Count); err != nil {
+			rows.Close()
+			return out, fmt.Errorf("store: scan over ceiling: %w", err)
+		}
+		out.OverCeiling = append(out.OverCeiling, g)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	q = r.db.rebind(`SELECT COUNT(*), COALESCE(SUM(quota), 0) FROM cost_lookup_orphans
+		WHERE provider = ? AND created_at >= ? AND created_at < ?`)
+	if err := r.db.sql.QueryRowContext(ctx, q, provider, f, t).Scan(&out.OrphanCount, &out.OrphanQuota); err != nil {
+		return out, fmt.Errorf("store: orphan summary: %w", err)
+	}
+	return out, nil
+}
+
 func nanosToMicros(n int64) int64 { return int64(math.Round(float64(n) / 1000)) }
 
 // TryAdvisoryLock takes a session-level Postgres advisory lock on a dedicated

@@ -98,6 +98,12 @@ func TestPostgresCompatibility(t *testing.T) {
 		n, err = db.Usage().InsertCostLookupOrphans(ctx, []CostLookupOrphan{{Provider: "pg-sub", RequestID: id, Quota: 17, CreatedAt: now}})
 		require.NoError(t, err)
 		require.Equal(t, 0, n)
+		sum, err := db.Usage().ReconcileDaySummary(ctx, "pg-sub", now.Add(-time.Hour), now.Add(time.Hour))
+		require.NoError(t, err)
+		require.Equal(t, int64(34000), sum.UpstreamCostNanos)
+		require.Equal(t, 1, sum.Reconciled)
+		require.Equal(t, 1, sum.OrphanCount)
+		require.Equal(t, int64(17), sum.OrphanQuota)
 	})
 
 	t.Run("chain_id persists and aggregates per chain", func(t *testing.T) {

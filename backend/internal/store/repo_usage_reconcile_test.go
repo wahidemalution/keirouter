@@ -146,3 +146,35 @@ func TestSettleStoresLogRequestIDAndKnownIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, known)
 }
+
+func TestReconcileDaySummary(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	day := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	rec := func(id, status, chain string, upstream int64, at time.Time) {
+		require.NoError(t, db.Usage().Record(ctx, UsageRecord{ID: id, TenantID: DefaultTenantID, Provider: "sub",
+			Model: "deepseek-v4.1-flash", Status: "success", ReconcileStatus: status, ChainID: chain,
+			UpstreamCostNanos: upstream, CreatedAt: at}))
+	}
+	rec("a", "reconciled", "c1", 34000, day.Add(time.Hour))
+	rec("b", "over_ceiling", "c1", 2000000, day.Add(2*time.Hour))
+	rec("c", "over_ceiling", "c2", 1000, day.Add(3*time.Hour))
+	rec("d", "unverified", "c1", 100000, day.Add(4*time.Hour))
+	rec("e", "pending", "c1", 100000, day.Add(5*time.Hour))
+	rec("next-day", "reconciled", "c1", 999, day.Add(25*time.Hour))
+	_, err := db.Usage().InsertCostLookupOrphans(ctx, []CostLookupOrphan{
+		{Provider: "sub", RequestID: "o1", Quota: 17, CreatedAt: day.Add(time.Hour)},
+		{Provider: "sub", RequestID: "o2", Quota: 3, CreatedAt: day.Add(-time.Hour)},
+	})
+	require.NoError(t, err)
+
+	got, err := db.Usage().ReconcileDaySummary(ctx, "sub", day, day.Add(24*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, int64(34000+2000000+1000+100000+100000), got.UpstreamCostNanos)
+	require.Equal(t, 1, got.Pending)
+	require.Equal(t, 3, got.Reconciled, "over_ceiling rows are reconciled too")
+	require.Equal(t, 1, got.Unverified)
+	require.Equal(t, []OverCeilingGroup{{ChainID: "c1", Model: "deepseek-v4.1-flash", Count: 1}, {ChainID: "c2", Model: "deepseek-v4.1-flash", Count: 1}}, got.OverCeiling)
+	require.Equal(t, 1, got.OrphanCount)
+	require.Equal(t, int64(17), got.OrphanQuota)
+}
