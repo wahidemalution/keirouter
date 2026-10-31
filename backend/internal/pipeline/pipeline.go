@@ -412,6 +412,8 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
 		attemptReq := cloneForTarget(attemptBaseReq, attempt.Target)
 		attempt.Creds = withTargetHeaders(attempt)
+		attempt.Upstream = core.NewUpstreamMeta()
+		attemptCtx := core.WithUpstreamMeta(upstreamCtx, attempt.Upstream)
 
 		// Soft-degrade unsupported modalities. Stripping replaces input
 		// modalities the resolved profile cannot handle with text placeholders,
@@ -428,7 +430,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		attemptDone := p.inflight.Inc(attempt.Target.Provider)
 		// Inject proxy config from credentials into context so the connector's
 		// HTTP client uses the right proxy/relay for this account.
-		callCtx, cancelTimeout := withRequestDeadline(core.WithProxy(upstreamCtx, attempt.Creds))
+		callCtx, cancelTimeout := withRequestDeadline(core.WithProxy(attemptCtx, attempt.Creds))
 		callCtx, reportFast := p.watchFastAttempt(callCtx, attempt.Target)
 		resp, callErr := attempt.Conn.Chat(callCtx, attemptReq, attempt.Creds)
 		cancelTimeout() // cancel immediately to avoid timer goroutine leak
@@ -436,7 +438,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			p.log.Debug("retrying Cloudflare request without images", "model", attempt.Target.Model)
 			retryReq := cloneForTarget(attemptBaseReq, attempt.Target)
 			capability.StripImages(retryReq)
-			retryCtx, retryCancel := withRequestDeadline(core.WithProxy(upstreamCtx, attempt.Creds))
+			retryCtx, retryCancel := withRequestDeadline(core.WithProxy(attemptCtx, attempt.Creds))
 			resp, callErr = attempt.Conn.Chat(retryCtx, retryReq, attempt.Creds)
 			retryCancel()
 		}
@@ -452,7 +454,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		if callErr != nil && ctx.Err() == nil && isStreamRequiredError(callErr) {
 			p.log.Debug("provider requires streaming, retrying via Stream()",
 				"provider", attempt.Target.Provider, "model", attempt.Target.Model)
-			streamCtx, streamCancel := withRequestDeadline(core.WithProxy(upstreamCtx, attempt.Creds))
+			streamCtx, streamCancel := withRequestDeadline(core.WithProxy(attemptCtx, attempt.Creds))
 			streamReq := cloneForTarget(attemptBaseReq, attempt.Target)
 			stream, sErr := attempt.Conn.Stream(streamCtx, streamReq, attempt.Creds, core.StreamConfig{})
 			if sErr == nil {
@@ -828,6 +830,8 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		lastAttempt = attempt
 		attemptReq := cloneForTarget(req, attempt.Target)
 		attempt.Creds = withTargetHeaders(attempt)
+		attempt.Upstream = core.NewUpstreamMeta()
+		attemptCtx := core.WithUpstreamMeta(ctx, attempt.Upstream)
 		started := time.Now()
 		p.log.Debug("stream attempt start", "i", i, "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
@@ -858,7 +862,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		// The successful stream owns this cancellation function. pumpStream or
 		// the direct response body cancels it on completion, client disconnect,
 		// policy block, or stall so connector goroutines cannot leak.
-		callCtx, cancelUpstream := p.trackedStreamCallContext(ctx, attempt.Creds, attempt.Target.Provider)
+		callCtx, cancelUpstream := p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
 		callCtx, reportFast := p.watchFastAttempt(callCtx, attempt.Target)
 
 		// Zero-copy fast path: when the client dialect matches the upstream
@@ -895,7 +899,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 					cancelUpstream()
 					retryReq := cloneForTarget(req, attempt.Target)
 					capability.StripImages(retryReq)
-					callCtx, cancelUpstream = p.trackedStreamCallContext(ctx, attempt.Creds, attempt.Target.Provider)
+					callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
 					body, _, rawErr = ds.StreamRaw(callCtx, retryReq, attempt.Creds, streamCfg)
 				}
 				if rawErr != nil {
@@ -1006,7 +1010,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 			cancelUpstream()
 			retryReq := cloneForTarget(req, attempt.Target)
 			capability.StripImages(retryReq)
-			callCtx, cancelUpstream = p.trackedStreamCallContext(ctx, attempt.Creds, attempt.Target.Provider)
+			callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
 			upstream, callErr = attempt.Conn.Stream(callCtx, retryReq, attempt.Creds, streamCfg)
 		}
 		if callErr != nil {
@@ -2079,6 +2083,9 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 		UpstreamCostMult:       attempt.Target.UpstreamCostMult,
 		MinChargeMicro:         attempt.Target.MinChargeMicro,
 		FallbackCount:          meta.FallbackCount,
+		CostLookup:             attempt.Target.CostLookup,
+		UpstreamRequestID:      attempt.Upstream.RequestID(),
+		Streamed:               attempt.Upstream.Streamed(),
 		ServiceTier:            meta.ServiceTier,
 		Guardrail:              meta.Guardrail.Summary(),
 		Provider:               attempt.Target.Provider,

@@ -189,6 +189,13 @@ type Event struct {
 	ChainID       string
 	FallbackCount int
 
+	// CostLookup marks a request whose cost is later reconciled from the
+	// provider's usage log. UpstreamRequestID is the provider's request id
+	// (X-Oneapi-Request-Id); Streamed reports whether the response streamed.
+	CostLookup        bool
+	UpstreamRequestID string
+	Streamed          bool
+
 	Usage       core.Usage
 	UsageSource string // provider | estimated | cache | none
 	CacheHit    bool

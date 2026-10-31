@@ -331,12 +331,12 @@ func headerBudget(ctx context.Context) time.Duration {
 func sendRequest(ctx context.Context, provider, model string, build requestBuilder) (*http.Response, error) {
 	resp, err := sendOnce(ctx, provider, model, build, proxyClient(ctx))
 	if err == nil {
-		return resp, nil
+		return recordUpstreamMeta(ctx, resp), nil
 	}
 	if shouldRetryFreshConnection(ctx, err) {
 		resp, err = sendOnce(ctx, provider, model, build, proxyClientForRetry(ctx))
 		if err == nil {
-			return resp, nil
+			return recordUpstreamMeta(ctx, resp), nil
 		}
 	}
 	creds, _ := core.ProxyFromContext(ctx)
@@ -345,7 +345,20 @@ func sendRequest(ctx context.Context, provider, model string, build requestBuild
 	}
 	slog.Warn("proxy pool unreachable; sending request directly (pool is not strict)",
 		"provider", provider, "model", model, "account", creds.AccountID, "error", err)
-	return sendOnce(core.WithProxy(ctx, core.Credentials{}), provider, model, build, sharedClient)
+	resp, err = sendOnce(core.WithProxy(ctx, core.Credentials{}), provider, model, build, sharedClient)
+	if err != nil {
+		return nil, err
+	}
+	return recordUpstreamMeta(ctx, resp), nil
+}
+
+// recordUpstreamMeta copies the new-api request id header into the attempt's
+// holder, if the pipeline attached one.
+func recordUpstreamMeta(ctx context.Context, resp *http.Response) *http.Response {
+	if m := core.UpstreamMetaFrom(ctx); m != nil {
+		m.SetRequestID(resp.Header.Get("X-Oneapi-Request-Id"))
+	}
+	return resp
 }
 
 // egressError re-scopes a failure of the proxy/relay hop itself. Nothing
@@ -695,6 +708,7 @@ func openStream(ctx context.Context, provider, model, url string, body []byte, h
 	if err != nil {
 		return nil, err
 	}
+	core.UpstreamMetaFrom(ctx).SetStreamed()
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		return nil, httpStatusError(provider, model, resp, readErrorBody(resp))

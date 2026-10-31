@@ -126,6 +126,9 @@ type Target struct {
 	// response carries no reported cost.
 	BillUpstreamCost bool
 	UpstreamCostMult float64
+	// CostLookup marks a step whose provider bills are reconciled afterwards
+	// from the provider's own usage log (Subrouter).
+	CostLookup bool
 	// BidCapIn/Out, when both > 0, are the pre-markup per-million prices sent to
 	// inferhub as x-max-input-price / x-max-output-price: no seller asking
 	// more may serve the step.
@@ -175,6 +178,9 @@ type Attempt struct {
 	Conn    core.Connector
 	Creds   core.Credentials
 	Account store.Account
+	// Upstream is filled by the connector during the call (e.g. the
+	// Subrouter request id). Set by the pipeline per attempt; may be nil.
+	Upstream *core.UpstreamMeta
 }
 
 // Strategy controls how targets within a chain are ordered.
