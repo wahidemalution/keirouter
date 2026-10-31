@@ -67,6 +67,39 @@ func TestPostgresCompatibility(t *testing.T) {
 		require.Equal(t, len(records), count)
 	})
 
+	t.Run("advisory lock is exclusive", func(t *testing.T) {
+		release, ok, err := db.TryAdvisoryLock(ctx, 0x4b52434c)
+		require.NoError(t, err)
+		require.True(t, ok)
+		_, ok2, err := db.TryAdvisoryLock(ctx, 0x4b52434c)
+		require.NoError(t, err)
+		require.False(t, ok2, "a held lock must not be granted twice")
+		release()
+		release2, ok3, err := db.TryAdvisoryLock(ctx, 0x4b52434c)
+		require.NoError(t, err)
+		require.True(t, ok3, "a released lock must be granted again")
+		release2()
+	})
+
+	t.Run("reconcile settle and orphans", func(t *testing.T) {
+		now := time.Now().UTC()
+		id := fmt.Sprintf("pg-rec-%d", now.UnixNano())
+		require.NoError(t, db.Usage().Record(ctx, UsageRecord{ID: id, TenantID: DefaultTenantID, Provider: "pg-sub",
+			Model: "m", Status: "success", ReconcileStatus: "pending", CostNanos: 150000, UpstreamCostNanos: 100000, CreatedAt: now}))
+		rows, err := db.Usage().ListPendingReconcile(ctx, "pg-sub", now.Add(-time.Minute), 10)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		applied, err := db.Usage().SettleReconciled(ctx, []ReconcileSettlement{{ID: id, Status: "reconciled", CostNanos: 51000, UpstreamCostNanos: 34000}})
+		require.NoError(t, err)
+		require.Equal(t, []string{id}, applied)
+		n, err := db.Usage().InsertCostLookupOrphans(ctx, []CostLookupOrphan{{Provider: "pg-sub", RequestID: id, Quota: 17, CreatedAt: now}})
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		n, err = db.Usage().InsertCostLookupOrphans(ctx, []CostLookupOrphan{{Provider: "pg-sub", RequestID: id, Quota: 17, CreatedAt: now}})
+		require.NoError(t, err)
+		require.Equal(t, 0, n)
+	})
+
 	t.Run("chain_id persists and aggregates per chain", func(t *testing.T) {
 		now := time.Now().UTC()
 		prefix := fmt.Sprintf("pg-chain-%d", now.UnixNano())

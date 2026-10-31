@@ -24,3 +24,106 @@ func TestUsageRecordRoundTripsReconcileFields(t *testing.T) {
 	require.Equal(t, "20261031145028472218319QeMWIGBK", id)
 	require.Equal(t, "pending", status)
 }
+
+func seedPending(t *testing.T, db *DB, id string, at time.Time, status string) {
+	t.Helper()
+	require.NoError(t, db.Usage().Record(context.Background(), UsageRecord{
+		ID: id, TenantID: DefaultTenantID, APIKeyID: "k1", Provider: "custom-openai-subrouter",
+		Model: "deepseek-v4.1-flash", Status: "success", ReconcileStatus: status, ChainID: "c1",
+		PromptTokens: 872, CompletionTokens: 515, CostNanos: 150000, UpstreamCostNanos: 100000,
+		OutputCostNanos: 150000, CreatedAt: at,
+	}))
+}
+
+func TestListPendingReconcileOldestFirstWithinWindow(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 31, 15, 0, 0, 0, time.UTC)
+	seedPending(t, db, "old", now.Add(-2*time.Hour), "pending")
+	seedPending(t, db, "b", now.Add(-time.Minute), "pending")
+	seedPending(t, db, "a", now.Add(-30*time.Minute), "pending")
+	seedPending(t, db, "done", now.Add(-5*time.Minute), "reconciled")
+
+	rows, err := db.Usage().ListPendingReconcile(ctx, "custom-openai-subrouter", now.Add(-time.Hour), 10)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "a", rows[0].ID)
+	require.Equal(t, "b", rows[1].ID)
+	require.Equal(t, int64(150000), rows[0].CostNanos)
+	require.Equal(t, int64(100000), rows[0].UpstreamCostNanos)
+	require.Equal(t, 872, rows[0].PromptTokens)
+	require.Equal(t, "c1", rows[0].ChainID)
+	require.Equal(t, "k1", rows[0].APIKeyID)
+
+	limited, err := db.Usage().ListPendingReconcile(ctx, "custom-openai-subrouter", now.Add(-time.Hour), 1)
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+}
+
+func TestSettleReconciledOnlyPending(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	seedPending(t, db, "r1", time.Now().UTC(), "pending")
+	s := ReconcileSettlement{ID: "r1", Status: "reconciled", CostNanos: 51000, UpstreamCostNanos: 34000, OutputCostNanos: 51000}
+
+	applied, err := db.Usage().SettleReconciled(ctx, []ReconcileSettlement{s})
+	require.NoError(t, err)
+	require.Equal(t, []string{"r1"}, applied)
+
+	s.CostNanos = 999999
+	applied, err = db.Usage().SettleReconciled(ctx, []ReconcileSettlement{s})
+	require.NoError(t, err)
+	require.Empty(t, applied)
+
+	var cost, costMicros, up, upMicros int64
+	var status, source, kind string
+	q := db.rebind(`SELECT cost_nanos, cost_micros, upstream_cost_nanos, upstream_cost_micros, reconcile_status, pricing_source, pricing_match_kind FROM usage_records WHERE id = ?`)
+	require.NoError(t, db.sql.QueryRowContext(ctx, q, "r1").Scan(&cost, &costMicros, &up, &upMicros, &status, &source, &kind))
+	require.Equal(t, int64(51000), cost)
+	require.Equal(t, int64(51), costMicros)
+	require.Equal(t, int64(34000), up)
+	require.Equal(t, int64(34), upMicros)
+	require.Equal(t, "reconciled", status)
+	require.Equal(t, "upstream_log", source)
+	require.Equal(t, "upstream_log", kind)
+}
+
+func TestExpirePendingReconcile(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	seedPending(t, db, "stale", now.Add(-61*time.Minute), "pending")
+	seedPending(t, db, "fresh", now.Add(-time.Minute), "pending")
+
+	n, err := db.Usage().ExpirePendingReconcile(ctx, "custom-openai-subrouter", now.Add(-time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	var stale, fresh string
+	require.NoError(t, db.sql.QueryRowContext(ctx, db.rebind(`SELECT reconcile_status FROM usage_records WHERE id = ?`), "stale").Scan(&stale))
+	require.NoError(t, db.sql.QueryRowContext(ctx, db.rebind(`SELECT reconcile_status FROM usage_records WHERE id = ?`), "fresh").Scan(&fresh))
+	require.Equal(t, "unverified", stale)
+	require.Equal(t, "pending", fresh)
+}
+
+func TestInsertCostLookupOrphansIdempotent(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	o := CostLookupOrphan{Provider: "custom-openai-subrouter", RequestID: "20261031145059384885689jMgnd0ql",
+		Model: "deepseek-v4.1-flash", PromptTokens: 872, CompletionTokens: 515, Quota: 17, CreatedAt: time.Now().UTC()}
+
+	n, err := db.Usage().InsertCostLookupOrphans(ctx, []CostLookupOrphan{o})
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	n, err = db.Usage().InsertCostLookupOrphans(ctx, []CostLookupOrphan{o})
+	require.NoError(t, err)
+	require.Equal(t, 0, n)
+}
+
+func TestTryAdvisoryLockSQLiteAlwaysGranted(t *testing.T) {
+	db := newTestDB(t)
+	release, ok, err := db.TryAdvisoryLock(context.Background(), 0x4b52434c)
+	require.NoError(t, err)
+	require.True(t, ok)
+	release()
+}
