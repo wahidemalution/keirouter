@@ -13,7 +13,15 @@ import { ICONS } from "../lib/icons";
 // usage log: requests are billed at the chain step price first, then the
 // sweeper corrects each bill to Subrouter's charge times the step markup.
 export function CostLookupSection({ providerId }: { providerId: string }) {
-  const providers = useQuery({ queryKey: ["custom-providers"], queryFn: api.listCustomProviders });
+  const providers = useQuery({
+    queryKey: ["custom-providers"],
+    queryFn: api.listCustomProviders,
+    // Until the first check has run, refresh so the status line updates by itself.
+    refetchInterval: (q) => {
+      const p = q.state.data?.providers.find((x) => x.id === providerId);
+      return p?.cost_lookup === "subrouter" && !p.cost_lookup_status ? 5_000 : false;
+    },
+  });
   const provider = providers.data?.providers.find((p) => p.id === providerId);
 
   return (
@@ -84,6 +92,8 @@ function CostLookupForm({ provider }: { provider: CustomProvider }) {
   const save = useMutation({
     mutationFn: () => api.updateCustomProvider(provider.id, patch),
     onSuccess: () => {
+      setToken("");
+      setShowErrors(false);
       qc.invalidateQueries({ queryKey: ["custom-providers"] });
       qc.invalidateQueries({ queryKey: ["cost-lookup-report", provider.id] });
       toast.success(on ? "Subrouter billing saved" : "Subrouter billing turned off", on ? "The first check runs within 10 seconds." : undefined);
@@ -227,6 +237,9 @@ function CostLookupReportView({ providerId }: { providerId: string }) {
     queryKey: ["cost-lookup-report", providerId, day],
     queryFn: () => api.costLookupReport(providerId, day),
     retry: false,
+    // Each load asks Subrouter for the day's total; do not repeat it on focus.
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
   });
 
   return (
@@ -284,7 +297,7 @@ function ReportBody({ r }: { r: CostLookupReport }) {
       <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-[13px] sm:grid-cols-2">
         <Row label="Subrouter charged" value={formatCostUSD(r.subrouter_usd)} />
         <Row label="Recorded upstream cost" value={formatCostUSD(r.keirouter_upstream_usd)} />
-        <Row label="Not recorded" value={`${r.gap_pct.toFixed(2)}%`} />
+        <Row label="Not recorded" value={r.gap_pct > 0 ? `${r.gap_pct.toFixed(2)}%` : "None"} />
         <Row label="Reconciled requests" value={r.reconciled.toLocaleString("en-US")} />
         <Row label="Waiting for the log" value={r.pending.toLocaleString("en-US")} />
         <Row label="Unverified (kept step price)" value={r.unverified.toLocaleString("en-US")} />
