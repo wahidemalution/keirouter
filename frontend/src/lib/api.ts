@@ -108,9 +108,42 @@ export interface CustomProvider {
   alias: string;
   dialect: string; // "openai" | "anthropic"
   base_url: string;
+  // Cost lookup: bills corrected from the provider's own usage log. The
+  // access token is write-only; cost_lookup_token_set says whether one is stored.
+  cost_lookup?: "" | "subrouter";
+  cost_lookup_base_url?: string;
+  cost_lookup_user_id?: string;
+  cost_lookup_token_name?: string;
+  cost_lookup_token_set?: boolean;
+  // "" (not checked yet), "ok", "unauthorized", or "error: <reason>".
+  cost_lookup_status?: string;
   custom: true;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface CostLookupPatch {
+  cost_lookup?: "" | "subrouter";
+  cost_lookup_base_url?: string;
+  cost_lookup_user_id?: string;
+  cost_lookup_token?: string;
+  cost_lookup_token_name?: string;
+}
+
+// CostLookupReport compares one UTC day of what Subrouter charged with the
+// upstream cost keirouter recorded.
+export interface CostLookupReport {
+  day: string;
+  subrouter_usd: number;
+  keirouter_upstream_usd: number;
+  gap_pct: number;
+  pending: number;
+  reconciled: number;
+  unverified: number;
+  orphan_count: number;
+  orphan_usd: number;
+  over_ceiling: { chain_id: string; model: string; count: number }[] | null;
+  warn: boolean;
 }
 
 // CustomModel is a user-registered model on a provider (custom or built-in).
@@ -2604,8 +2637,10 @@ export const api = {
     request<{ providers: CustomProvider[] }>("GET", "/custom-providers"),
   createCustomProvider: (input: { display_name: string; dialect: string; base_url: string; alias?: string }) =>
     request<CustomProvider>("POST", "/custom-providers", input),
-  updateCustomProvider: (id: string, patch: { display_name?: string; alias?: string; base_url?: string }) =>
+  updateCustomProvider: (id: string, patch: { display_name?: string; alias?: string; base_url?: string } & CostLookupPatch) =>
     request<CustomProvider>("PATCH", `/custom-providers/${id}`, patch),
+  costLookupReport: (id: string, day?: string) =>
+    request<CostLookupReport>("GET", `/custom-providers/${id}/cost-lookup/report${day ? `?day=${encodeURIComponent(day)}` : ""}`),
   deleteCustomProvider: (id: string) =>
     request<{ id: string; deleted: boolean; accounts_disabled?: number }>("DELETE", `/custom-providers/${id}`),
 

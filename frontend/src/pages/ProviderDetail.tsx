@@ -40,6 +40,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ModelCapabilityIcons } from "../components/ModelCapabilityIcons";
 import { CustomModelsSection } from "../components/CustomModelsSection";
+import { CostLookupSection } from "../components/CostLookupSection";
 import { ProviderLogo } from "../components/ProviderLogo";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ui/confirm-dialog";
@@ -321,7 +322,12 @@ export function ProviderDetailPage() {
         {tab === "models" && (
           <ModelsPanel provider={provider} models={modelList} loading={models.isLoading} disabledIds={disabledIds} routePrefix={routePrefix} />
         )}
-        {tab === "routing" && <RoutingPanel providerId={provider.id} accountCount={myAccounts.length} />}
+        {tab === "routing" && (
+          <>
+            <RoutingPanel providerId={provider.id} accountCount={myAccounts.length} />
+            {provider.custom && provider.dialect === "openai" && <CostLookupSection providerId={provider.id} />}
+          </>
+        )}
       </div>
 
       {connect && <ConnectProviderDialog provider={provider} oauth={oauth} mode={connect} onClose={() => setConnect(null)} />}
