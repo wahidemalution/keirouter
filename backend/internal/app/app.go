@@ -27,6 +27,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/consolelog"
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/costlookup"
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
@@ -62,6 +63,8 @@ import (
 // App is the assembled application, ready to serve.
 type App struct {
 	cfg config.Config
+	// costLookup reconciles provider bills from their usage logs (Subrouter).
+	costLookup *costlookup.Sweeper
 	// financeBox seals hosting secrets (the master-key sealer).
 	financeBox         hosting.SecretBox
 	log                *slog.Logger
@@ -537,6 +540,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
 	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState}
+	app.costLookup = costlookup.New(costlookup.Deps{
+		Usage: db.Usage(), Providers: db.CustomProviders(), DB: db,
+		Open:   func(stored string) (string, error) { return costlookup.OpenToken(sealer, stored) },
+		Budget: bud, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: log,
+	})
 
 	return app, nil
 }
@@ -739,6 +747,13 @@ func (a *App) Run(ctx context.Context) error {
 		go func() {
 			defer a.bg.Done()
 			a.runCooldownSweeper(ctx)
+		}()
+	}
+	if a.costLookup != nil {
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.costLookup.Run(ctx)
 		}()
 	}
 	if a.db != nil {

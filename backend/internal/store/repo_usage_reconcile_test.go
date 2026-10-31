@@ -127,3 +127,22 @@ func TestTryAdvisoryLockSQLiteAlwaysGranted(t *testing.T) {
 	require.True(t, ok)
 	release()
 }
+
+func TestSettleStoresLogRequestIDAndKnownIDs(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	seedPending(t, db, "r1", time.Now().UTC(), "pending")
+
+	_, err := db.Usage().SettleReconciled(ctx, []ReconcileSettlement{{ID: "r1", Status: "reconciled",
+		UpstreamRequestID: "20261031145059384885689jMgnd0ql", CostNanos: 51000, UpstreamCostNanos: 34000}})
+	require.NoError(t, err)
+
+	known, err := db.Usage().KnownUpstreamRequestIDs(ctx, "custom-openai-subrouter",
+		[]string{"20261031145059384885689jMgnd0ql", "unseen"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"20261031145059384885689jMgnd0ql": true}, known)
+
+	known, err = db.Usage().KnownUpstreamRequestIDs(ctx, "other-provider", []string{"20261031145059384885689jMgnd0ql"})
+	require.NoError(t, err)
+	require.Empty(t, known)
+}

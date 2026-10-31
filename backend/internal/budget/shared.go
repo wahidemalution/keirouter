@@ -159,7 +159,21 @@ func (e *Engine) ObserveUsage(rec store.UsageRecord) {
 	if rec.CostNanos == 0 && tokens == 0 {
 		return
 	}
-	now := rec.CreatedAt
+	e.observe(rec.TenantID, rec.ProjectID, rec.APIKeyID, rec.CreatedAt, rec.CostNanos, int64(tokens))
+}
+
+// ObserveCostDelta adds a cost correction (negative when a bill went down)
+// to the counters a row created at at was counted in. Reconciliation uses it
+// after rewriting a usage row's cost; tokens are unchanged.
+func (e *Engine) ObserveCostDelta(tenantID, projectID, apiKeyID string, at time.Time, deltaNanos int64) {
+	if e.counter == nil || deltaNanos == 0 {
+		return
+	}
+	e.observe(tenantID, projectID, apiKeyID, at, deltaNanos, 0)
+}
+
+func (e *Engine) observe(tenantID, projectID, apiKeyID string, at time.Time, costNanos, tokens int64) {
+	now := at
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -167,9 +181,9 @@ func (e *Engine) ObserveUsage(rec store.UsageRecord) {
 		kind store.BudgetScope
 		id   string
 	}{
-		{store.ScopeAPIKey, rec.APIKeyID},
-		{store.ScopeProject, rec.ProjectID},
-		{store.ScopeTenant, rec.TenantID},
+		{store.ScopeAPIKey, apiKeyID},
+		{store.ScopeProject, projectID},
+		{store.ScopeTenant, tenantID},
 	} {
 		if sc.id == "" {
 			continue
@@ -186,7 +200,7 @@ func (e *Engine) ObserveUsage(rec store.UsageRecord) {
 			}
 			seen[key] = true
 			select {
-			case e.deltas <- Delta{Key: key, CostNanos: rec.CostNanos, Tokens: int64(tokens)}:
+			case e.deltas <- Delta{Key: key, CostNanos: costNanos, Tokens: tokens}:
 			default:
 				e.deltaDropped.Add(1)
 			}

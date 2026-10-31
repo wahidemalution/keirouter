@@ -20,8 +20,10 @@ type ReconcileRow struct {
 
 // ReconcileSettlement is the new cost of one row. Status is the row's new
 // reconcile_status: reconciled, over_ceiling, or unverified (costs unchanged).
+// UpstreamRequestID is the log entry that priced the row; it is stored so a
+// later pass re-reading that entry does not count it as an orphan.
 type ReconcileSettlement struct {
-	ID, Status                                           string
+	ID, Status, UpstreamRequestID                        string
 	CostNanos, UpstreamCostNanos                         int64
 	InputCostNanos, CachedCostNanos, CacheWriteCostNanos int64
 	OutputCostNanos, ReasoningCostNanos                  int64
@@ -81,14 +83,15 @@ func (r *UsageRepo) SettleReconciled(ctx context.Context, settlements []Reconcil
 		cost_nanos = ?, cost_micros = ?, upstream_cost_nanos = ?, upstream_cost_micros = ?,
 		input_cost_nanos = ?, cached_cost_nanos = ?, cache_write_cost_nanos = ?,
 		output_cost_nanos = ?, reasoning_cost_nanos = ?,
-		pricing_source = 'upstream_log', pricing_match_kind = 'upstream_log', reconcile_status = ?
+		pricing_source = 'upstream_log', pricing_match_kind = 'upstream_log', reconcile_status = ?,
+		upstream_request_id = CASE WHEN ? = '' THEN upstream_request_id ELSE ? END
 		WHERE id = ? AND reconcile_status = 'pending'`)
 	var applied []string
 	for _, s := range settlements {
 		res, err := tx.ExecContext(ctx, q,
 			s.CostNanos, nanosToMicros(s.CostNanos), s.UpstreamCostNanos, nanosToMicros(s.UpstreamCostNanos),
 			s.InputCostNanos, s.CachedCostNanos, s.CacheWriteCostNanos, s.OutputCostNanos, s.ReasoningCostNanos,
-			s.Status, s.ID)
+			s.Status, s.UpstreamRequestID, s.UpstreamRequestID, s.ID)
 		if err != nil {
 			return nil, fmt.Errorf("store: settle reconcile %s: %w", s.ID, err)
 		}
@@ -132,6 +135,45 @@ func (r *UsageRepo) InsertCostLookupOrphans(ctx context.Context, orphans []CostL
 		}
 	}
 	return inserted, nil
+}
+
+// KnownUpstreamRequestIDs returns which of ids are already stored on a usage
+// row of provider.
+func (r *UsageRepo) KnownUpstreamRequestIDs(ctx context.Context, provider string, ids []string) (map[string]bool, error) {
+	known := map[string]bool{}
+	const chunk = 500
+	for i := 0; i < len(ids); i += chunk {
+		part := ids[i:min(i+chunk, len(ids))]
+		args := make([]any, 0, len(part)+1)
+		args = append(args, provider)
+		marks := make([]byte, 0, len(part)*2)
+		for j, id := range part {
+			if j > 0 {
+				marks = append(marks, ',')
+			}
+			marks = append(marks, '?')
+			args = append(args, id)
+		}
+		q := r.db.rebind(`SELECT upstream_request_id FROM usage_records WHERE provider = ? AND upstream_request_id IN (` + string(marks) + `)`)
+		rows, err := r.db.sql.QueryContext(ctx, q, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: known upstream request ids: %w", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: scan upstream request id: %w", err)
+			}
+			known[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return known, nil
 }
 
 func nanosToMicros(n int64) int64 { return int64(math.Round(float64(n) / 1000)) }

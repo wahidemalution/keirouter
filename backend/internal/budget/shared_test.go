@@ -176,3 +176,26 @@ func TestObserveUsageMergesDeltas(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 	require.Zero(t, e.Stats().Dropped)
 }
+
+func TestObserveCostDeltaNegative(t *testing.T) {
+	mr := miniredis.RunT(t)
+	fs := &fakeStores{budgets: []store.Budget{monthlyBudget(1 << 50)}}
+	e := sharedEngine(t, mr, fs)
+	_, err := e.Check(context.Background(), keyScope)
+	require.NoError(t, err)
+
+	at := time.Now()
+	e.ObserveUsage(store.UsageRecord{TenantID: "t1", APIKeyID: "k1", CostNanos: 150000, PromptTokens: 10, CreatedAt: at})
+	require.Eventually(t, func() bool {
+		dec, _ := e.Check(context.Background(), keyScope)
+		return dec.BudgetUsage[0].CostMicros == 150
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// Reconciled down to 51000 nanos: the counter moves by the difference
+	// and token counts stay as they were.
+	e.ObserveCostDelta("t1", "", "k1", at, 51000-150000)
+	require.Eventually(t, func() bool {
+		dec, _ := e.Check(context.Background(), keyScope)
+		return dec.BudgetUsage[0].CostMicros == 51 && dec.BudgetUsage[0].TokenCount == 10
+	}, 2*time.Second, 5*time.Millisecond)
+}
