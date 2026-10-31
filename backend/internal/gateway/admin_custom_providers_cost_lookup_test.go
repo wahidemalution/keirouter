@@ -86,11 +86,11 @@ func TestAdminCostLookupValidation(t *testing.T) {
 	s, _ := newCustomProviderTestServer(t)
 	id := createSubrouter(t, s)
 	cases := map[string]map[string]any{
-		"unknown kind":  {"cost_lookup": "other", "cost_lookup_user_id": "1", "cost_lookup_token": "t"},
-		"no user id":    {"cost_lookup": "subrouter", "cost_lookup_token": "t"},
-		"no token":      {"cost_lookup": "subrouter", "cost_lookup_user_id": "1"},
-		"bad base url":  {"cost_lookup": "subrouter", "cost_lookup_user_id": "1", "cost_lookup_token": "t", "cost_lookup_base_url": "https://subrouter.ai/#x"},
-		"private url":   {"cost_lookup": "subrouter", "cost_lookup_user_id": "1", "cost_lookup_token": "t", "cost_lookup_base_url": "http://127.0.0.1:8080"},
+		"unknown kind": {"cost_lookup": "other", "cost_lookup_user_id": "1", "cost_lookup_token": "t"},
+		"no user id":   {"cost_lookup": "subrouter", "cost_lookup_token": "t"},
+		"no token":     {"cost_lookup": "subrouter", "cost_lookup_user_id": "1"},
+		"bad base url": {"cost_lookup": "subrouter", "cost_lookup_user_id": "1", "cost_lookup_token": "t", "cost_lookup_base_url": "https://subrouter.ai/#x"},
+		"private url":  {"cost_lookup": "subrouter", "cost_lookup_user_id": "1", "cost_lookup_token": "t", "cost_lookup_base_url": "http://127.0.0.1:8080"},
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

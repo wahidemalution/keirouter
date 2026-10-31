@@ -13,8 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
-	"github.com/mydisha/keirouter/backend/internal/costlookup"
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/costlookup"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
@@ -108,8 +108,8 @@ func customProviderJSON(p store.CustomProvider) map[string]any {
 		"cost_lookup_token_set":  p.CostLookupToken != "",
 		"cost_lookup_status":     p.CostLookupStatus,
 		"custom":                 true,
-		"created_at":   p.CreatedAt,
-		"updated_at":   p.UpdatedAt,
+		"created_at":             p.CreatedAt,
+		"updated_at":             p.UpdatedAt,
 	}
 }
 
