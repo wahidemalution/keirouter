@@ -319,6 +319,13 @@ type UsageRecord struct {
 	GuardrailMS        int
 	PonytailActive     bool // ponytail output injection was active
 
+	// UpstreamRequestID is the provider's own request id (Subrouter
+	// X-Oneapi-Request-Id), kept only when it matches the provider's usage log.
+	// ReconcileStatus tracks cost reconciliation from that log: "" (not
+	// applicable), pending, reconciled, over_ceiling, unverified.
+	UpstreamRequestID string
+	ReconcileStatus   string
+
 	CreatedAt time.Time
 }
 

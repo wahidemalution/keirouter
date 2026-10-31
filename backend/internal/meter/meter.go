@@ -327,6 +327,14 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		GuardrailMS: int(ev.Guardrail.Elapsed.Milliseconds()),
 		CreatedAt:   recordedAt,
 	}
+	if ev.CostLookup && status == "success" && !ev.CacheHit && u.PromptTokens+u.CompletionTokens > 0 {
+		// Billed now at the step's ceiling price; the cost-lookup sweeper later
+		// rewrites the cost from the provider's usage log.
+		rec.ReconcileStatus = "pending"
+		if ev.Streamed {
+			rec.UpstreamRequestID = ev.UpstreamRequestID
+		}
+	}
 	if ev.SlimStats != nil {
 		rec.SlimBytesSaved, rec.SlimTokensSaved, rec.SlimRules = ev.SlimStats.BytesSaved, ev.SlimStats.TokensSaved, ev.SlimStats.Rules
 	}

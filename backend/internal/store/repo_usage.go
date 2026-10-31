@@ -74,7 +74,7 @@ const usageColumns = `id, request_id, tenant_id, project_id, api_key_id, provide
 	slim_rules, slim_active, caveman_active, terse_active, headroom_tokens_saved,
 	headroom_bytes_saved, headroom_active, ponytail_active, chain_id, fallback_count, created_at,
 	cache_write_1h_tokens, web_search_requests, tool_cost_nanos, guardrail_action, guardrail_detector,
-	guardrail_direction, guardrail_mid_stream, guardrail_ms`
+	guardrail_direction, guardrail_mid_stream, guardrail_ms, upstream_request_id, reconcile_status`
 
 func insertUsageBatch(ctx context.Context, tx *sql.Tx, rebind func(string) string, records []UsageRecord) error {
 	argsPerRow := len(usageArgs(UsageRecord{}))
@@ -140,6 +140,7 @@ func usageArgs(u UsageRecord) []any {
 		u.ChainID, u.FallbackCount, formatTime(u.CreatedAt),
 		u.CacheWrite1hTokens, u.WebSearchRequests, u.ToolCostNanos,
 		u.GuardrailAction, u.GuardrailDetector, u.GuardrailDirection, boolToInt(u.GuardrailMidStream), u.GuardrailMS,
+		u.UpstreamRequestID, u.ReconcileStatus,
 	}
 }
 
