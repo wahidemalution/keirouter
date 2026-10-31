@@ -50,6 +50,17 @@ func CostLookupEnabled(id string) bool {
 	return dynProviders[id].CostLookup
 }
 
+// SetCostLookup updates the cost-lookup flag of a registered dynamic
+// provider; unknown ids are ignored.
+func SetCostLookup(id string, on bool) {
+	dynMu.Lock()
+	defer dynMu.Unlock()
+	if p, ok := dynProviders[id]; ok && p.CostLookup != on {
+		p.CostLookup = on
+		dynProviders[id] = p
+	}
+}
+
 // UnregisterDynamicProvider removes a dynamic provider instance and its models.
 func UnregisterDynamicProvider(id string) {
 	dynMu.Lock()

@@ -3,6 +3,7 @@ package costlookup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -390,4 +391,119 @@ func TestSweepWarnsDailyGapOnce(t *testing.T) {
 	h.now = time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC)
 	h.sw.Pass(context.Background())
 	require.Equal(t, 2, statCalls, "next day is checked again")
+}
+
+// timedLog serves entries the way Subrouter does: filtered by
+// start/end_timestamp (inclusive), newest first, 100 per page, cursor paging.
+func timedLog(entries []LogItem) func(int, map[string]string) (int, any) {
+	return func(_ int, q map[string]string) (int, any) {
+		if q["path"] != "/api/log/self" {
+			return 200, map[string]any{"success": true, "data": map[string]any{"quota": 0}}
+		}
+		start, _ := strconv.ParseInt(q["start_timestamp"], 10, 64)
+		end, _ := strconv.ParseInt(q["end_timestamp"], 10, 64)
+		var in []LogItem
+		for i := len(entries) - 1; i >= 0; i-- { // entries are oldest first
+			if e := entries[i]; e.CreatedAt >= start && (end == 0 || e.CreatedAt <= end) {
+				in = append(in, e)
+			}
+		}
+		off := 0
+		if c := q["cursor"]; c != "first" {
+			off, _ = strconv.Atoi(c)
+		}
+		page := in[min(off, len(in)):min(off+100, len(in))]
+		more := off+100 < len(in)
+		return 200, pageOf(page, more, strconv.Itoa(off+100))
+	}
+}
+
+func TestSweepWalksBackwardWhenCapped(t *testing.T) {
+	now := time.Unix(1793458400, 0).UTC()
+	// 6,000 entries over the last 60 s; the oldest belongs to a pending row.
+	var entries []LogItem
+	for i := 0; i < 6000; i++ {
+		at := now.Add(-60*time.Second + time.Duration(i)*10*time.Millisecond)
+		entries = append(entries, logItem(fmt.Sprintf("e%05d", i), at, 100+i, 7, 3))
+	}
+	h := newHarness(t, timedLog(entries))
+	h.seed(t, "oldest", "e00000", now.Add(-60*time.Second), 100, 7)
+
+	h.sw.Pass(context.Background())
+	st, _, _ := h.row(t, "oldest")
+	require.Equal(t, "pending", st, "the newest 5,000 entries filled the page budget")
+	require.Equal(t, 50, h.log.count())
+
+	h.now = now.Add(10 * time.Second)
+	h.sw.Pass(context.Background())
+	st, cost, _ := h.row(t, "oldest")
+	require.Equal(t, "reconciled", st, "the unread older part is read on the next pass")
+	require.Equal(t, int64(9000), cost)
+}
+
+func TestSweepMatchesRowRecordedAfterItsEntryWasRead(t *testing.T) {
+	now := time.Unix(1793458400, 0).UTC()
+	entries := []LogItem{logItem("late", now.Add(-5*time.Second), 872, 515, 17)}
+	h := newHarness(t, timedLog(entries))
+
+	h.sw.Pass(context.Background())
+	require.Equal(t, 0, h.orphans(t), "a young entry waits for its row")
+
+	h.seed(t, "r1", "", now.Add(-5*time.Second), 872, 515)
+	h.now = now.Add(40 * time.Second) // the entry is outside the next window
+	h.sw.Pass(context.Background())
+	st, cost, _ := h.row(t, "r1")
+	require.Equal(t, "reconciled", st)
+	require.Equal(t, int64(51000), cost)
+}
+
+func TestSweepHeadWindowIsSmall(t *testing.T) {
+	h := newHarness(t, timedLog(nil))
+	h.sw.Pass(context.Background())
+	h.now = h.now.Add(10 * time.Second)
+	h.sw.Pass(context.Background())
+	last := h.log.queries[len(h.log.queries)-1]
+	for i := len(h.log.queries) - 1; i >= 0; i-- {
+		if h.log.queries[i]["path"] == "/api/log/self" {
+			last = h.log.queries[i]
+			break
+		}
+	}
+	start, _ := strconv.ParseInt(last["start_timestamp"], 10, 64)
+	end, _ := strconv.ParseInt(last["end_timestamp"], 10, 64)
+	require.LessOrEqual(t, end-start, int64(30), "a steady pass reads only the new interval plus a short overlap")
+}
+
+func TestSweepDoesNotExpireWhileFailing(t *testing.T) {
+	h := newHarness(t, func(int, map[string]string) (int, any) { return 500, map[string]any{} })
+	h.seed(t, "stale", "", h.now.Add(-61*time.Minute), 1, 1)
+	h.sw.Pass(context.Background())
+	st, _, _ := h.row(t, "stale")
+	require.Equal(t, "pending", st, "rows are only given up after the log was read")
+}
+
+func TestSweepExpiresRowsOfDisabledProvider(t *testing.T) {
+	h := newHarness(t, timedLog(nil))
+	ctx := context.Background()
+	h.seed(t, "stale", "", h.now.Add(-61*time.Minute), 1, 1)
+	p, err := h.db.CustomProviders().GetProvider(ctx, provID)
+	require.NoError(t, err)
+	p.CostLookup = ""
+	require.NoError(t, h.db.CustomProviders().UpdateProvider(ctx, p))
+	h.sw.Pass(ctx)
+	st, _, _ := h.row(t, "stale")
+	require.Equal(t, "unverified", st)
+}
+
+func TestPassPublishesProviderFlags(t *testing.T) {
+	h := newHarness(t, timedLog(nil))
+	var got map[string]bool
+	h.sw.d.OnProviders = func(ps []store.CustomProvider) {
+		got = map[string]bool{}
+		for _, p := range ps {
+			got[p.ID] = p.CostLookup == store.CostLookupSubrouter
+		}
+	}
+	h.sw.Pass(context.Background())
+	require.Equal(t, map[string]bool{provID: true}, got)
 }

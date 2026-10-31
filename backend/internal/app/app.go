@@ -544,6 +544,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Usage: db.Usage(), Providers: db.CustomProviders(), DB: db,
 		Open:   func(stored string) (string, error) { return costlookup.OpenToken(sealer, stored) },
 		Budget: bud, HTTP: &http.Client{Timeout: 30 * time.Second}, Log: log,
+		OnProviders: func(ps []store.CustomProvider) {
+			for _, p := range ps {
+				connectors.SetCostLookup(p.ID, p.CostLookup == store.CostLookupSubrouter)
+			}
+		},
 	})
 
 	return app, nil
