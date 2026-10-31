@@ -50,9 +50,17 @@ func TestSettleLargeValuesDoNotOverflow(t *testing.T) {
 	require.Equal(t, int64(6_000_000_000_000), s.CostNanos)
 }
 
-func TestSettleUnknownMultiplier(t *testing.T) {
-	_, ok := Settle(provisional(150000, 0), 17)
-	require.False(t, ok)
+func TestSettleUnknownMultiplierBillsAtLeastTheProviderCharge(t *testing.T) {
+	// A row with no provisional upstream cost (catalog or chain priced) has no
+	// known markup: it is billed at no less than what Subrouter charged.
+	s, ok := Settle(provisional(500, 0), 17)
+	require.True(t, ok)
+	require.Equal(t, "unverified", s.Status)
+	require.Equal(t, int64(34000), s.UpstreamCostNanos)
+	require.Equal(t, int64(34000), s.CostNanos)
+
+	s, _ = Settle(provisional(90000, 0), 17)
+	require.Equal(t, int64(90000), s.CostNanos, "a higher provisional bill is kept")
 }
 
 func TestSettleBreakdownSumsToTotal(t *testing.T) {

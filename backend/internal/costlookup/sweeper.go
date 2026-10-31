@@ -253,14 +253,7 @@ func (s *Sweeper) settle(ctx context.Context, pairs []Pair) error {
 	settlements := make([]store.ReconcileSettlement, 0, len(pairs))
 	rows := make(map[string]store.ReconcileRow, len(pairs))
 	for _, pr := range pairs {
-		st, ok := Settle(pr.Row, pr.Item.Quota)
-		if !ok {
-			st = store.ReconcileSettlement{ID: pr.Row.ID, Status: "unverified",
-				CostNanos: pr.Row.CostNanos, UpstreamCostNanos: pr.Row.UpstreamCostNanos,
-				InputCostNanos: pr.Row.InputCostNanos, CachedCostNanos: pr.Row.CachedCostNanos,
-				CacheWriteCostNanos: pr.Row.CacheWriteCostNanos, OutputCostNanos: pr.Row.OutputCostNanos,
-				ReasoningCostNanos: pr.Row.ReasoningCostNanos}
-		}
+		st, _ := Settle(pr.Row, pr.Item.Quota)
 		st.UpstreamRequestID = pr.Item.RequestID
 		settlements = append(settlements, st)
 		rows[pr.Row.ID] = pr.Row

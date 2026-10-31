@@ -83,6 +83,14 @@ func pinStaticSteps(steps []dispatch.Target, sortRest func([]dispatch.Target) []
 func stampCostLookup(steps []dispatch.Target) []dispatch.Target {
 	for i := range steps {
 		steps[i].CostLookup = connectors.CostLookupEnabled(steps[i].Provider)
+		if steps[i].CostLookup {
+			// Subrouter charges at least quota 1 ($0.000002) per request, so
+			// the provisional bill must not fall under it either.
+			steps[i].MinChargeMicro = max(steps[i].MinChargeMicro, subrouterMinChargeMicro)
+		}
 	}
 	return steps
 }
+
+// subrouterMinChargeMicro is one Subrouter quota unit in USD micros.
+const subrouterMinChargeMicro = 2

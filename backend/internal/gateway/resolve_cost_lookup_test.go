@@ -45,3 +45,13 @@ func TestResolveStampsCostLookup(t *testing.T) {
 		t.Fatalf("CostLookup = %v, %v; want true, false", got[0].CostLookup, got[1].CostLookup)
 	}
 }
+
+func TestCostLookupStepsFloorAtOneQuota(t *testing.T) {
+	registerCostLookupProvider(t, "custom-openai-subtest", true)
+	registerCostLookupProvider(t, "custom-openai-plain", false)
+	got := resolveStatic(t, store.Chain{Steps: []store.ChainStep{
+		subrouterStep("custom-openai-subtest", nil), subrouterStep("custom-openai-plain", nil),
+	}}, nil)
+	near(t, 2, got[0].MinChargeMicro, "Subrouter charges at least quota 1 = $0.000002 per request")
+	near(t, 0, got[1].MinChargeMicro, "other providers keep their own minimum")
+}

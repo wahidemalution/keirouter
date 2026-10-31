@@ -318,8 +318,9 @@ func TestSweepUnknownMultiplierMarksUnverified(t *testing.T) {
 	h.sw.Pass(context.Background())
 	st, cost, _ := h.row(t, "zero")
 	require.Equal(t, "unverified", st)
-	require.Equal(t, int64(500), cost)
-	require.Empty(t, h.budget.calls)
+	require.Equal(t, int64(34000), cost, "floored at Subrouter's charge (quota 17)")
+	require.Len(t, h.budget.calls, 1)
+	require.Equal(t, int64(34000-500), h.budget.calls[0].Delta)
 	require.Equal(t, 0, h.orphans(t), "the entry is accounted for by the row")
 }
 

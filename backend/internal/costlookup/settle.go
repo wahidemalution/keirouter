@@ -9,13 +9,17 @@ import (
 // Settle prices row at the provider's logged quota. The row keeps the
 // multiplier it was billed with (provisional cost / provisional upstream
 // cost, at least 1), so the customer pays the real cost times the same
-// markup, rounded up. ok is false when the provisional upstream cost is 0:
-// the multiplier is unknown and no markup is guessed.
+// markup, rounded up. When the provisional upstream cost is 0 the markup is
+// unknown: the row becomes unverified and is billed at no less than the
+// provider's charge. ok is always true; it is kept for callers' clarity.
 func Settle(row store.ReconcileRow, quota int64) (store.ReconcileSettlement, bool) {
-	if row.UpstreamCostNanos <= 0 {
-		return store.ReconcileSettlement{}, false
-	}
 	upstream := quota * QuotaNanos
+	if row.UpstreamCostNanos <= 0 {
+		s := store.ReconcileSettlement{ID: row.ID, Status: "unverified", UpstreamCostNanos: upstream,
+			CostNanos: max(row.CostNanos, upstream)}
+		rescale(&s, row)
+		return s, true
+	}
 	cost := upstream
 	if row.CostNanos > row.UpstreamCostNanos {
 		// ceil(upstream × cost / provisionalUpstream) without int64 overflow.
