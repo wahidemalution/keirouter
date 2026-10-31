@@ -25,9 +25,22 @@ type CustomProvider struct {
 	Alias       string
 	Dialect     string
 	BaseURL     string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Cost lookup: reconcile bills from the provider's own usage log.
+	// CostLookup is "" (off) or "subrouter". CostLookupToken holds the
+	// system access token sealed with the vault sealer. CostLookupStatus is
+	// the sweeper's last outcome, shown in the editor.
+	CostLookup          string
+	CostLookupBaseURL   string
+	CostLookupUserID    string
+	CostLookupToken     string
+	CostLookupTokenName string
+	CostLookupStatus    string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
+
+// CostLookupSubrouter is the only supported CustomProvider.CostLookup kind.
+const CostLookupSubrouter = "subrouter"
 
 // CustomModel is a user-registered model on a provider (custom or built-in).
 type CustomModel struct {
@@ -45,7 +58,9 @@ type CustomModel struct {
 	UpdatedAt     time.Time
 }
 
-const customProviderColumns = `id, tenant_id, display_name, alias, dialect, base_url, created_at, updated_at`
+const customProviderColumns = `id, tenant_id, display_name, alias, dialect, base_url,
+	cost_lookup, cost_lookup_base_url, cost_lookup_user_id, cost_lookup_token, cost_lookup_token_name, cost_lookup_status,
+	created_at, updated_at`
 
 // ListProviders returns all custom provider instances for a tenant.
 func (r *CustomProviderRepo) ListProviders(ctx context.Context, tenantID string) ([]CustomProvider, error) {
@@ -84,9 +99,11 @@ func (r *CustomProviderRepo) GetProvider(ctx context.Context, id string) (Custom
 func (r *CustomProviderRepo) CreateProvider(ctx context.Context, p CustomProvider) error {
 	now := formatTime(time.Now())
 	q := r.db.rebind(`INSERT INTO custom_providers (` + customProviderColumns + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
-		p.ID, p.TenantID, p.DisplayName, p.Alias, p.Dialect, p.BaseURL, now, now)
+		p.ID, p.TenantID, p.DisplayName, p.Alias, p.Dialect, p.BaseURL,
+		p.CostLookup, p.CostLookupBaseURL, p.CostLookupUserID, p.CostLookupToken, p.CostLookupTokenName, p.CostLookupStatus,
+		now, now)
 	if err != nil {
 		return fmt.Errorf("store: create custom provider: %w", err)
 	}
@@ -96,15 +113,29 @@ func (r *CustomProviderRepo) CreateProvider(ctx context.Context, p CustomProvide
 // UpdateProvider updates the mutable fields of a custom provider.
 func (r *CustomProviderRepo) UpdateProvider(ctx context.Context, p CustomProvider) error {
 	q := r.db.rebind(`UPDATE custom_providers
-		SET display_name = ?, alias = ?, base_url = ?, updated_at = ?
+		SET display_name = ?, alias = ?, base_url = ?,
+		cost_lookup = ?, cost_lookup_base_url = ?, cost_lookup_user_id = ?, cost_lookup_token = ?,
+		cost_lookup_token_name = ?, cost_lookup_status = ?, updated_at = ?
 		WHERE id = ?`)
 	res, err := r.db.sql.ExecContext(ctx, q,
-		p.DisplayName, p.Alias, p.BaseURL, formatTime(time.Now()), p.ID)
+		p.DisplayName, p.Alias, p.BaseURL,
+		p.CostLookup, p.CostLookupBaseURL, p.CostLookupUserID, p.CostLookupToken,
+		p.CostLookupTokenName, p.CostLookupStatus, formatTime(time.Now()), p.ID)
 	if err != nil {
 		return fmt.Errorf("store: update custom provider: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateCostLookupStatus records the sweeper's last outcome without touching
+// updated_at, which marks operator edits to the settings.
+func (r *CustomProviderRepo) UpdateCostLookupStatus(ctx context.Context, id, status string) error {
+	q := r.db.rebind(`UPDATE custom_providers SET cost_lookup_status = ? WHERE id = ?`)
+	if _, err := r.db.sql.ExecContext(ctx, q, status, id); err != nil {
+		return fmt.Errorf("store: update cost lookup status: %w", err)
 	}
 	return nil
 }
@@ -267,7 +298,9 @@ type scanner interface {
 func scanCustomProvider(s scanner) (CustomProvider, error) {
 	var p CustomProvider
 	var created, updated string
-	if err := s.Scan(&p.ID, &p.TenantID, &p.DisplayName, &p.Alias, &p.Dialect, &p.BaseURL, &created, &updated); err != nil {
+	if err := s.Scan(&p.ID, &p.TenantID, &p.DisplayName, &p.Alias, &p.Dialect, &p.BaseURL,
+		&p.CostLookup, &p.CostLookupBaseURL, &p.CostLookupUserID, &p.CostLookupToken, &p.CostLookupTokenName, &p.CostLookupStatus,
+		&created, &updated); err != nil {
 		return CustomProvider{}, err
 	}
 	p.CreatedAt = parseTime(created)

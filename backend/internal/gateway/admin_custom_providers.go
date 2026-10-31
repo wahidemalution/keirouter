@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
+	"github.com/mydisha/keirouter/backend/internal/costlookup"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/store"
@@ -99,7 +100,14 @@ func customProviderJSON(p store.CustomProvider) map[string]any {
 		"alias":        p.Alias,
 		"dialect":      p.Dialect,
 		"base_url":     p.BaseURL,
-		"custom":       true,
+		// The access token itself is never returned, only whether one is set.
+		"cost_lookup":            p.CostLookup,
+		"cost_lookup_base_url":   p.CostLookupBaseURL,
+		"cost_lookup_user_id":    p.CostLookupUserID,
+		"cost_lookup_token_name": p.CostLookupTokenName,
+		"cost_lookup_token_set":  p.CostLookupToken != "",
+		"cost_lookup_status":     p.CostLookupStatus,
+		"custom":                 true,
 		"created_at":   p.CreatedAt,
 		"updated_at":   p.UpdatedAt,
 	}
@@ -137,6 +145,7 @@ func (s *Server) adminCreateCustomProvider(w http.ResponseWriter, r *http.Reques
 		Dialect     string  `json:"dialect"` // "openai" | "anthropic"
 		BaseURL     string  `json:"base_url"`
 		Alias       *string `json:"alias"` // optional routing prefix; defaults to the generated id
+		costLookupInput
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -193,6 +202,10 @@ func (s *Server) adminCreateCustomProvider(w http.ResponseWriter, r *http.Reques
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
+	if msg := s.applyCostLookup(&p, body.costLookupInput); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	if err := s.db.CustomProviders().CreateProvider(r.Context(), p); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "create custom provider failed"))
 		return
@@ -200,6 +213,7 @@ func (s *Server) adminCreateCustomProvider(w http.ResponseWriter, r *http.Reques
 	// Register it live so it is immediately routable and discoverable.
 	connectors.RegisterDynamicProvider(connectors.DynamicProvider{
 		ID: p.ID, DisplayName: p.DisplayName, Alias: p.Alias, Dialect: dialect, BaseURL: p.BaseURL,
+		CostLookup: p.CostLookup == store.CostLookupSubrouter,
 	})
 	writeJSON(w, http.StatusCreated, customProviderJSON(p))
 }
@@ -215,8 +229,13 @@ func (s *Server) adminUpdateCustomProvider(w http.ResponseWriter, r *http.Reques
 		DisplayName *string `json:"display_name"`
 		Alias       *string `json:"alias"`
 		BaseURL     *string `json:"base_url"`
+		costLookupInput
 	}
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if msg := s.applyCostLookup(&existing, body.costLookupInput); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if body.DisplayName != nil {
@@ -254,6 +273,7 @@ func (s *Server) adminUpdateCustomProvider(w http.ResponseWriter, r *http.Reques
 	dialect, _, _ := customDialect(existing.Dialect)
 	connectors.RegisterDynamicProvider(connectors.DynamicProvider{
 		ID: existing.ID, DisplayName: existing.DisplayName, Alias: existing.Alias, Dialect: dialect, BaseURL: existing.BaseURL,
+		CostLookup: existing.CostLookup == store.CostLookupSubrouter,
 	})
 	if baseURLChanged {
 		// A /min{N} segment in the base URL changes which surplus-trusted
@@ -612,4 +632,67 @@ func (s *Server) adminImportModels(w http.ResponseWriter, r *http.Request) {
 		"skipped":     skipped,
 		"total":       len(discovered),
 	})
+}
+
+// costLookupInput is the optional cost-lookup part of a custom provider
+// create or update body. A nil field is left unchanged; an empty token keeps
+// the stored one.
+type costLookupInput struct {
+	CostLookup          *string `json:"cost_lookup"`
+	CostLookupBaseURL   *string `json:"cost_lookup_base_url"`
+	CostLookupUserID    *string `json:"cost_lookup_user_id"`
+	CostLookupToken     *string `json:"cost_lookup_token"`
+	CostLookupTokenName *string `json:"cost_lookup_token_name"`
+}
+
+// applyCostLookup validates in and applies it to p, sealing a new token.
+// It returns the 400 message, "" when valid. Any change clears the last
+// sweeper status so a fixed token is retried.
+func (s *Server) applyCostLookup(p *store.CustomProvider, in costLookupInput) string {
+	before := *p
+	if in.CostLookup != nil {
+		kind := strings.TrimSpace(*in.CostLookup)
+		if kind != "" && kind != store.CostLookupSubrouter {
+			return "cost_lookup must be empty or 'subrouter'"
+		}
+		p.CostLookup = kind
+	}
+	if in.CostLookupBaseURL != nil {
+		u := strings.TrimSpace(*in.CostLookupBaseURL)
+		if u != "" {
+			if err := httputil.ValidateBaseURL(u); err != nil {
+				return "invalid cost_lookup_base_url: URL blocked by security policy"
+			}
+		}
+		p.CostLookupBaseURL = u
+	}
+	if in.CostLookupUserID != nil {
+		p.CostLookupUserID = strings.TrimSpace(*in.CostLookupUserID)
+	}
+	if in.CostLookupTokenName != nil {
+		p.CostLookupTokenName = strings.TrimSpace(*in.CostLookupTokenName)
+	}
+	if in.CostLookupToken != nil {
+		if tok := strings.TrimSpace(*in.CostLookupToken); tok != "" {
+			sealed, err := costlookup.SealToken(s.vault.Sealer(), tok)
+			if err != nil {
+				return "could not store the access token"
+			}
+			p.CostLookupToken = sealed
+		}
+	}
+	if p.CostLookup != "" {
+		if p.CostLookupUserID == "" {
+			return "cost_lookup_user_id is required when cost lookup is on"
+		}
+		if p.CostLookupToken == "" {
+			return "cost_lookup_token is required when cost lookup is on"
+		}
+	}
+	if p.CostLookup != before.CostLookup || p.CostLookupBaseURL != before.CostLookupBaseURL ||
+		p.CostLookupUserID != before.CostLookupUserID || p.CostLookupToken != before.CostLookupToken ||
+		p.CostLookupTokenName != before.CostLookupTokenName {
+		p.CostLookupStatus = ""
+	}
+	return ""
 }

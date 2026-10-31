@@ -95,6 +95,12 @@ func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (re
 }
 
 func resolveTargetsWith(ctx context.Context, chains ChainSource, aliases AliasSource, latency LatencyReader, cache *market.SnapshotCache, markupPercent float64, tenantID, model string) (resolveResult, error) {
+	res, err := resolveTargetsUnstamped(ctx, chains, aliases, latency, cache, markupPercent, tenantID, model)
+	res.Targets = stampCostLookup(res.Targets)
+	return res, err
+}
+
+func resolveTargetsUnstamped(ctx context.Context, chains ChainSource, aliases AliasSource, latency LatencyReader, cache *market.SnapshotCache, markupPercent float64, tenantID, model string) (resolveResult, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return resolveResult{}, errBadModel("model is required")

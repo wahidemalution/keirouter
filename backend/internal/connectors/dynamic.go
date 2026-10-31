@@ -24,6 +24,9 @@ type DynamicProvider struct {
 	Alias       string
 	Dialect     core.Dialect
 	BaseURL     string
+	// CostLookup marks a provider whose bills are reconciled afterwards
+	// from its own usage log (Subrouter).
+	CostLookup bool
 }
 
 var (
@@ -37,6 +40,14 @@ func RegisterDynamicProvider(p DynamicProvider) {
 	dynMu.Lock()
 	defer dynMu.Unlock()
 	dynProviders[p.ID] = p
+}
+
+// CostLookupEnabled reports whether the dynamic provider id reconciles its
+// bills from the provider's usage log.
+func CostLookupEnabled(id string) bool {
+	dynMu.RLock()
+	defer dynMu.RUnlock()
+	return dynProviders[id].CostLookup
 }
 
 // UnregisterDynamicProvider removes a dynamic provider instance and its models.

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/market"
 )
@@ -27,6 +28,11 @@ func priceStaticSteps(steps []dispatch.Target, chainMarkup float64) []dispatch.T
 		}
 		mult := 1 + markup/100
 		cacheRead := t.StaticInputPerM * market.CacheReadMult
+		if connectors.CostLookupEnabled(t.Provider) {
+			// Subrouter merchants often bill cache reads at the full input
+			// price; the provisional bill must not undercut that.
+			cacheRead = t.StaticInputPerM
+		}
 		if t.StaticCacheReadSet {
 			cacheRead = t.StaticCacheReadPerM
 		}
@@ -70,4 +76,13 @@ func pinStaticSteps(steps []dispatch.Target, sortRest func([]dispatch.Target) []
 		next++
 	}
 	return out
+}
+
+// stampCostLookup flags every step whose provider reconciles its bills from
+// the provider's usage log, so the meter marks those rows pending.
+func stampCostLookup(steps []dispatch.Target) []dispatch.Target {
+	for i := range steps {
+		steps[i].CostLookup = connectors.CostLookupEnabled(steps[i].Provider)
+	}
+	return steps
 }

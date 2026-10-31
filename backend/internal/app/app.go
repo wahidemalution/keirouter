@@ -969,6 +969,7 @@ func loadCustomProviders(ctx context.Context, db *store.DB, log *slog.Logger) {
 		}
 		connectors.RegisterDynamicProvider(connectors.DynamicProvider{
 			ID: p.ID, DisplayName: p.DisplayName, Alias: p.Alias, Dialect: dialect, BaseURL: p.BaseURL,
+			CostLookup: p.CostLookup == store.CostLookupSubrouter,
 		})
 		// A release may add a built-in provider whose ID or alias matches an
 		// existing custom alias. The custom provider keeps the alias (see
