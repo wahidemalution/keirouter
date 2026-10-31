@@ -48,7 +48,7 @@ func (f *fakeLog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.requests++
 	n := f.requests
-	q := map[string]string{"authorization": r.Header.Get("Authorization"), "user": r.Header.Get("New-Api-User")}
+	q := map[string]string{"authorization": r.Header.Get("Authorization"), "user": r.Header.Get("New-Api-User"), "path": r.URL.Path}
 	for k := range r.URL.Query() {
 		q[k] = r.URL.Query().Get(k)
 	}
@@ -59,10 +59,17 @@ func (f *fakeLog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+// count returns how many usage-log page requests were made (stat calls excluded).
 func (f *fakeLog) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.requests
+	n := 0
+	for _, q := range f.queries {
+		if q["path"] == "/api/log/self" {
+			n++
+		}
+	}
+	return n
 }
 
 func pageOf(items []LogItem, hasMore bool, next string) map[string]any {
@@ -325,4 +332,61 @@ func TestSweepSkipsProvidersWithoutCostLookup(t *testing.T) {
 	require.NoError(t, h.db.CustomProviders().UpdateProvider(ctx, p))
 	h.sw.Pass(ctx)
 	require.Equal(t, 0, h.log.count())
+}
+
+type countingHandler struct {
+	mu    sync.Mutex
+	warns []string
+}
+
+func (c *countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (c *countingHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn {
+		c.mu.Lock()
+		c.warns = append(c.warns, r.Message)
+		c.mu.Unlock()
+	}
+	return nil
+}
+func (c *countingHandler) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *countingHandler) WithGroup(string) slog.Handler      { return c }
+
+func (c *countingHandler) count(msg string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, m := range c.warns {
+		if m == msg {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSweepWarnsDailyGapOnce(t *testing.T) {
+	statCalls := 0
+	h := newHarness(t, func(_ int, q map[string]string) (int, any) {
+		if q["path"] == "/api/log/self/stat" {
+			statCalls++
+			return 200, map[string]any{"success": true, "data": map[string]any{"quota": 50000}}
+		}
+		return 200, pageOf(nil, false, "")
+	})
+	logs := &countingHandler{}
+	h.sw.d.Log = slog.New(logs)
+	h.now = time.Date(2026, 10, 31, 0, 30, 0, 0, time.UTC)
+
+	h.sw.Pass(context.Background())
+	require.Equal(t, 0, statCalls, "yesterday is not checked before 01:00 UTC")
+
+	h.now = time.Date(2026, 10, 31, 1, 5, 0, 0, time.UTC)
+	h.sw.Pass(context.Background())
+	h.now = h.now.Add(10 * time.Second)
+	h.sw.Pass(context.Background())
+	require.Equal(t, 1, statCalls)
+	require.Equal(t, 1, logs.count("cost lookup: provider charged more than keirouter recorded"))
+
+	h.now = time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC)
+	h.sw.Pass(context.Background())
+	require.Equal(t, 2, statCalls, "next day is checked again")
 }

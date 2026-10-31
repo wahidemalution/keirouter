@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,26 @@ func TestLogsDefaultsBaseURL(t *testing.T) {
 	require.Equal(t, "https://subrouter.ai/api/log/self", c.logsURL())
 	c.BaseURL = "https://example.test/"
 	require.Equal(t, "https://example.test/api/log/self", c.logsURL())
+}
+
+func TestStatQuota(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/stat.json")
+	require.NoError(t, err)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/log/self/stat", r.URL.Path)
+		require.Equal(t, "Bearer sys-token", r.Header.Get("Authorization"))
+		require.Equal(t, "19579", r.Header.Get("New-Api-User"))
+		q := r.URL.Query()
+		require.Equal(t, "2", q.Get("type"))
+		require.Equal(t, "1793404800", q.Get("start_timestamp"))
+		require.Equal(t, "1793491199", q.Get("end_timestamp"))
+		require.Equal(t, "Stable API 05", q.Get("token_name"))
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, Token: "sys-token", UserID: "19579", TokenName: "Stable API 05", HTTP: srv.Client()}
+
+	quota, err := c.StatQuota(context.Background(), 1793404800, 1793491199)
+	require.NoError(t, err)
+	require.Equal(t, int64(101715), quota)
 }

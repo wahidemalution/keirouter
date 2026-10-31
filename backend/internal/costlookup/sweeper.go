@@ -62,6 +62,7 @@ type providerState struct {
 	backoff         time.Duration
 	backoffUntil    time.Time
 	loggedStatus    string
+	reportedDay     string
 }
 
 // New returns a sweeper; Run drives it.
@@ -184,6 +185,32 @@ func (s *Sweeper) sweepProvider(ctx context.Context, p store.CustomProvider) {
 	}
 	st.lastEnd = end
 	s.setStatus(ctx, p, st, statusOK)
+	s.checkYesterday(ctx, p, st, client, now)
+}
+
+// checkYesterday compares yesterday's charge with keirouter's records once
+// per UTC day, after 01:00 so late log entries have landed.
+func (s *Sweeper) checkYesterday(ctx context.Context, p store.CustomProvider, st *providerState, c *Client, now time.Time) {
+	now = now.UTC()
+	if now.Hour() < 1 {
+		return
+	}
+	yesterday := now.Add(-24 * time.Hour)
+	day := yesterday.Format("2006-01-02")
+	if st.reportedDay == day {
+		return
+	}
+	st.reportedDay = day
+	r, err := BuildReport(ctx, p.ID, yesterday, c.StatQuota, s.d.Usage)
+	if err != nil {
+		s.d.Log.Warn("cost lookup: daily report failed", "provider", p.ID, "day", day, "err", err)
+		return
+	}
+	if r.Warn {
+		s.d.Log.Warn("cost lookup: provider charged more than keirouter recorded", "provider", p.ID, "day", day,
+			"provider_usd", r.SubrouterUSD, "recorded_usd", r.KeirouterUpstreamUSD, "gap_pct", r.GapPct,
+			"orphans", r.OrphanCount, "unverified", r.Unverified)
+	}
 }
 
 // windowStart reaches back to the oldest pending row and overlaps the

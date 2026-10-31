@@ -120,3 +120,14 @@ func TestAdminCostLookupKeepsTokenOnBlankUpdate(t *testing.T) {
 	require.Equal(t, "", after.CostLookupStatus, "changing cost-lookup settings clears the last status")
 	require.True(t, strings.HasPrefix(body, "{"))
 }
+
+func callCustomProviderURL(t *testing.T, h http.HandlerFunc, target, id string) (int, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec.Code, rec.Body.String()
+}

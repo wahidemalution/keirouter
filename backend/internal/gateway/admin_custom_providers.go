@@ -27,6 +27,7 @@ func (s *Server) mountCustomProviders(r chi.Router) {
 	r.Post("/custom-providers", s.adminCreateCustomProvider)
 	r.Patch("/custom-providers/{id}", s.adminUpdateCustomProvider)
 	r.Delete("/custom-providers/{id}", s.adminDeleteCustomProvider)
+	r.Get("/custom-providers/{id}/cost-lookup/report", s.adminCostLookupReport)
 
 	// Custom models can be attached to any provider id (custom or built-in).
 	r.Get("/providers/{id}/custom-models", s.adminListCustomModels)

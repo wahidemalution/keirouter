@@ -105,6 +105,35 @@ func (c *Client) Logs(ctx context.Context, q LogQuery) (Page, error) {
 	return Page{Items: body.Data.Items, HasMore: body.Data.HasMore, NextCursor: body.Data.NextCursor}, nil
 }
 
+// StatQuota returns the total quota charged over [start, end] (unix seconds)
+// from /api/log/self/stat, filtered by TokenName when set.
+func (c *Client) StatQuota(ctx context.Context, start, end int64) (int64, error) {
+	v := url.Values{}
+	v.Set("type", "2")
+	v.Set("start_timestamp", strconv.FormatInt(start, 10))
+	v.Set("end_timestamp", strconv.FormatInt(end, 10))
+	if c.TokenName != "" {
+		v.Set("token_name", c.TokenName)
+	}
+	var body struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+		Data    struct {
+			Quota *int64 `json:"quota"`
+		} `json:"data"`
+	}
+	if err := c.get(ctx, c.logsURL()+"/stat?"+v.Encode(), &body); err != nil {
+		return 0, err
+	}
+	if !body.Success {
+		return 0, fmt.Errorf("%w: %s", ErrTransient, body.Message)
+	}
+	if body.Data.Quota == nil {
+		return 0, fmt.Errorf("%w: stat response has no quota", ErrTransient)
+	}
+	return *body.Data.Quota, nil
+}
+
 func (c *Client) get(ctx context.Context, u string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
