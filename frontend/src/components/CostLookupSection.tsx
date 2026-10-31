@@ -291,7 +291,7 @@ function ReportBody({ r }: { r: CostLookupReport }) {
       {r.warn && (
         <p role="note" className="flex items-start gap-2 rounded-xl border border-warn/30 bg-warn/5 px-3 py-2.5 text-[12.5px] leading-5 text-fg">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden="true" />
-          Subrouter charged {r.gap_pct.toFixed(1)}% more than keirouter recorded. Check the orphans and unverified rows below.
+          {r.gap_pct.toFixed(1)}% of what Subrouter charged has no matching cost in keirouter. Check the requests charged with no request row below.
         </p>
       )}
       <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-[13px] sm:grid-cols-2">
