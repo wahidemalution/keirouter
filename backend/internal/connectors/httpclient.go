@@ -708,7 +708,6 @@ func openStream(ctx context.Context, provider, model, url string, body []byte, h
 	if err != nil {
 		return nil, err
 	}
-	core.UpstreamMetaFrom(ctx).SetStreamed()
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		return nil, httpStatusError(provider, model, resp, readErrorBody(resp))
@@ -720,6 +719,7 @@ func openStream(ctx context.Context, provider, model, url string, body []byte, h
 		resp.Body.Close()
 		return nil, perr
 	}
+	core.UpstreamMetaFrom(ctx).SetStreamed()
 	return resp, nil
 }
 

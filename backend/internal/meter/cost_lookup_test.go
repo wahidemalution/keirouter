@@ -47,10 +47,15 @@ func TestRecordDropsNonStreamUpstreamID(t *testing.T) {
 
 func TestRecordNoPendingWhen(t *testing.T) {
 	cases := map[string]func(*Event){
-		"cost lookup off": func(e *Event) { e.CostLookup = false },
-		"error status":    func(e *Event) { e.Status = "error"; e.ErrorKind = "upstream" },
-		"zero tokens":     func(e *Event) { e.Usage = core.Usage{} },
-		"cache hit":       func(e *Event) { e.CacheHit = true; e.Status = "" },
+		"cost lookup off":             func(e *Event) { e.CostLookup = false },
+		"zero tokens, no streamed id": func(e *Event) { e.Usage = core.Usage{}; e.Streamed = false; e.UpstreamRequestID = "" },
+		"error, no tokens, no id": func(e *Event) {
+			e.Status = "error"
+			e.ErrorKind = "upstream"
+			e.Usage = core.Usage{}
+			e.Streamed = false
+		},
+		"cache hit": func(e *Event) { e.CacheHit = true; e.Status = "" },
 	}
 	for name, mut := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -60,5 +65,27 @@ func TestRecordNoPendingWhen(t *testing.T) {
 				t.Fatalf("status = %q, want empty", status)
 			}
 		})
+	}
+}
+
+// A stream the client cancelled (or that failed) after Subrouter started
+// generating is still charged by Subrouter; its row must be reconciled too.
+func TestRecordCancelledStreamPending(t *testing.T) {
+	for _, status := range []string{"client_cancelled", "error"} {
+		t.Run(status, func(t *testing.T) {
+			ev := costLookupEvent()
+			ev.Status = status
+			ev.Usage = core.Usage{}
+			got, id := recordOne(t, ev)
+			if got != "pending" || id != "rid" {
+				t.Fatalf("got status %q id %q, want pending rid", got, id)
+			}
+		})
+	}
+	ev := costLookupEvent()
+	ev.Status = "error"
+	ev.Streamed = false
+	if got, _ := recordOne(t, ev); got != "pending" {
+		t.Fatalf("a failed row with tokens must be pending, got %q", got)
 	}
 }

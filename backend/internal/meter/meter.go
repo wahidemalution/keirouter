@@ -327,13 +327,16 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		GuardrailMS: int(ev.Guardrail.Elapsed.Milliseconds()),
 		CreatedAt:   recordedAt,
 	}
-	if ev.CostLookup && status == "success" && !ev.CacheHit && u.PromptTokens+u.CompletionTokens > 0 {
+	streamedID := ""
+	if ev.Streamed {
+		streamedID = ev.UpstreamRequestID
+	}
+	if ev.CostLookup && !ev.CacheHit && (u.PromptTokens+u.CompletionTokens > 0 || streamedID != "") {
 		// Billed now at the step's ceiling price; the cost-lookup sweeper later
-		// rewrites the cost from the provider's usage log.
+		// rewrites the cost from the provider's usage log. Failed and
+		// cancelled streams count too: the provider may still have charged.
 		rec.ReconcileStatus = "pending"
-		if ev.Streamed {
-			rec.UpstreamRequestID = ev.UpstreamRequestID
-		}
+		rec.UpstreamRequestID = streamedID
 	}
 	if ev.SlimStats != nil {
 		rec.SlimBytesSaved, rec.SlimTokensSaved, rec.SlimRules = ev.SlimStats.BytesSaved, ev.SlimStats.TokensSaved, ev.SlimStats.Rules

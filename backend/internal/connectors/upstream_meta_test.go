@@ -51,6 +51,22 @@ func TestSendRequestRecordsOneapiRequestID(t *testing.T) {
 			t.Fatal("a JSON response must not be marked streamed")
 		}
 	})
+	t.Run("stream error is not streamed", func(t *testing.T) {
+		failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Oneapi-Request-Id", "err-id")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"message":"down"}}`))
+		}))
+		defer failing.Close()
+		m := core.NewUpstreamMeta()
+		_, err := openStream(core.WithUpstreamMeta(context.Background(), m), "test", "m", failing.URL, []byte(`{}`), nil)
+		if err == nil {
+			t.Fatal("want an error for a 502")
+		}
+		if m.Streamed() {
+			t.Fatal("an error response must not be marked streamed")
+		}
+	})
 	t.Run("absent header", func(t *testing.T) {
 		m := core.NewUpstreamMeta()
 		_, body, err := doJSONDecode(core.WithUpstreamMeta(context.Background(), m), "test", "m", without.URL, []byte(`{}`), nil)
