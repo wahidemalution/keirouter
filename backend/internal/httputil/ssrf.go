@@ -23,6 +23,9 @@ func SetAllowPrivateBaseURL(allow bool) {
 	allowPrivateBaseURL.Store(allow)
 }
 
+// PrivateBaseURLAllowed reports whether SetAllowPrivateBaseURL(true) is in effect.
+func PrivateBaseURLAllowed() bool { return allowPrivateBaseURL.Load() }
+
 // ErrSSRFBlocked is returned when a URL is blocked by SSRF protection.
 type ErrSSRFBlocked struct {
 	Reason string
