@@ -105,7 +105,7 @@ export function FullBackupSection() {
           <input
             ref={fileRef}
             type="file"
-            accept=".json,application/json"
+            accept=".json,.gz,application/json,application/gzip"
             className="hidden"
             onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}
           />
