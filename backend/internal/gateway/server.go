@@ -22,6 +22,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/audit"
 	"github.com/mydisha/keirouter/backend/internal/auth"
+	"github.com/mydisha/keirouter/backend/internal/backupjob"
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/clitools"
 	"github.com/mydisha/keirouter/backend/internal/config"
@@ -81,6 +82,8 @@ type Server struct {
 	settings         *store.SettingsRepo
 	currencySvc      *currency.Service
 	vault            *vault.Vault
+	backupJob        *backupjob.Runner
+	newBackupTarget  func(backupjob.Settings) (backupjob.Target, error) // tests replace it
 	codecs           *transform.Registry
 	metrics          *observ.Metrics
 	consoleLog       *consolelog.Buffer
@@ -175,6 +178,7 @@ type Deps struct {
 	Codecs               *transform.Registry
 	Metrics              *observ.Metrics
 	ConsoleLog           *consolelog.Buffer
+	BackupJob            *backupjob.Runner // scheduled offsite backups; nil disables the run endpoint
 	CLITools             *clitools.Registry
 	CLITHome             string
 	FrontendDir          string
@@ -245,6 +249,8 @@ func New(d Deps) *Server {
 		resources:           d.Resources,
 		settings:            d.Settings,
 		vault:               d.Vault,
+		backupJob:           d.BackupJob,
+		newBackupTarget:     backupjob.NewTarget,
 		codecs:              d.Codecs,
 		metrics:             d.Metrics,
 		consoleLog:          conLog,

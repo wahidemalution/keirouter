@@ -5,6 +5,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/audit"
 	"github.com/mydisha/keirouter/backend/internal/auth"
+	"github.com/mydisha/keirouter/backend/internal/backupjob"
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/cache"
 	"github.com/mydisha/keirouter/backend/internal/config"
@@ -83,6 +86,7 @@ type App struct {
 	inflight           *inflight.Tracker
 	audit              *audit.Recorder
 	auditSweeper       *audit.Sweeper
+	backupJob          *backupjob.Runner
 	// sharedState releases the redis limiter/budget resources; nil with the
 	// memory backend.
 	sharedState func()
@@ -463,6 +467,16 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	references := market.NewReferenceCache()
 
+	backupJob := backupjob.New(backupjob.Deps{
+		DB: db, Box: sealer, DataDir: dataDir, Log: sysLog("backup"),
+		Audit: func(action, detail string) {
+			auditRec.Record(audit.Event{Action: action, Outcome: audit.OutcomeFailure, ActorType: audit.ActorSystem,
+				ActorID: "system", ResourceType: "backup", Details: map[string]string{"detail": detail}})
+			conLog.Log("ERROR", "Scheduled backups are failing", detail)
+		},
+		Owner: backupOwner(),
+	})
+
 	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references}
 
 	gw := gateway.New(gateway.Deps{
@@ -475,6 +489,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Identity:               idSvc,
 		Auth:                   authSvc,
 		Audit:                  auditRec,
+		BackupJob:              backupJob,
 		Pipeline:               pipe,
 		Conns:                  connRegistry,
 		Chains:                 db.Chains(),
@@ -536,7 +551,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState}
+	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState, backupJob: backupJob}
 
 	return app, nil
 }
@@ -757,6 +772,13 @@ func (a *App) Run(ctx context.Context) error {
 			defer a.bg.Done()
 			a.runHostingExpiry(ctx)
 		}()
+		if a.backupJob != nil {
+			a.bg.Add(1)
+			go func() {
+				defer a.bg.Done()
+				a.backupJob.Run(ctx)
+			}()
+		}
 	}
 
 	errCh := make(chan error, 1)
@@ -863,6 +885,14 @@ func (a *App) loopbackListeners() ([]net.Listener, error) {
 		return nil, fmt.Errorf("app: listen %s: %w", a.cfg.Addr(), err)
 	}
 	return []net.Listener{ln}, nil
+}
+
+// backupOwner names this process in the backup lease.
+func backupOwner() string {
+	host, _ := os.Hostname()
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return host + "-" + hex.EncodeToString(b)
 }
 
 // resolveDataDir returns the configured data directory, creating it if needed.

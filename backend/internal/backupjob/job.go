@@ -314,7 +314,9 @@ func (r *Runner) execute(ctx context.Context, name string) (size int64, note str
 	if err != nil {
 		return 0, "", fmt.Errorf("load settings: %w", err)
 	}
-	if err := s.Validate(); err != nil {
+	complete := s
+	complete.Enabled = true // a run, scheduled or manual, needs a complete destination
+	if err := complete.Validate(); err != nil {
 		return 0, "", err
 	}
 	target, err := r.d.NewTarget(s)
