@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 // allowPrivateBaseURL, when true, relaxes ValidateOutboundURL/ValidateBaseURL
@@ -343,4 +345,36 @@ func ValidateTokenURI(tokenURI string) error {
 	}
 
 	return nil
+}
+
+// ValidateHost applies the outbound URL rules to a bare host name or IP, for
+// non-HTTP clients such as FTP.
+func ValidateHost(host string) error {
+	if host == "" {
+		return &ErrSSRFBlocked{Reason: "empty hostname"}
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return ValidateOutboundURL("https://" + host)
+}
+
+// SafeDialer returns a dialer that re-checks the resolved address right
+// before connecting, so a DNS change after validation cannot redirect the
+// connection to a blocked address.
+func SafeDialer(timeout time.Duration) *net.Dialer {
+	return &net.Dialer{
+		Timeout: timeout,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return &ErrSSRFBlocked{Reason: "invalid dial address"}
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				return &ErrSSRFBlocked{Reason: "unresolved dial address"}
+			}
+			return validateIP(ip)
+		},
+	}
 }
