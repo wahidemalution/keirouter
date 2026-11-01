@@ -62,12 +62,20 @@ func SelectForDeletion(names []string, keep int) []string {
 	return ours[:len(ours)-keep]
 }
 
-// UploadTimeout gives an upload of size bytes at limitKBps 50% headroom,
-// at least 10 minutes; unlimited uploads get 2 hours.
+// unlimitedFloorKBps is the slowest uplink an unlimited upload is given time
+// for (128 KiB/s, about 1 Mbit/s).
+const unlimitedFloorKBps = 128
+
+// UploadTimeout gives an upload of size bytes at limitKBps 50% headroom, at
+// least 10 minutes. An unlimited upload is timed as if it ran at the floor
+// rate, with at least 2 hours, so a large file on a slow uplink can finish.
 func UploadTimeout(size int64, limitKBps int) time.Duration {
 	if limitKBps <= 0 {
-		return unlimitedUploadTimeout
+		return max(atRate(size, unlimitedFloorKBps), unlimitedUploadTimeout)
 	}
-	d := time.Duration(float64(size) / float64(limitKBps*1024) * 1.5 * float64(time.Second))
-	return max(d, minUploadTimeout)
+	return max(atRate(size, limitKBps), minUploadTimeout)
+}
+
+func atRate(size int64, kbps int) time.Duration {
+	return time.Duration(float64(size) / float64(kbps*1024) * 1.5 * float64(time.Second))
 }

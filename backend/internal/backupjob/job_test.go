@@ -355,3 +355,16 @@ func TestRunNowCancelledOnShutdown(t *testing.T) {
 	}
 	require.Equal(t, ResultCancelled, h.status(t).History[0].Result)
 }
+
+// Review I-4: a file Restore would refuse must fail the run, not show as a
+// good restore point.
+func TestRunFailsWhenBackupExceedsRestoreLimit(t *testing.T) {
+	h := newHarness(t)
+	h.r.maxRaw = 100
+	require.Error(t, h.r.runOnce(context.Background()))
+	rec := h.status(t).History[0]
+	require.Equal(t, ResultFailed, rec.Result)
+	require.Contains(t, rec.Note, "too large to restore")
+	require.Empty(t, h.target.files, "nothing uploaded")
+	require.Empty(t, tmpFiles(t, h.dir))
+}

@@ -61,6 +61,9 @@ func TestFTPIntegration(t *testing.T) {
 	names, err = tg.List(ctx)
 	require.NoError(t, err)
 	require.False(t, slices.Contains(names, other), "cancelled upload must not appear as a backup: %v", names)
+	for _, n := range names {
+		require.False(t, strings.HasSuffix(n, ".part"), "review I-5: a failed upload must not leave %s behind", n)
+	}
 
 	require.NoError(t, tg.Delete(ctx, name))
 	names, err = tg.List(ctx)

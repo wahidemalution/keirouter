@@ -22,6 +22,9 @@ import (
 // MinPassphrase is the shortest backup passphrase accepted.
 const MinPassphrase = 8
 
+// MaxRestoreBytes is the largest uncompressed backup Restore reads.
+const MaxRestoreBytes = 4 << 30
+
 const (
 	encScheme    = "passphrase-box-v1"
 	checkText    = "keirouter-backup-check"
@@ -127,6 +130,55 @@ func PrepareRestore(b *store.Backup, box Opener, passphrase string) error {
 		return box.SealString(plain)
 	}); err != nil {
 		return fmt.Errorf("restore failed: %w", err)
+	}
+	return detachSchedule(b)
+}
+
+// detachSchedule turns the scheduled backup off in a backup being restored
+// and drops its run state and lease. Otherwise a restored copy (a staging
+// drill, a second server) would start uploading into the source server's
+// destination within a minute and rotate away the source's own files. The
+// destination and credentials stay, so the admin only has to switch it on.
+func detachSchedule(b *store.Backup) error {
+	for ti := range b.Tables {
+		t := &b.Tables[ti]
+		if t.Name != "settings" {
+			continue
+		}
+		ki, vi := -1, -1
+		for i, c := range t.Columns {
+			switch c {
+			case "key":
+				ki = i
+			case "value":
+				vi = i
+			}
+		}
+		if ki < 0 || vi < 0 {
+			return nil
+		}
+		kept := t.Rows[:0]
+		for _, row := range t.Rows {
+			key, _ := row[ki].(string)
+			switch key {
+			case StateKey, LeaseKey:
+				continue
+			case SettingsKey:
+				raw, _ := row[vi].(string)
+				var doc map[string]any
+				if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+					return fmt.Errorf("restore failed: decode %s: %w", SettingsKey, err)
+				}
+				doc["enabled"] = false
+				enc, err := json.Marshal(doc)
+				if err != nil {
+					return err
+				}
+				row[vi] = string(enc)
+			}
+			kept = append(kept, row)
+		}
+		t.Rows = kept
 	}
 	return nil
 }

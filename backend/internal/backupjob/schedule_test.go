@@ -48,7 +48,10 @@ func TestSelectForDeletion(t *testing.T) {
 
 // Review Focus 3: a slow upload of a large file must get enough time.
 func TestUploadTimeout(t *testing.T) {
-	require.Equal(t, 2*time.Hour, UploadTimeout(5<<30, 0))
+	require.Equal(t, 2*time.Hour, UploadTimeout(100<<20, 0), "unlimited: small files get the 2 h floor")
+	// Review I-2: unlimited must still cover a slow uplink. 3 GiB at the
+	// 128 KiB/s floor rate is 6.8 h; with 50% headroom 10.2 h.
+	require.Equal(t, time.Duration(float64(3<<30)/float64(128*1024)*1.5*float64(time.Second)), UploadTimeout(3<<30, 0))
 	require.Equal(t, 10*time.Minute, UploadTimeout(100<<20, 10_000))
 	want := time.Duration(float64(2<<30) / float64(64*1024) * 1.5 * float64(time.Second))
 	require.Equal(t, want, UploadTimeout(2<<30, 64))

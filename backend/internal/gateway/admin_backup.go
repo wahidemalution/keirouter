@@ -24,7 +24,7 @@ import (
 // passphrase on export and re-sealed under the target's master key on
 // restore, so the target may use a different KEIROUTER_MASTER_KEY.
 
-const maxRestoreBytes = 4 << 30
+const maxRestoreBytes = backupjob.MaxRestoreBytes
 
 // adminFullBackup serves POST /api/settings/backup {"passphrase": "..."} as a
 // downloadable JSON file. The passphrase travels in the body, never the URL.

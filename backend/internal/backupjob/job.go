@@ -50,6 +50,7 @@ type Runner struct {
 	running    bool
 	inflight   sync.WaitGroup
 	life       context.Context // Run's context; manual runs stop with it
+	maxRaw     int64           // largest uncompressed backup Restore accepts
 	bytesSent  atomic.Int64
 	bytesTotal atomic.Int64
 }
@@ -79,7 +80,7 @@ func New(d Deps) *Runner {
 	if d.Audit == nil {
 		d.Audit = func(string, string) {}
 	}
-	return &Runner{d: d}
+	return &Runner{d: d, maxRaw: MaxRestoreBytes}
 }
 
 // started reports whether Run has begun.
@@ -390,11 +391,15 @@ func (r *Runner) writeBackup(ctx context.Context, path, passphrase string) (stri
 	h := sha256.New()
 	cw := &countingWriter{w: io.MultiWriter(f, h)}
 	zw := gzip.NewWriter(cw)
-	_, berr := Build(ctx, r.d.DB, r.d.Box, passphrase, zw)
+	raw := &countingWriter{w: zw}
+	_, berr := Build(ctx, r.d.DB, r.d.Box, passphrase, raw)
 	zerr := zw.Close()
 	ferr := f.Close()
 	if err := errors.Join(berr, zerr, ferr); err != nil {
 		return "", 0, err
+	}
+	if raw.n > r.maxRaw {
+		return "", 0, fmt.Errorf("backup is %d bytes uncompressed, too large to restore (limit %d)", raw.n, r.maxRaw)
 	}
 	return hex.EncodeToString(h.Sum(nil)), cw.n, nil
 }

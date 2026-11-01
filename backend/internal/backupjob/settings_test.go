@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -172,4 +173,35 @@ func TestStoredSecretsSurviveBackupRekey(t *testing.T) {
 	require.Equal(t, "SK", got.S3.SecretAccessKey)
 	require.Equal(t, "ftp-password-value", got.FTP.Password)
 	require.Equal(t, "long-enough-pass", got.Passphrase)
+}
+
+// Review I-3: a restored server must not start shipping into the source
+// server's destination (and rotating its files) on its own.
+func TestRestoreDisablesScheduleAndDropsState(t *testing.T) {
+	ctx := context.Background()
+	src, srcBox := newDB(t), newSealer(t)
+	require.NoError(t, Save(ctx, src.Settings().Set, srcBox, validS3()))
+	require.NoError(t, src.Settings().Set(ctx, StateKey, `{"last_success":"2026-11-01T00:00:00Z"}`))
+	ok, err := src.Settings().ClaimLease(ctx, LeaseKey, "src", time.Now(), time.Hour)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	var buf bytes.Buffer
+	_, err = Build(ctx, src, srcBox, "file-passphrase", &buf)
+	require.NoError(t, err)
+	b, err := store.DecodeBackup(&buf)
+	require.NoError(t, err)
+	dst, dstBox := newDB(t), newSealer(t)
+	require.NoError(t, PrepareRestore(&b, dstBox, "file-passphrase"))
+	_, err = dst.RestoreBackup(ctx, b)
+	require.NoError(t, err)
+
+	got, err := Load(ctx, dst.Settings().Get, dstBox)
+	require.NoError(t, err)
+	require.False(t, got.Enabled, "schedule must be off after a restore")
+	require.Equal(t, "SK", got.S3.SecretAccessKey, "the rest of the config survives")
+	_, err = dst.Settings().Get(ctx, StateKey)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, err = dst.Settings().Get(ctx, LeaseKey)
+	require.ErrorIs(t, err, store.ErrNotFound)
 }

@@ -89,8 +89,8 @@ func (t *ftpTarget) with(ctx context.Context, fn func(*ftp.ServerConn) error) er
 }
 
 func (t *ftpTarget) Put(ctx context.Context, name string, r io.Reader, size int64) error {
-	return t.with(ctx, func(c *ftp.ServerConn) error {
-		part := t.path(name + ".part")
+	part := t.path(name + ".part")
+	err := t.with(ctx, func(c *ftp.ServerConn) error {
 		if err := c.Stor(part, r); err != nil {
 			return fmt.Errorf("ftp: upload: %w", err)
 		}
@@ -99,6 +99,14 @@ func (t *ftpTarget) Put(ctx context.Context, name string, r io.Reader, size int6
 		}
 		return nil
 	})
+	if err != nil {
+		// Rotation ignores .part files, so a partial upload would stay
+		// forever. Remove it on a fresh connection, even after a cancel.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_ = t.with(cctx, func(c *ftp.ServerConn) error { return c.Delete(part) })
+	}
+	return err
 }
 
 func (t *ftpTarget) Size(ctx context.Context, name string) (int64, error) {
