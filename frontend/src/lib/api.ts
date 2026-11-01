@@ -1680,6 +1680,105 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json() as Promise<T>;
 }
 
+// Scheduled offsite backup (S3 / FTP). Secrets come back only as { set }.
+export interface SecretState {
+  set: boolean;
+}
+export interface AutoBackupSettings {
+  enabled: boolean;
+  destination: "s3" | "ftp";
+  interval_hours: number;
+  keep: number;
+  upload_limit_kbps: number;
+  passphrase: SecretState;
+  s3: {
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    access_key_id: string;
+    secret_access_key: SecretState;
+    path_style: boolean;
+  };
+  ftp: {
+    host: string;
+    port: number;
+    tls: "explicit" | "none";
+    username: string;
+    password: SecretState;
+    folder: string;
+  };
+}
+/** The save/test body: secrets are plain strings, empty keeps the stored one. */
+export type AutoBackupInput = Omit<AutoBackupSettings, "passphrase" | "s3" | "ftp"> & {
+  passphrase: string;
+  s3: Omit<AutoBackupSettings["s3"], "secret_access_key"> & { secret_access_key: string };
+  ftp: Omit<AutoBackupSettings["ftp"], "password"> & { password: string };
+};
+export interface AutoBackupRun {
+  started_at: string;
+  result: "success" | "failed" | "cancelled";
+  size: number;
+  duration_ms: number;
+  note: string;
+  file: string;
+}
+export interface AutoBackupStatus {
+  state: {
+    last_success: string;
+    last_attempt: string;
+    last_failed: boolean;
+    consecutive_failures: number;
+    last_size: number;
+    last_file: string;
+  };
+  next_due: string;
+  running: boolean;
+  bytes_sent: number;
+  bytes_total: number;
+  failing: boolean;
+  history: AutoBackupRun[];
+}
+export interface AutoBackupView {
+  settings: AutoBackupSettings;
+  status: AutoBackupStatus;
+}
+/** An auto-backup request error; field names the setting that failed validation. */
+export class AutoBackupError extends Error {
+  status: number;
+  field?: string;
+  constructor(status: number, message: string, field?: string) {
+    super(message);
+    this.status = status;
+    this.field = field;
+  }
+}
+
+async function autoBackupRequest<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+  const res = await fetchWithTimeout(
+    `/api/settings/auto-backup${path}`,
+    {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    let message = res.statusText;
+    let field: string | undefined;
+    try {
+      const data = await res.json();
+      message = data?.error?.message ?? message;
+      field = data?.error?.field;
+    } catch {
+      // keep statusText
+    }
+    throw new AutoBackupError(res.status, message, field);
+  }
+  return res.json() as Promise<T>;
+}
+
 export interface FullRestoreResult {
   ok: boolean;
   tables: number;
@@ -2953,6 +3052,11 @@ export const api = {
     if (!res.ok) throw new APIError(res.status, await errorMessage(res));
     return res.json() as Promise<FullRestoreResult>;
   },
+
+  getAutoBackup: () => autoBackupRequest<AutoBackupView>("GET", ""),
+  saveAutoBackup: (input: AutoBackupInput) => autoBackupRequest<AutoBackupView>("POST", "", input),
+  testAutoBackup: (input: AutoBackupInput) => autoBackupRequest<{ ok: true }>("POST", "/test", input, 90_000),
+  runAutoBackup: () => autoBackupRequest<{ started: true }>("POST", "/run", {}),
 
   sqliteStatus: () => request<SQLiteStatus>("GET", "/settings/sqlite"),
   backupSQLite: () => requestBlob("GET", "/settings/sqlite/backup"),

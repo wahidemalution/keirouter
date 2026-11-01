@@ -10,6 +10,7 @@ import {
 } from "../../lib/api";
 import { useToast } from "../../components/Toast";
 import { FullBackupSection } from "../../components/FullBackupSection";
+import { AutoBackupSection } from "../../components/AutoBackupSection";
 import { useConfirm } from "../../components/ui/confirm-dialog";
 import { Badge, Button, ErrorBanner, Input, Modal } from "../../components/ui";
 import { Code, Note, SettingRow, SettingsCard } from "./shared";
@@ -21,6 +22,7 @@ export function ImportExportTab() {
   const [dbLoading, setDbLoading] = useState(false);
   return (
     <div className="space-y-4">
+      <AutoBackupSection />
       <FullBackupSection />
       <DatabaseSettings loading={dbLoading} setLoading={setDbLoading} />
       <DangerZone loading={dbLoading} setLoading={setDbLoading} />
