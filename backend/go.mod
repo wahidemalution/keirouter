@@ -11,6 +11,7 @@ require (
 	github.com/gogpu/systray v0.2.9-0.20260810092929-45314be7ffa1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jlaffaye/ftp v0.2.2
 	github.com/knadh/koanf/parsers/yaml v0.1.0
 	github.com/knadh/koanf/providers/env v1.0.0
 	github.com/knadh/koanf/providers/file v1.1.2
