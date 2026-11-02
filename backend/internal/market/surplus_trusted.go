@@ -84,6 +84,7 @@ func (q TrustedQuote) model(slug string) Model {
 type trustedBookEnvelope struct {
 	Offers []struct {
 		ProviderID        string   `json:"provider_id"`
+		Provider          string   `json:"provider"`
 		Trusted           bool     `json:"trusted"`
 		Available         bool     `json:"available"`
 		Healthy           bool     `json:"healthy"`
@@ -94,23 +95,24 @@ type trustedBookEnvelope struct {
 	} `json:"offers"`
 }
 
-// ParseSurplusTrustedBook reads GET /api/markets/:model and quotes only offers
-// with trusted, available and healthy all true. depth (>=1) is how many
-// distinct price levels the ceiling admits; fewer levels use the deepest.
-// floorPct > 0 is the provider's /min{N} floor: offers that cannot prove at
-// least that discount below list on both rates are dropped, as Surplus would
-// skip them. Offers from blocked providers are ignored.
-func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int, blocked []string) (TrustedQuote, error) {
+// TrustedOffer is one order-book offer that routing may use, in USD/M.
+// DirectIn/DirectOut are zero when the book publishes no list price.
+type TrustedOffer struct {
+	ProviderID, Provider         string
+	In, Out, DirectIn, DirectOut float64
+}
+
+// EligibleTrustedOffers decodes GET /api/markets/:model and returns, in book
+// order, the offers with trusted, available and healthy all true, a valid
+// price and a non-blocked provider. floorPct > 0 is the provider's /min{N}
+// floor: offers that cannot prove at least that discount below list on both
+// rates are dropped, as Surplus would skip them.
+func EligibleTrustedOffers(r io.Reader, floorPct int, blocked []string) ([]TrustedOffer, error) {
 	var body trustedBookEnvelope
 	if err := json.NewDecoder(r).Decode(&body); err != nil {
-		return TrustedQuote{}, err
+		return nil, err
 	}
-	if depth < 1 {
-		depth = 1
-	}
-	type ask struct{ in, out, directIn, directOut float64 }
-	var asks []ask
-	providers := map[string]bool{}
+	var offers []TrustedOffer
 	skip := providerSet(blocked)
 	for _, o := range body.Offers {
 		if !o.Trusted || !o.Available || !o.Healthy || o.ProviderID == "" || skip[strings.ToLower(o.ProviderID)] {
@@ -119,18 +121,39 @@ func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int, blocked []string)
 		if o.PriceInputPer1M == nil || o.PriceOutputPer1M == nil {
 			continue
 		}
-		a := ask{in: *o.PriceInputPer1M / surplusUnitScale, out: *o.PriceOutputPer1M / surplusUnitScale}
-		if !validRate(a.in) || !validRate(a.out) || a.out <= 0 {
+		a := TrustedOffer{ProviderID: o.ProviderID, Provider: o.Provider, In: *o.PriceInputPer1M / surplusUnitScale, Out: *o.PriceOutputPer1M / surplusUnitScale}
+		if !validRate(a.In) || !validRate(a.Out) || a.Out <= 0 {
 			continue
 		}
 		if o.DirectInputPer1M != nil && o.DirectOutputPer1M != nil {
-			a.directIn = *o.DirectInputPer1M / surplusUnitScale
-			a.directOut = *o.DirectOutputPer1M / surplusUnitScale
+			a.DirectIn = *o.DirectInputPer1M / surplusUnitScale
+			a.DirectOut = *o.DirectOutputPer1M / surplusUnitScale
 		}
-		if floorPct > 0 && !meetsFloor(a.in, a.out, a.directIn, a.directOut, floorPct) {
+		if floorPct > 0 && !meetsFloor(a.In, a.Out, a.DirectIn, a.DirectOut, floorPct) {
 			continue
 		}
-		asks = append(asks, a)
+		offers = append(offers, a)
+	}
+	return offers, nil
+}
+
+// ParseSurplusTrustedBook reads GET /api/markets/:model and quotes only the
+// offers EligibleTrustedOffers keeps. depth (>=1) is how many distinct price
+// levels the ceiling admits; fewer levels use the deepest. floorPct and
+// blocked are passed through to the filter.
+func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int, blocked []string) (TrustedQuote, error) {
+	offers, err := EligibleTrustedOffers(r, floorPct, blocked)
+	if err != nil {
+		return TrustedQuote{}, err
+	}
+	if depth < 1 {
+		depth = 1
+	}
+	type ask struct{ in, out, directIn, directOut float64 }
+	var asks []ask
+	providers := map[string]bool{}
+	for _, o := range offers {
+		asks = append(asks, ask{in: o.In, out: o.Out, directIn: o.DirectIn, directOut: o.DirectOut})
 		providers[o.ProviderID] = true
 	}
 	if len(asks) == 0 {

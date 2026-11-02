@@ -2,6 +2,7 @@ package market
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -222,5 +223,17 @@ func TestParseSurplusTrustedBookSkipsBlockedProvider(t *testing.T) {
 	}
 	if q.MinDiscountPct != 93 {
 		t.Fatalf("ceiling = %d, want 93 from openai's 95.5%%", q.MinDiscountPct)
+	}
+}
+
+func TestEligibleTrustedOffersKeepsProviderLabel(t *testing.T) {
+	book := `{"offers":[{"provider":"OpenRouter","provider_id":"openrouter","price_input_per_1m":500000,"price_output_per_1m":2000000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true}]}`
+	got, err := EligibleTrustedOffers(strings.NewReader(book), 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TrustedOffer{{ProviderID: "openrouter", Provider: "OpenRouter", In: 0.5, Out: 2, DirectIn: 1, DirectOut: 4}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("offers = %+v, want %+v", got, want)
 	}
 }

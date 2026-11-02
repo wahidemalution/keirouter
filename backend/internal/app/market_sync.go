@@ -78,11 +78,8 @@ type trustedBinding struct {
 	floorPct int
 }
 
-// boundTrustedSurplusModels returns the Surplus model names referenced by any
-// chain (chain-level or per-step) through a slug with the given prefix
-// (surplus-trusted: or surplus-fast:). Each carries the lowest /min{N} floor
-// among the step providers serving it, so a quote is never stricter than the
-// most permissive route that can reach Surplus.
+// boundTrustedSurplusModels loads the tenant's chains and custom provider
+// floors and binds them with market.BindTrustedSurplus.
 func (a *App) boundTrustedSurplusModels(ctx context.Context, prefix string) []trustedBinding {
 	chains, err := a.db.Chains().ListByTenant(ctx, store.DefaultTenantID)
 	if err != nil {
@@ -97,44 +94,24 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context, prefix string) []tr
 	} else {
 		a.log.Debug("surplus trusted: list custom providers failed", "err", err)
 	}
-	idx := map[string]int{}
 	var out []trustedBinding
-	add := func(slug, provider string) {
-		name, ok := strings.CutPrefix(slug, prefix)
-		if !ok || name == "" {
-			return
-		}
-		floor := floors[provider]
-		if i, seen := idx[name]; seen {
-			out[i].floorPct = min(out[i].floorPct, floor)
-			return
-		}
-		idx[name] = len(out)
-		out = append(out, trustedBinding{name: name, floorPct: floor})
-	}
-	var unserved []string
-	for _, c := range chains {
-		for _, st := range c.Steps {
-			if st.MarketSlug != "" {
-				add(st.MarketSlug, st.Provider)
-				continue
-			}
-			for _, slug := range c.MarketSlugs {
-				if strings.TrimPrefix(slug, prefix) == st.Model {
-					add(slug, st.Provider)
-				}
-			}
-		}
-		unserved = append(unserved, c.MarketSlugs...)
-	}
-	// A chain-level slug no step serves is still quoted for display, without a
-	// floor, unless some step already bound it.
-	for _, slug := range unserved {
-		if _, seen := idx[strings.TrimPrefix(slug, prefix)]; !seen {
-			add(slug, "")
-		}
+	for _, b := range market.BindTrustedSurplus(chainRoutes(chains), prefix, floors) {
+		out = append(out, trustedBinding{name: b.Name, floorPct: b.FloorPct})
 	}
 	return out
+}
+
+// chainRoutes keeps only the chain fields Surplus binding reads.
+func chainRoutes(chains []store.Chain) []market.ChainRoute {
+	routes := make([]market.ChainRoute, len(chains))
+	for i, c := range chains {
+		steps := make([]market.StepRoute, len(c.Steps))
+		for j, st := range c.Steps {
+			steps[j] = market.StepRoute{MarketSlug: st.MarketSlug, Model: st.Model, Provider: st.Provider}
+		}
+		routes[i] = market.ChainRoute{MarketSlugs: c.MarketSlugs, Steps: steps}
+	}
+	return routes
 }
 
 // fetchSurplusTrusted quotes every bound surplus-trusted model from its order
