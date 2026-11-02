@@ -81,24 +81,42 @@ func seriesView(se finance.Series) map[string]any {
 }
 
 // adminFinanceReport returns the overview and chart series for
-// ?range=today|7d|30d|all (default 30d).
+// ?range=today|7d|30d|all (default 30d), or ?range=custom&from=YYYY-MM-DD&to=YYYY-MM-DD
+// with both days inclusive in the server zone.
 func (s *Server) adminFinanceReport(w http.ResponseWriter, r *http.Request) {
-	rangeName := r.URL.Query().Get("range")
+	q := r.URL.Query()
+	rangeName := q.Get("range")
 	if rangeName == "" {
 		rangeName = "30d"
 	}
-	rep, err := s.financeLoader().Report(r.Context(), rangeName)
+	var (
+		rep finance.Report
+		err error
+	)
+	if rangeName == "custom" {
+		rep, err = s.financeLoader().ReportCustom(r.Context(), q.Get("from"), q.Get("to"))
+	} else {
+		rep, err = s.financeLoader().Report(r.Context(), rangeName)
+	}
 	if err != nil {
 		if errors.Is(err, finance.ErrBadRange) {
-			writeError(w, http.StatusBadRequest, "range must be one of today, 7d, 30d, all")
+			if rangeName == "custom" {
+				writeError(w, http.StatusBadRequest, "custom range needs from and to as YYYY-MM-DD, from on or before to, to not after today, at most 3660 days")
+				return
+			}
+			writeError(w, http.StatusBadRequest, "range must be one of today, 7d, 30d, all, custom")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"range":    rep.Range,
 		"overview": overviewView(rep.Overview),
 		"series":   seriesView(rep.Series),
-	})
+	}
+	if rep.Range == "custom" {
+		body["from"], body["to"] = rep.From, rep.To
+	}
+	writeJSON(w, http.StatusOK, body)
 }

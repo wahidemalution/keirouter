@@ -231,11 +231,23 @@ type PaidOrderTotals struct{ Count, AmountIDR, CreditMicros int64 }
 // since. Hosting orders are left out: they buy a service, not credit. Orders
 // with an empty paid_at fall back to created_at.
 func (r *PaymentOrderRepo) PaidTotalsSince(ctx context.Context, since time.Time) (PaidOrderTotals, error) {
+	return r.PaidTotalsBetween(ctx, since, time.Time{})
+}
+
+// PaidTotalsBetween is PaidTotalsSince limited to orders paid before until.
+// A zero until means no upper bound.
+func (r *PaymentOrderRepo) PaidTotalsBetween(ctx context.Context, since, until time.Time) (PaidOrderTotals, error) {
+	where := ""
+	args := []any{ProductCredit, string(PaymentCompleted), string(PaymentManual), formatTime(since)}
+	if !until.IsZero() {
+		where = " AND COALESCE(NULLIF(paid_at, ''), created_at) < ?"
+		args = append(args, formatTime(until))
+	}
 	q := r.db.rebind(`SELECT COUNT(*), COALESCE(SUM(amount_idr), 0), COALESCE(SUM(credit_micros), 0)
 		FROM payment_orders
-		WHERE product = ? AND status IN (?, ?) AND COALESCE(NULLIF(paid_at, ''), created_at) >= ?`)
+		WHERE product = ? AND status IN (?, ?) AND COALESCE(NULLIF(paid_at, ''), created_at) >= ?` + where)
 	var t PaidOrderTotals
-	if err := r.db.sql.QueryRowContext(ctx, q, ProductCredit, string(PaymentCompleted), string(PaymentManual), formatTime(since)).
+	if err := r.db.sql.QueryRowContext(ctx, q, args...).
 		Scan(&t.Count, &t.AmountIDR, &t.CreditMicros); err != nil {
 		return PaidOrderTotals{}, fmt.Errorf("store: paid totals: %w", err)
 	}

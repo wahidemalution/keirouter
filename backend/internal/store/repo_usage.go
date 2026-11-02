@@ -961,6 +961,12 @@ type CostBasisPoint struct {
 // and chain. A bucket is floor((unix seconds + offsetSecs) / slotSecs), so an
 // offset of a zone's UTC offset aligns daily buckets to that zone's midnight.
 func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since time.Time, slotSecs, offsetSecs int64) ([]CostBasisPoint, error) {
+	return r.CostBasisSeriesBetween(ctx, tenantID, since, time.Time{}, slotSecs, offsetSecs)
+}
+
+// CostBasisSeriesBetween is CostBasisSeries limited to created_at before
+// until. A zero until means no upper bound.
+func (r *UsageRepo) CostBasisSeriesBetween(ctx context.Context, tenantID string, since, until time.Time, slotSecs, offsetSecs int64) ([]CostBasisPoint, error) {
 	if slotSecs <= 0 {
 		return nil, fmt.Errorf("store: cost basis series: slot must be positive")
 	}
@@ -970,9 +976,13 @@ func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since 
 			COALESCE(SUM(upstream_cost_nanos), 0),
 			COALESCE(SUM(CASE WHEN upstream_cost_nanos = 0 THEN cost_nanos ELSE 0 END), 0)
 		FROM usage_records
-		WHERE tenant_id = ? AND pricing_backfilled = 0 AND created_at >= ?
-		GROUP BY bucket, COALESCE(chain_id, '') ORDER BY bucket, COALESCE(chain_id, '')`, r.db.epochExpr("created_at")))
-	rows, err := r.db.sql.QueryContext(ctx, q, offsetSecs, slotSecs, tenantID, formatTime(since))
+		WHERE tenant_id = ? AND pricing_backfilled = 0 AND created_at >= ?%s
+		GROUP BY bucket, COALESCE(chain_id, '') ORDER BY bucket, COALESCE(chain_id, '')`, r.db.epochExpr("created_at"), untilClause(until)))
+	args := []any{offsetSecs, slotSecs, tenantID, formatTime(since)}
+	if !until.IsZero() {
+		args = append(args, formatTime(until))
+	}
+	rows, err := r.db.sql.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: cost basis series: %w", err)
 	}
@@ -990,7 +1000,25 @@ func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since 
 
 // CostBasis groups non-backfilled usage since the cut-off by provider and chain.
 func (r *UsageRepo) CostBasis(ctx context.Context, tenantID string, since time.Time) ([]CostBasisRow, error) {
-	return r.queryCostBasis(ctx, "", tenantID, formatTime(since))
+	return r.CostBasisBetween(ctx, tenantID, since, time.Time{})
+}
+
+// CostBasisBetween is CostBasis limited to created_at before until. A zero
+// until means no upper bound.
+func (r *UsageRepo) CostBasisBetween(ctx context.Context, tenantID string, since, until time.Time) ([]CostBasisRow, error) {
+	if until.IsZero() {
+		return r.queryCostBasis(ctx, "", tenantID, formatTime(since))
+	}
+	return r.queryCostBasis(ctx, untilClause(until), tenantID, formatTime(since), formatTime(until))
+}
+
+// untilClause is the exclusive upper bound on created_at, or nothing for a
+// zero until.
+func untilClause(until time.Time) string {
+	if until.IsZero() {
+		return ""
+	}
+	return " AND created_at < ?"
 }
 
 // OutstandingPortalCredit sums the remaining total-period budget of every

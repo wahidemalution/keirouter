@@ -25,6 +25,7 @@ type Loader struct {
 // Report is the finance dashboard payload for one range.
 type Report struct {
 	Range    string
+	From, To string // custom range days, YYYY-MM-DD; empty for named ranges
 	Overview Overview
 	Series   Series
 }
@@ -65,22 +66,54 @@ func (l *Loader) Markups(ctx context.Context) (Markups, error) {
 	return m, nil
 }
 
-// Report builds the overview and chart series for a range.
+// Report builds the overview and chart series for a named range.
 func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	now := l.now()
 	start, err := RangeStart(rangeName, now)
 	if err != nil {
 		return Report{}, fmt.Errorf("%w: %q", ErrBadRange, rangeName)
 	}
+	plan, err := planSeries(rangeName, now)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: %q", ErrBadRange, rangeName)
+	}
+	return l.build(ctx, rangeName, start, time.Time{}, plan, now)
+}
+
+// ReportCustom builds the report for the days from..to, both inclusive, as
+// YYYY-MM-DD in hosting.Zone.
+func (l *Loader) ReportCustom(ctx context.Context, from, to string) (Report, error) {
+	f, err := ParseDay(from)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: from %q", ErrBadRange, from)
+	}
+	t, err := ParseDay(to)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: to %q", ErrBadRange, to)
+	}
+	now := l.now()
+	plan, err := planCustom(f, t, now)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: %s to %s", ErrBadRange, from, to)
+	}
+	rep, err := l.build(ctx, "custom", f, plan.until, plan, now)
+	if err != nil {
+		return Report{}, err
+	}
+	rep.From, rep.To = from, to
+	return rep, nil
+}
+
+func (l *Loader) build(ctx context.Context, rangeName string, start, until time.Time, plan seriesPlan, now time.Time) (Report, error) {
 	m, err := l.Markups(ctx)
 	if err != nil {
 		return Report{}, err
 	}
-	rangeRows, err := l.DB.Usage().CostBasis(ctx, store.DefaultTenantID, start)
+	rangeRows, err := l.DB.Usage().CostBasisBetween(ctx, store.DefaultTenantID, start, until)
 	if err != nil {
 		return Report{}, err
 	}
-	paid, err := l.DB.PaymentOrders().PaidTotalsSince(ctx, start)
+	paid, err := l.DB.PaymentOrders().PaidTotalsBetween(ctx, start, until)
 	if err != nil {
 		return Report{}, err
 	}
@@ -88,11 +121,7 @@ func (l *Loader) Report(ctx context.Context, rangeName string) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	plan, err := planSeries(rangeName, now)
-	if err != nil {
-		return Report{}, fmt.Errorf("%w: %q", ErrBadRange, rangeName)
-	}
-	pts, err := l.DB.Usage().CostBasisSeries(ctx, store.DefaultTenantID, plan.start, plan.slot, plan.offset)
+	pts, err := l.DB.Usage().CostBasisSeriesBetween(ctx, store.DefaultTenantID, plan.querySince(), plan.until, plan.slot, plan.offset)
 	if err != nil {
 		return Report{}, err
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mydisha/keirouter/backend/internal/crypto"
+	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/inflight"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/vault"
@@ -63,6 +64,17 @@ func TestFinance_RangeValidation(t *testing.T) {
 	require.Equal(t, "7d", m["range"])
 	require.NotNil(t, m["overview"])
 	require.Nil(t, m["accounts"], "upstream balances were removed")
+
+	today := time.Now().In(hosting.Zone).Format("2006-01-02")
+	rec = doJSON(t, h, http.MethodGet, "/payments/finance?range=custom&from="+today+"&to="+today, "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	m = decodeBody(t, rec)
+	require.Equal(t, "custom", m["range"])
+	require.Equal(t, today, m["from"])
+	require.Equal(t, "hour", m["series"].(map[string]any)["granularity"])
+
+	rec = doJSON(t, h, http.MethodGet, "/payments/finance?range=custom&from="+today, "")
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }
 
 func TestFinance_OverviewProfit(t *testing.T) {

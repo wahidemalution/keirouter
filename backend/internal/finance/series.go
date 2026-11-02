@@ -29,7 +29,62 @@ type seriesPlan struct {
 	slot        int64     // query bucket size in seconds
 	offset      int64     // the zone's UTC offset now, aligning buckets to its hours and days
 	start       time.Time // first bucket start; zero for all time
-	buckets     int       // number of buckets; 0 for all time
+	buckets     int       // number of buckets; 0 for monthly plans
+	since       time.Time // query lower bound; zero means start
+	until       time.Time // exclusive query upper bound; zero for none
+	lastMonth   time.Time // custom monthly plans: last month shown; zero ends at now
+}
+
+// MaxCustomDays caps a custom range so a request can't ask for an unbounded
+// scan of daily buckets. Ranges longer than dailyLimitDays switch to months.
+const (
+	MaxCustomDays  = 3660
+	dailyLimitDays = 92
+)
+
+// ParseDay reads a YYYY-MM-DD date as midnight in hosting.Zone.
+func ParseDay(s string) (time.Time, error) {
+	return time.ParseInLocation("2006-01-02", s, hosting.Zone)
+}
+
+// planCustom cuts the days from..to (both inclusive, midnight in
+// hosting.Zone) into buckets: hours for a single day, days up to
+// dailyLimitDays, months beyond that. The last day may not be after today.
+func planCustom(from, to, now time.Time) (seriesPlan, error) {
+	n := now.In(hosting.Zone)
+	_, off := n.Zone()
+	offset := int64(off)
+	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, hosting.Zone)
+	if to.Before(from) || to.After(today) {
+		return seriesPlan{}, ErrBadRange
+	}
+	end := to.AddDate(0, 0, 1)
+	days := 0
+	for d := from; d.Before(end); d = d.AddDate(0, 0, 1) {
+		days++
+		if days > MaxCustomDays {
+			return seriesPlan{}, ErrBadRange
+		}
+	}
+	switch {
+	case days == 1:
+		hours := 24
+		if from.Equal(today) {
+			hours = n.Hour() + 1
+		}
+		return seriesPlan{granularity: "hour", slot: 3600, offset: offset, start: from, buckets: hours, until: end}, nil
+	case days <= dailyLimitDays:
+		return seriesPlan{granularity: "day", slot: 86400, offset: offset, start: from, buckets: days, until: end}, nil
+	}
+	return seriesPlan{granularity: "month", slot: 86400, offset: offset, start: monthStart(from), since: from, until: end, lastMonth: monthStart(to)}, nil
+}
+
+// querySince is the lower bound for the series query.
+func (p seriesPlan) querySince() time.Time {
+	if !p.since.IsZero() {
+		return p.since
+	}
+	return p.start
 }
 
 func planSeries(rangeName string, now time.Time) (seriesPlan, error) {
@@ -39,11 +94,11 @@ func planSeries(rangeName string, now time.Time) (seriesPlan, error) {
 	midnight := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, hosting.Zone)
 	switch rangeName {
 	case "today":
-		return seriesPlan{"hour", 3600, offset, midnight, n.Hour() + 1}, nil
+		return seriesPlan{granularity: "hour", slot: 3600, offset: offset, start: midnight, buckets: n.Hour() + 1}, nil
 	case "7d":
-		return seriesPlan{"day", 86400, offset, midnight.AddDate(0, 0, -6), 7}, nil
+		return seriesPlan{granularity: "day", slot: 86400, offset: offset, start: midnight.AddDate(0, 0, -6), buckets: 7}, nil
 	case "30d":
-		return seriesPlan{"day", 86400, offset, midnight.AddDate(0, 0, -29), 30}, nil
+		return seriesPlan{granularity: "day", slot: 86400, offset: offset, start: midnight.AddDate(0, 0, -29), buckets: 30}, nil
 	case "all":
 		return seriesPlan{granularity: "month", slot: 86400, offset: offset}, nil
 	}
@@ -85,7 +140,11 @@ func BuildSeries(plan seriesPlan, pts []store.CostBasisPoint, m Markups, now tim
 	}
 
 	var starts []time.Time
-	if plan.granularity == "month" {
+	if plan.granularity == "month" && !plan.lastMonth.IsZero() {
+		for t := plan.start; !t.After(plan.lastMonth); t = t.AddDate(0, 1, 0) {
+			starts = append(starts, t)
+		}
+	} else if plan.granularity == "month" {
 		if !first.IsZero() {
 			last := monthStart(now.In(hosting.Zone))
 			for t := first; !t.After(last); t = t.AddDate(0, 1, 0) {
