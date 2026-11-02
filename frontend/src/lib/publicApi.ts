@@ -124,3 +124,29 @@ export interface PublicHosting {
 }
 
 export const fetchPublicHosting = () => getJSON<PublicHosting>("/v1/public/hosting");
+
+export interface PublicModelDetailRoute {
+  name: string;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  tokens_per_sec: number | null;
+  success_pct: number | null;
+  share_pct: number;
+}
+
+/** Market detail for one live-priced model. Prices are what a customer pays,
+ * margin included. Null fields mean that source is unavailable right now. */
+export interface PublicModelDetail {
+  model: string;
+  as_of: string | null;
+  official_input_per_m: number | null;
+  official_output_per_m: number | null;
+  best: { input_per_m: number; output_per_m: number; discount_pct: number | null } | null;
+  median_discount_pct: number | null;
+  offer_count: number | null;
+  requests_24h: number;
+  performance: { as_of: string; routes: PublicModelDetailRoute[] } | null;
+}
+
+export const fetchPublicModelDetail = (model: string) =>
+  getJSON<PublicModelDetail>("/v1/public/model-detail?model=" + encodeURIComponent(model));
