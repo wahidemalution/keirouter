@@ -26,9 +26,17 @@ func TestBoundTrustedFloorsGolden(t *testing.T) {
 		}
 	}
 	slug1, slug2 := market.SurplusTrustedPrefix+"m1", market.SurplusTrustedPrefix+"m2"
+	slug3, slug4 := market.SurplusTrustedPrefix+"m3", market.SurplusTrustedPrefix+"m4"
 	for _, c := range []store.Chain{
 		{ID: "A", Name: "A", Steps: []store.ChainStep{{ID: "A-s", ChainID: "A", Provider: "p30", Model: "m1", MarketSlug: slug1}}},
 		{ID: "B", Name: "B", Steps: []store.ChainStep{{ID: "B-s", ChainID: "B", Provider: "p10", Model: "m1", MarketSlug: slug1}}},
+		// m3 meets the lower floor first, m4 last, so only min() passes both.
+		{ID: "D", Name: "D", Steps: []store.ChainStep{
+			{ID: "D-1", ChainID: "D", Position: 0, Provider: "p10", Model: "m3", MarketSlug: slug3},
+			{ID: "D-2", ChainID: "D", Position: 1, Provider: "p30", Model: "m3", MarketSlug: slug3},
+			{ID: "D-3", ChainID: "D", Position: 2, Provider: "p30", Model: "m4", MarketSlug: slug4},
+			{ID: "D-4", ChainID: "D", Position: 3, Provider: "p10", Model: "m4", MarketSlug: slug4},
+		}},
 		// m2 is chain-level only; its one step serves another model.
 		{ID: "C", Name: "C", MarketSlugs: []string{slug2}, Steps: []store.ChainStep{{ID: "C-s", ChainID: "C", Provider: "pnone", Model: "other"}}},
 	} {
@@ -39,8 +47,13 @@ func TestBoundTrustedFloorsGolden(t *testing.T) {
 	}
 	a := newSyncTestApp(t, db)
 	got := a.boundTrustedSurplusModels(ctx, market.SurplusTrustedPrefix)
-	want := []trustedBinding{{name: "m1", floorPct: 10}, {name: "m2", floorPct: 0}}
-	if !reflect.DeepEqual(got, want) {
+	// Chains list newest first and may tie on created_at, so compare by name.
+	want := map[string]int{"m1": 10, "m2": 0, "m3": 10, "m4": 10}
+	floors := map[string]int{}
+	for _, b := range got {
+		floors[b.name] = b.floorPct
+	}
+	if len(got) != len(want) || !reflect.DeepEqual(floors, want) {
 		t.Fatalf("bindings = %+v, want %+v", got, want)
 	}
 }

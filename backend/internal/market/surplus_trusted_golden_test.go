@@ -17,6 +17,7 @@ const goldenBook = `{"offers":[
   {"provider_id":"iota","price_input_per_1m":800000,"price_output_per_1m":3200000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true},
   {"provider_id":"inferhub","price_input_per_1m":100000,"price_output_per_1m":400000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true},
   {"provider_id":"gamma","price_input_per_1m":300000,"price_output_per_1m":1200000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":false},
+  {"provider_id":"kappa","price_input_per_1m":200000,"price_output_per_1m":800000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":false,"healthy":true,"trusted":true},
   {"provider_id":"delta","price_input_per_1m":400000,"price_output_per_1m":1600000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":false,"trusted":true},
   {"provider_id":"eps","price_input_per_1m":950000,"price_output_per_1m":3800000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true},
   {"provider_id":"zeta","price_input_per_1m":700000,"price_output_per_1m":2800000,"available":true,"healthy":true,"trusted":true}
@@ -27,8 +28,9 @@ func TestTrustedQuoteGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Dropped: inferhub (blocked), gamma (untrusted), delta (unhealthy), eps (5%
-	// off, under the 10% floor), zeta (no list price, cannot prove the floor).
+	// Dropped: inferhub (blocked), gamma (untrusted), kappa (unavailable, else
+	// the cheapest kept), delta (unhealthy), eps (5% off, under the 10% floor),
+	// zeta (no list price, cannot prove the floor).
 	// Kept: alpha x2 (50% off), beta (40%), theta (30%), iota (20%).
 	// Distinct levels by price: alpha, beta, theta, iota. depth 3 stops at theta,
 	// 30% off both rates: ceiling 30-2 = 28, cap = list x 0.72.
