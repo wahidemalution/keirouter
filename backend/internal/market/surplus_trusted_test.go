@@ -237,3 +237,33 @@ func TestEligibleTrustedOffersKeepsProviderLabel(t *testing.T) {
 		t.Fatalf("offers = %+v, want %+v", got, want)
 	}
 }
+
+// The provider label is display only: a non-string one must not fail the
+// book billing decodes, nor change its quote.
+func TestTrustedBookIgnoresMalformedProviderLabel(t *testing.T) {
+	const offer = `{"provider_id":"bedrock",%s"price_input_per_1m":2495,"price_output_per_1m":14969,"direct_input_per_1m":200000,"direct_output_per_1m":1200000,"available":true,"healthy":true,"trusted":true}`
+	book := func(label string) string {
+		return `{"offers":[` + strings.Replace(offer, "%s", label, 1) + `]}`
+	}
+	want, err := ParseSurplusTrustedBook(strings.NewReader(book(`"provider":"AWS Bedrock",`)), 3, 10, nil)
+	if err != nil || !want.Found {
+		t.Fatalf("string label: %+v, %v", want, err)
+	}
+	for _, label := range []string{`"provider":{"x":1},`, `"provider":42,`, `"provider":null,`, ``} {
+		got, err := ParseSurplusTrustedBook(strings.NewReader(book(label)), 3, 10, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: quote %+v, want %+v", label, got, want)
+		}
+		offers, err := EligibleTrustedOffers(strings.NewReader(book(label)), 10, nil)
+		if err != nil || len(offers) != 1 || offers[0].Provider != "" || offers[0].ProviderID != "bedrock" {
+			t.Fatalf("%s: offers %+v, %v", label, offers, err)
+		}
+	}
+	offers, _ := EligibleTrustedOffers(strings.NewReader(book(`"provider":"AWS Bedrock",`)), 10, nil)
+	if len(offers) != 1 || offers[0].Provider != "AWS Bedrock" {
+		t.Fatalf("string label offers %+v", offers)
+	}
+}

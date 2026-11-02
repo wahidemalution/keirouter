@@ -83,15 +83,17 @@ func (q TrustedQuote) model(slug string) Model {
 
 type trustedBookEnvelope struct {
 	Offers []struct {
-		ProviderID        string   `json:"provider_id"`
-		Provider          string   `json:"provider"`
-		Trusted           bool     `json:"trusted"`
-		Available         bool     `json:"available"`
-		Healthy           bool     `json:"healthy"`
-		PriceInputPer1M   *float64 `json:"price_input_per_1m"`
-		PriceOutputPer1M  *float64 `json:"price_output_per_1m"`
-		DirectInputPer1M  *float64 `json:"direct_input_per_1m"`
-		DirectOutputPer1M *float64 `json:"direct_output_per_1m"`
+		ProviderID string `json:"provider_id"`
+		// Provider is a display label only; raw so a malformed one cannot fail
+		// the whole book that billing decodes.
+		Provider          json.RawMessage `json:"provider"`
+		Trusted           bool            `json:"trusted"`
+		Available         bool            `json:"available"`
+		Healthy           bool            `json:"healthy"`
+		PriceInputPer1M   *float64        `json:"price_input_per_1m"`
+		PriceOutputPer1M  *float64        `json:"price_output_per_1m"`
+		DirectInputPer1M  *float64        `json:"direct_input_per_1m"`
+		DirectOutputPer1M *float64        `json:"direct_output_per_1m"`
 	} `json:"offers"`
 }
 
@@ -121,7 +123,11 @@ func EligibleTrustedOffers(r io.Reader, floorPct int, blocked []string) ([]Trust
 		if o.PriceInputPer1M == nil || o.PriceOutputPer1M == nil {
 			continue
 		}
-		a := TrustedOffer{ProviderID: o.ProviderID, Provider: o.Provider, In: *o.PriceInputPer1M / surplusUnitScale, Out: *o.PriceOutputPer1M / surplusUnitScale}
+		var label string
+		if json.Unmarshal(o.Provider, &label) != nil {
+			label = ""
+		}
+		a := TrustedOffer{ProviderID: o.ProviderID, Provider: label, In: *o.PriceInputPer1M / surplusUnitScale, Out: *o.PriceOutputPer1M / surplusUnitScale}
 		if !validRate(a.In) || !validRate(a.Out) || a.Out <= 0 {
 			continue
 		}
