@@ -111,6 +111,11 @@ type Server struct {
 	insightsCache    *ttlCache
 	// pricing caches the live Surplus price list behind /v1/pricing.
 	pricing pricingCache
+	// detail caches the Surplus reads behind /v1/public/model-detail.
+	detail detailCache
+	// surplusURL overrides the Surplus feed the detail popup reads; empty
+	// uses market.SurplusAPIURL.
+	surplusURL string
 	// realized caches the 7-day billed totals behind the average prices.
 	realized            realizedCache
 	liveModels          *liveModelCache
@@ -480,6 +485,7 @@ func (s *Server) routes() chi.Router {
 	// Public live prices for the chains an admin published (off by default).
 	// Its own per-IP budget, separate from the landing page's.
 	r.With(s.publicPricingRateLimiter).Get("/v1/public/pricing", s.publicPricing)
+	r.With(s.publicModelDetailRateLimiter).Get("/v1/public/model-detail", s.publicModelDetail)
 
 	// Dashboard auth endpoints (login/logout/status) are loopback-guarded but
 	// do not require a session — they are how a session is obtained.

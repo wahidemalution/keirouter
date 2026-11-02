@@ -1,10 +1,27 @@
 package gateway
 
 import (
+	"context"
+	"math"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
+)
+
+const (
+	detailBookTTL           = 30 * time.Second
+	detailPerfTTL           = 5 * time.Minute
+	detailRequestsTTL       = 30 * time.Second
+	detailMaxModelLen       = 200
+	detailRequestsPerMinute = 60
 )
 
 // modelDetail is the public popup payload for one market-priced chain. Every
@@ -140,4 +157,324 @@ func cheaper(in, out, bestIn, bestOut float64) bool {
 		return out < bestOut
 	}
 	return in < bestIn
+}
+
+type cachedBook struct {
+	key    string // model|floor|blocked the offers were filtered under
+	offers []market.TrustedOffer
+	at     time.Time
+}
+
+type cachedPerf struct {
+	routes []market.RoutePerf
+	asOf   time.Time
+	at     time.Time
+}
+
+// detailCache holds the popup's Surplus reads and request counts. It is
+// separate from marketCache and s.pricing and never writes to them. Entries
+// are keyed by Surplus model names taken from chains, never from the query,
+// so the maps cannot grow past the number of market chains.
+type detailCache struct {
+	mu    sync.Mutex
+	books map[string]cachedBook // by Surplus model name
+	perf  map[string]cachedPerf // by Surplus model name
+	reqAt time.Time
+	req   map[string]int64 // chain id to requests in the last 24h
+	sf    singleflight.Group
+	now   func() time.Time // tests override it
+}
+
+func (c *detailCache) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// book returns the cached offers for name filtered under key, fetching when
+// missing or older than detailBookTTL. On a fetch error the old entry (same
+// key) is kept and returned with its old timestamp, along with the error.
+func (c *detailCache) book(name, key string, fetch func() ([]market.TrustedOffer, error)) (cachedBook, bool, error) {
+	c.mu.Lock()
+	e, ok := c.books[name]
+	c.mu.Unlock()
+	if ok && e.key == key && c.clock().Sub(e.at) < detailBookTTL {
+		return e, true, nil
+	}
+	v, err, _ := c.sf.Do("book|"+key, func() (any, error) {
+		offers, err := fetch()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err == nil {
+			if c.books == nil {
+				c.books = map[string]cachedBook{}
+			}
+			c.books[name] = cachedBook{key: key, offers: offers, at: c.clock()}
+		}
+		if e, ok := c.books[name]; ok && e.key == key {
+			return e, err
+		}
+		return nil, err
+	})
+	e, ok = v.(cachedBook)
+	return e, ok, err
+}
+
+// performance is book for the route performance feed, cached detailPerfTTL.
+func (c *detailCache) performance(name string, fetch func() ([]market.RoutePerf, time.Time, error)) (cachedPerf, bool, error) {
+	c.mu.Lock()
+	e, ok := c.perf[name]
+	c.mu.Unlock()
+	if ok && c.clock().Sub(e.at) < detailPerfTTL {
+		return e, true, nil
+	}
+	v, err, _ := c.sf.Do("perf|"+name, func() (any, error) {
+		routes, asOf, err := fetch()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err == nil {
+			if c.perf == nil {
+				c.perf = map[string]cachedPerf{}
+			}
+			at := c.clock()
+			if asOf.IsZero() {
+				asOf = at
+			}
+			c.perf[name] = cachedPerf{routes: routes, asOf: asOf, at: at}
+		}
+		if e, ok := c.perf[name]; ok {
+			return e, err
+		}
+		return nil, err
+	})
+	e, ok = v.(cachedPerf)
+	return e, ok, err
+}
+
+// requests returns every chain's request count over the last 24h, refreshed
+// at most every detailRequestsTTL. On a query error the old map is kept; with
+// no old map the error is returned.
+func (c *detailCache) requests(fetch func(since time.Time) (map[string]int64, error)) (map[string]int64, error) {
+	c.mu.Lock()
+	req, at := c.req, c.reqAt
+	c.mu.Unlock()
+	if req != nil && c.clock().Sub(at) < detailRequestsTTL {
+		return req, nil
+	}
+	v, err, _ := c.sf.Do("req", func() (any, error) {
+		now := c.clock()
+		fresh, err := fetch(now.Add(-24 * time.Hour))
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err == nil {
+			c.req, c.reqAt = fresh, now
+		}
+		return c.req, err
+	})
+	req, _ = v.(map[string]int64)
+	if req != nil {
+		return req, nil
+	}
+	return nil, err
+}
+
+// publicModelDetail serves GET /v1/public/model-detail?model=<chain name>:
+// the popup data for one market-priced chain, margin included. It only reads
+// chains, settings, usage and the routing snapshot; the Surplus model name in
+// upstream URLs comes from the chain's own slug, never from the query.
+func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	model := strings.TrimSpace(r.URL.Query().Get("model"))
+	if model == "" || len(model) > detailMaxModelLen {
+		writeError(w, http.StatusNotFound, "model not found")
+		return
+	}
+	ctx := r.Context()
+	chains, err := s.chains.ListByTenant(ctx, adminTenant)
+	if err != nil {
+		s.log.Warn("model detail: list chains failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "detail unavailable")
+		return
+	}
+	idx := slices.IndexFunc(chains, func(c store.Chain) bool { return strings.EqualFold(c.Name, model) })
+	if idx < 0 || chains[idx].Disabled {
+		writeError(w, http.StatusNotFound, "model not found")
+		return
+	}
+	c := chains[idx]
+	name, prefix, ok := detailSurplusModel(c)
+	if !ok {
+		writeError(w, http.StatusNotFound, "no market detail")
+		return
+	}
+	if _, static := s.leadStaticTarget(ctx, c); static {
+		writeError(w, http.StatusNotFound, "no market detail")
+		return
+	}
+
+	settings := market.DefaultSettings()
+	if s.settings != nil {
+		settings = market.LoadSettings(ctx, s.settings.Get)
+	}
+	floors, err := s.detailProviderFloors(ctx)
+	if err != nil {
+		s.log.Warn("model detail: list custom providers failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "detail unavailable")
+		return
+	}
+	floor := 0
+	for _, b := range market.BindTrustedSurplus([]market.ChainRoute{detailChainRoute(c)}, prefix, floors) {
+		if b.Name == name {
+			floor = b.FloorPct
+			break
+		}
+	}
+	reqs, err := s.detail.requests(func(since time.Time) (map[string]int64, error) {
+		return s.detailRequestCounts(ctx, since)
+	})
+	if err != nil {
+		s.log.Warn("model detail: usage query failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "detail unavailable")
+		return
+	}
+
+	in := detailInputs{Chain: c, Settings: settings, Requests: reqs[c.ID]}
+	if ref, ok := s.chainOfficialPrice(c); ok {
+		in.Official = &ref
+	}
+	// Shared fetches outlive one caller's disconnect; the fetchers time out.
+	fetchCtx := context.WithoutCancel(ctx)
+	if snap, ok := s.detailSnapshot(c, prefix+name); ok {
+		blocked := slices.Clone(settings.SurplusBlockedProviders)
+		slices.Sort(blocked)
+		key := name + "|" + strconv.Itoa(floor) + "|" + strings.Join(blocked, ",")
+		book, ok, err := s.detail.book(name, key, func() ([]market.TrustedOffer, error) {
+			return market.FetchSurplusDetail(fetchCtx, s.surplusURL, name, floor, blocked)
+		})
+		if err != nil {
+			s.log.Warn("model detail: order book fetch failed", "model", name, "err", err)
+		}
+		if ok {
+			in.Offers, in.OffersOK, in.BookAt, in.Snapshot = book.offers, true, book.at, snap
+		}
+	}
+	perf, ok, err := s.detail.performance(name, func() ([]market.RoutePerf, time.Time, error) {
+		return market.FetchSurplusPerformanceRoutes(fetchCtx, s.surplusURL, name)
+	})
+	if err != nil {
+		s.log.Warn("model detail: performance fetch failed", "model", name, "err", err)
+	}
+	if ok {
+		in.Routes, in.RoutesOK, in.PerfAt = perf.routes, true, perf.asOf
+	}
+
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	writeJSON(w, http.StatusOK, buildModelDetail(in))
+}
+
+// detailSurplusModel picks the Surplus model the popup reads: the chain's
+// first surplus-trusted slug, else its first surplus slug.
+func detailSurplusModel(c store.Chain) (name, prefix string, ok bool) {
+	slugs := surplusSlugs(c)
+	for _, p := range []string{market.SurplusTrustedPrefix, market.SurplusPrefix} {
+		for _, slug := range slugs {
+			if n, found := strings.CutPrefix(slug, p); found && n != "" {
+				return n, p, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// detailSnapshot returns the routing snapshot entry for slug with its
+// failover rates set to the lowest positive ones across the chain's market
+// slugs, as ComputeChainRateWithSafety does, so the popup floor is the billed
+// floor. ok is false when slug has no live quote.
+func (s *Server) detailSnapshot(c store.Chain, slug string) (market.Model, bool) {
+	if s.marketCache == nil {
+		return market.Model{}, false
+	}
+	snap, ok := s.marketCache.Lookup(slug)
+	if !ok || snap.MinAskIn <= 0 || snap.MinAskOut <= 0 {
+		return market.Model{}, false
+	}
+	failIn, failOut := math.Inf(1), math.Inf(1)
+	for _, m := range s.marketCache.Models(surplusSlugs(c)) {
+		if m.MinAskIn <= 0 || m.MinAskOut <= 0 {
+			continue
+		}
+		if m.FailoverIn > 0 {
+			failIn = math.Min(failIn, m.FailoverIn)
+		}
+		if m.FailoverOut > 0 {
+			failOut = math.Min(failOut, m.FailoverOut)
+		}
+	}
+	snap.FailoverIn, snap.FailoverOut = 0, 0
+	if !math.IsInf(failIn, 1) {
+		snap.FailoverIn = failIn
+	}
+	if !math.IsInf(failOut, 1) {
+		snap.FailoverOut = failOut
+	}
+	return snap, true
+}
+
+// detailProviderFloors maps custom provider id to its /min{N} floor, the same
+// source the market sync binds with.
+func (s *Server) detailProviderFloors(ctx context.Context) (map[string]int, error) {
+	floors := map[string]int{}
+	if s.db == nil {
+		return floors, nil
+	}
+	providers, err := s.db.CustomProviders().ListProviders(ctx, adminTenant)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		floors[p.ID] = market.MinDiscountFloor(p.BaseURL)
+	}
+	return floors, nil
+}
+
+// detailChainRoute mirrors app.chainRoutes for one chain.
+func detailChainRoute(c store.Chain) market.ChainRoute {
+	steps := make([]market.StepRoute, len(c.Steps))
+	for i, st := range c.Steps {
+		steps[i] = market.StepRoute{MarketSlug: st.MarketSlug, Model: st.Model, Provider: st.Provider}
+	}
+	return market.ChainRoute{MarketSlugs: c.MarketSlugs, Steps: steps}
+}
+
+func (s *Server) detailRequestCounts(ctx context.Context, since time.Time) (map[string]int64, error) {
+	out := map[string]int64{}
+	if s.usage == nil {
+		return out, nil
+	}
+	usage, err := s.usage.ChainUsageAccurate(ctx, adminTenant, since)
+	if err != nil {
+		return nil, err
+	}
+	for id, u := range usage {
+		out[id] = u.TotalRequests
+	}
+	return out, nil
+}
+
+// publicModelDetailRateLimiter caps GET /v1/public/model-detail per client IP
+// with its own budget, built like publicPricingRateLimiter.
+func (s *Server) publicModelDetailRateLimiter(next http.Handler) http.Handler {
+	limiter := newIPLimiter(detailRequestsPerMinute, time.Minute)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := s.clientIP(r)
+		if !limiter.Allow(ip) {
+			_, wait := limiter.Exceeded(ip)
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(wait.Seconds())))))
+			w.Header().Set("Cache-Control", "no-store")
+			writeError(w, http.StatusTooManyRequests, "rate limit exceeded: at most 60 detail requests per minute")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
