@@ -34,6 +34,8 @@ export interface PublicModel {
   cached_per_m: number;
   cache_write_per_m: number;
   sold_out: boolean;
+  /** True when GET /v1/public/model-detail has market data for this model. */
+  has_detail?: boolean;
   /** Official list price per 1M tokens; null when no reference is known. */
   official_input_per_m?: number | null;
   official_output_per_m?: number | null;
@@ -148,5 +150,11 @@ export interface PublicModelDetail {
   performance: { as_of: string; routes: PublicModelDetailRoute[] } | null;
 }
 
-export const fetchPublicModelDetail = (model: string) =>
-  getJSON<PublicModelDetail>("/v1/public/model-detail?model=" + encodeURIComponent(model));
+/** Resolves to null on 404: the model has no market detail. */
+export async function fetchPublicModelDetail(model: string): Promise<PublicModelDetail | null> {
+  const path = "/v1/public/model-detail?model=" + encodeURIComponent(model);
+  const res = await fetch(path, { headers: { Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`public api ${path}: ${res.status}`);
+  return (await res.json()) as PublicModelDetail;
+}

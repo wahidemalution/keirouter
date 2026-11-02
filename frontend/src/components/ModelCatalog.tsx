@@ -206,7 +206,7 @@ export function ModelCard({ model }: { model: PublicModel }) {
               <Price label="Cache write / 1M" value={model.cache_write_per_m} />
             </div>
           </div>
-          {live && (
+          {model.has_detail === true && (
             <button
               ref={detailButton}
               type="button"

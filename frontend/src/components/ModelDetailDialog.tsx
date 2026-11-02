@@ -152,7 +152,9 @@ export function ModelDetailDialog({
           </button>
         </div>
         <div className="overflow-y-auto overscroll-contain px-4 pb-[calc(16px+env(safe-area-inset-bottom))] pt-4 sm:px-5 sm:pb-5">
-          {query.data !== undefined ? (
+          {query.data === null ? (
+            <Notice>Detail belum tersedia untuk model ini.</Notice>
+          ) : query.data !== undefined ? (
             <DetailBody data={query.data} />
           ) : !showError ? (
             <DetailSkeleton />
@@ -272,8 +274,8 @@ function RouteTable({ routes }: { routes: NonNullable<PublicModelDetail["perform
             </tr>
           </thead>
           <tbody className="font-mono tabular-nums">
-            {routes.map((r) => (
-              <tr key={r.name} className="border-t border-[var(--line)]">
+            {routes.map((r, i) => (
+              <tr key={`${r.name}-${i}`} className="border-t border-[var(--line)]">
                 <th scope="row" className="px-3 py-2 font-sans font-medium">{r.name}</th>
                 <td className="px-3 py-2 text-right">{fmtLatency(r.p50_latency_ms)}</td>
                 <td className="px-3 py-2 text-right">{fmtLatency(r.p95_latency_ms)}</td>
