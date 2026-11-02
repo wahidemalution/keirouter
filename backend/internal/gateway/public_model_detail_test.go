@@ -27,6 +27,8 @@ func detailChain(markup float64, offIn, offOut float64) store.Chain {
 	}
 }
 
+// Safety on in both cases. With markup 100 alpha's marked-up price sits above
+// the safety floor; with markup 10 the floor wins.
 func TestDetailBestMatchesCardDiscount(t *testing.T) {
 	offers, err := market.EligibleTrustedOffers(strings.NewReader(detailBook), 0, nil)
 	require.NoError(t, err)
@@ -34,29 +36,53 @@ func TestDetailBestMatchesCardDiscount(t *testing.T) {
 	quote, err := market.ParseSurplusTrustedBook(strings.NewReader(detailBook), 2, 0, nil)
 	require.NoError(t, err)
 	snap := quote.Model("m")
+	floorIn, floorOut := snap.FailoverIn*1.1, snap.FailoverOut*1.1
 
-	gw := newPublicTestGateway(t)
-	cache := market.NewSnapshotCache()
-	cache.Replace([]market.Model{snap})
-	gw.marketCache = cache
+	for _, tc := range []struct {
+		name      string
+		markup    float64
+		wantFloor bool
+	}{
+		{"markup above floor", 100, false},
+		{"floor wins", 10, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := newPublicTestGateway(t)
+			cache := market.NewSnapshotCache()
+			cache.Replace([]market.Model{snap})
+			gw.marketCache = cache
 
-	c := detailChain(10, 2, 8)
-	settings := market.Settings{MarkupPercent: 10, SafetyMarginEnabled: true, SafetyMarginPercent: 10}
-	card := gw.surplusChainPrice(c, []string{"surplus-trusted:m"}, settings)
-	require.True(t, card.Available)
-	official, ok := gw.chainOfficialPrice(c)
-	require.True(t, ok)
+			c := detailChain(tc.markup, 2, 8)
+			settings := market.Settings{MarkupPercent: 0, SafetyMarginEnabled: true, SafetyMarginPercent: 10}
+			card := gw.surplusChainPrice(c, []string{"surplus-trusted:m"}, settings)
+			require.True(t, card.Available)
+			official, ok := gw.chainOfficialPrice(c)
+			require.True(t, ok)
 
-	d := buildModelDetail(detailInputs{
-		Chain: c, Offers: offers, OffersOK: true, BookAt: time.Now(),
-		Snapshot: snap, Settings: settings, Official: &official,
-	})
-	require.NotNil(t, d.Best)
-	require.NotNil(t, d.Best.DiscountPct)
-	require.Equal(t, discountPercent(*card.InputPerM, *card.OutputPerM, official), *d.Best.DiscountPct)
-	require.InDelta(t, *card.InputPerM, d.Best.InputPerM, 1e-12)
-	require.InDelta(t, *card.OutputPerM, d.Best.OutputPerM, 1e-12)
-	require.Equal(t, 3, *d.OfferCount)
+			d := buildModelDetail(detailInputs{
+				Chain: c, Offers: offers, OffersOK: true, BookAt: time.Now(),
+				Snapshot: snap, Settings: settings, Official: &official,
+			})
+			require.NotNil(t, d.Best)
+			require.NotNil(t, d.Best.DiscountPct)
+			require.Equal(t, discountPercent(*card.InputPerM, *card.OutputPerM, official), *d.Best.DiscountPct)
+			require.InDelta(t, *card.InputPerM, d.Best.InputPerM, 1e-12)
+			require.InDelta(t, *card.OutputPerM, d.Best.OutputPerM, 1e-12)
+			require.Equal(t, 3, *d.OfferCount)
+
+			if tc.wantFloor {
+				require.InDelta(t, floorIn, d.Best.InputPerM, 1e-9)
+				require.InDelta(t, floorOut, d.Best.OutputPerM, 1e-9)
+				return
+			}
+			mult := 1 + tc.markup/100
+			require.InDelta(t, offers[0].In*mult, d.Best.InputPerM, 1e-9, "alpha marked up")
+			require.InDelta(t, offers[0].Out*mult, d.Best.OutputPerM, 1e-9, "alpha marked up")
+			require.Greater(t, d.Best.InputPerM, floorIn+1e-6)
+			require.Greater(t, d.Best.OutputPerM, floorOut+1e-6)
+			require.Equal(t, 80, *d.Best.DiscountPct)
+		})
+	}
 }
 
 func TestDetailAppliesMarkupToEveryOffer(t *testing.T) {
@@ -80,16 +106,19 @@ func TestDetailAppliesMarkupToEveryOffer(t *testing.T) {
 	require.Equal(t, 3, *d.OfferCount)
 }
 
-func TestDetailTrustedOnlyWhenChainHasPlainSlug(t *testing.T) {
+// The builder never reads the chain's slugs: a plain surplus: slug on the
+// chain does not change Best, which comes only from the given offers.
+func TestDetailIgnoresChainSlugsUsesGivenOffers(t *testing.T) {
 	c := detailChain(0, 10, 10)
 	c.MarketSlugs = []string{"surplus:m", "surplus-trusted:m"}
 	offers := []market.TrustedOffer{{ProviderID: "a", Provider: "A", In: 2, Out: 3}}
 	official := officialPrice{InputPerM: 10, OutputPerM: 10}
 	d := buildModelDetail(detailInputs{
 		Chain: c, Offers: offers, OffersOK: true, BookAt: time.Now(),
-		Snapshot: market.Model{Slug: "surplus-trusted:m", MinAskIn: 2, MinAskOut: 3},
+		Snapshot: market.Model{Slug: "surplus-trusted:m", MinAskIn: 0.1, MinAskOut: 0.1},
 		Settings: market.Settings{}, Official: &official,
 	})
+	// The snapshot ask is cheaper, but Best still comes from the given offer.
 	require.NotNil(t, d.Best)
 	require.InDelta(t, 2, d.Best.InputPerM, 1e-9)
 	require.InDelta(t, 3, d.Best.OutputPerM, 1e-9)
