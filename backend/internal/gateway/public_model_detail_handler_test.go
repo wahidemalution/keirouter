@@ -381,3 +381,132 @@ func TestModelDetailSurplusOnlyChainNoPrice(t *testing.T) {
 	perf := out["performance"].(map[string]any)
 	require.Empty(t, perf["routes"])
 }
+
+// A chain with no steps is not in the catalog, so it has no detail either.
+func TestModelDetailNoStepsChain404(t *testing.T) {
+	db, gw, f := detailFixture(t)
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(context.Background(), store.Chain{
+		ID: "empty", TenantID: store.DefaultTenantID, Name: "empty-chain", Strategy: "priority",
+		MarketSlugs: []string{"surplus-trusted:deepseek-v4.1-flash"}, CreatedAt: now, UpdatedAt: now,
+	}))
+	rec, _ := getDetail(t, gw.routes(), "?model=empty-chain")
+	requireDetailError(t, rec, http.StatusNotFound, "model not found")
+	require.Zero(t, f.total())
+}
+
+// Two chains on one Surplus model with different /min{N} floors each keep
+// their own cached book, so alternating between them does not refetch.
+func TestModelDetailBookCachePerFloor(t *testing.T) {
+	db, gw, f := detailFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, p := range []struct{ id, url string }{
+		{"custom-openai-min10", "https://surplus.test/min10/v1"},
+		{"custom-openai-min30", "https://surplus.test/min30/v1"},
+	} {
+		require.NoError(t, db.CustomProviders().CreateProvider(ctx, store.CustomProvider{
+			ID: p.id, TenantID: store.DefaultTenantID, DisplayName: p.id, Alias: p.id,
+			Dialect: "openai", BaseURL: p.url, CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+	for _, c := range []struct{ id, provider string }{{"f10", "custom-openai-min10"}, {"f30", "custom-openai-min30"}} {
+		require.NoError(t, db.Chains().Create(ctx, store.Chain{
+			ID: c.id, TenantID: store.DefaultTenantID, Name: c.id, Strategy: "priority",
+			MarketSlugs: []string{"surplus-trusted:deepseek-v4.1-flash"},
+			Steps: []store.ChainStep{{ID: c.id + "1", Provider: c.provider, Model: "deepseek-v4.1-flash",
+				MarketSlug: "surplus-trusted:deepseek-v4.1-flash"}},
+			CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+	clock := time.Now()
+	var mu sync.Mutex
+	gw.detail.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+
+	for i := range 6 {
+		model := []string{"f10", "f30"}[i%2]
+		rec, out := getDetail(t, gw.routes(), "?model="+model)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.NotNil(t, out["best"], model)
+		mu.Lock()
+		clock = clock.Add(2 * time.Second)
+		mu.Unlock()
+	}
+	require.EqualValues(t, 2, f.bookHits.Load(), "one fetch per floor")
+	gw.detail.mu.Lock()
+	_, ok10 := gw.detail.books["deepseek-v4.1-flash|10"]
+	_, ok30 := gw.detail.books["deepseek-v4.1-flash|30"]
+	gw.detail.mu.Unlock()
+	require.True(t, ok10)
+	require.True(t, ok30)
+}
+
+// A stale book is served during the failure cooldown without a refetch.
+func TestModelDetailStaleServedDuringCooldown(t *testing.T) {
+	_, gw, f := detailFixture(t)
+	clock := time.Date(2026, 11, 2, 8, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	gw.detail.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	advance := func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() }
+
+	rec, first := getDetail(t, gw.routes(), "?model=deepseek-v4.1-flash")
+	require.Equal(t, http.StatusOK, rec.Code)
+	f.failBook.Store(true)
+	advance(31 * time.Second)
+	rec, _ = getDetail(t, gw.routes(), "?model=deepseek-v4.1-flash")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.EqualValues(t, 2, f.bookHits.Load())
+
+	advance(10 * time.Second)
+	rec, out := getDetail(t, gw.routes(), "?model=deepseek-v4.1-flash")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.EqualValues(t, 2, f.bookHits.Load(), "no refetch while cooling down")
+	require.Equal(t, first["as_of"], out["as_of"])
+	require.Equal(t, first["best"], out["best"])
+}
+
+// has_detail is true only for a live, market-led chain with a
+// surplus-trusted slug: the chains the detail endpoint can price.
+func TestPublicModelsHasDetail(t *testing.T) {
+	db, gw, _ := detailFixture(t)
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(context.Background(), store.Chain{
+		ID: "fast", TenantID: store.DefaultTenantID, Name: "fast-only", Strategy: "priority",
+		MarketSlugs: []string{"surplus-fast:deepseek-v4.1-flash"},
+		Steps: []store.ChainStep{{ID: "fast1", Provider: "custom-openai-surplus", Model: "deepseek-v4.1-flash",
+			MarketSlug: "surplus-fast:deepseek-v4.1-flash"}},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	quote := market.TrustedQuote{Found: true, BestIn: 0.2, BestOut: 0.8, CapIn: 0.5, CapOut: 2, Providers: []string{"alpha"}}
+	gw.marketCache.Replace([]market.Model{
+		quote.Model("deepseek-v4.1-flash"),
+		quote.FastModel("deepseek-v4.1-flash"),
+		{Slug: "surplus:deepseek-v4.1-flash", MinAskIn: 0.2, MinAskOut: 0.8},
+	})
+
+	rec := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/public/models", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var payload struct {
+		Models []struct {
+			Name      string `json:"name"`
+			HasDetail *bool  `json:"has_detail"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	for _, m := range payload.Models {
+		require.NotNil(t, m.HasDetail, m.Name)
+		require.Equal(t, m.Name == "deepseek-v4.1-flash", *m.HasDetail, m.Name)
+	}
+
+	rows := publicRowsByName(t, gw)
+	require.True(t, rows["deepseek-v4.1-flash"].HasDetail)
+	for _, name := range []string{"disabled-model", "static-lead", "untrusted-only", "plain", "fast-only"} {
+		require.Contains(t, rows, name)
+		require.False(t, rows[name].HasDetail, name)
+	}
+	require.False(t, rows["untrusted-only"].SoldOut, "false for its slug, not for being sold out")
+
+	gw.marketCache.Replace(nil)
+	require.False(t, publicRowsByName(t, gw)["deepseek-v4.1-flash"].HasDetail, "sold out")
+}

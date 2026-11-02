@@ -180,6 +180,19 @@ func TestDetailRoutesKeepEligibleProviders(t *testing.T) {
 	require.Equal(t, 99.5, *r.SuccessPct)
 	require.Equal(t, 50.0, *r.TokensPerSec)
 	require.Equal(t, "b", d.Performance.Routes[1].Name)
+
+	dashed := buildModelDetail(detailInputs{
+		Chain: detailChain(0, 10, 10),
+		Offers: []market.TrustedOffer{
+			{ProviderID: "ds", Provider: "Alibaba DashScope \u2014 China", In: 1, Out: 1},
+			{ProviderID: "x", Provider: "A\u2014B", In: 1, Out: 1},
+		},
+		OffersOK: true, BookAt: time.Now(),
+		Routes:   []market.RoutePerf{{Provider: "ds", Requests: 2}, {Provider: "x", Requests: 1}},
+		RoutesOK: true, PerfAt: perfAt,
+	})
+	require.Equal(t, "Alibaba DashScope \u00b7 China", dashed.Performance.Routes[0].Name)
+	require.Equal(t, "A\u00b7B", dashed.Performance.Routes[1].Name)
 }
 
 func TestDetailJSONHasNoLeaks(t *testing.T) {

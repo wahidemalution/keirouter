@@ -10,6 +10,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
@@ -98,10 +99,13 @@ type publicModelRow struct {
 	// the best case, which only some requests get. 0 when none.
 	UpToDiscountPct int
 	// Context is the model's context window in tokens from models.dev (0 = unknown).
-	Context  int
-	Requests int64
-	Tokens   int64
-	Users    int
+	Context int
+	// HasDetail is true when GET /v1/public/model-detail can price this
+	// chain: live, market-led and bound to a surplus-trusted slug.
+	HasDetail bool
+	Requests  int64
+	Tokens    int64
+	Users     int
 }
 
 // chainSoldOut reports whether a market-bound chain has no live quote for any
@@ -230,6 +234,8 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 				}
 			}
 		}
+		_, detailPrefix, detailOK := detailSurplusModel(c)
+		hasDetail := !soldOut && !leadStatic && detailOK && detailPrefix == market.SurplusTrustedPrefix
 		u := usage[c.ID]
 		rows = append(rows, publicModelRow{
 			Name:         c.Name,
@@ -250,10 +256,11 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 			MaxInputPerM: maxIn, MaxOutputPerM: maxOut,
 			AvgInputPerM: avgIn, AvgOutputPerM: avgOut,
 			AvgTokens: avgTokens, UpToDiscountPct: upTo,
-			Context:  s.chainContextTokens(c),
-			Requests: u.TotalRequests,
-			Tokens:   u.PromptTokens + u.CompletionTokens,
-			Users:    u.DistinctKeys,
+			Context:   s.chainContextTokens(c),
+			HasDetail: hasDetail,
+			Requests:  u.TotalRequests,
+			Tokens:    u.PromptTokens + u.CompletionTokens,
+			Users:     u.DistinctKeys,
 		})
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -319,6 +326,8 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 			"cached_per_m":      m.CachedPerM,
 			"cache_write_per_m": m.CacheWrite,
 			"sold_out":          m.SoldOut,
+			// has_detail: GET /v1/public/model-detail has market data for it.
+			"has_detail": m.HasDetail,
 			// Official list price and the whole-percent discount from it;
 			// null when no official reference is known.
 			"official_input_per_m":  officialIn,

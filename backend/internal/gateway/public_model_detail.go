@@ -102,6 +102,8 @@ func buildModelDetail(in detailInputs) modelDetail {
 			if name == "" {
 				name = o.ProviderID
 			}
+			// Surplus labels separate region with an em dash; the UI uses a middle dot.
+			name = strings.ReplaceAll(strings.ReplaceAll(name, " \u2014 ", " \u00b7 "), "\u2014", "\u00b7")
 			keep[o.ProviderID] = name
 		}
 		routes := []detailRoute{}
@@ -177,11 +179,11 @@ type cachedPerf struct {
 
 // detailCache holds the popup's Surplus reads and request counts. It is
 // separate from marketCache and s.pricing and never writes to them. Entries
-// are keyed by Surplus model names taken from chains, never from the query,
-// so the maps cannot grow past the number of market chains.
+// are keyed by Surplus model names (and floors) taken from chains, never from
+// the query, so the maps cannot grow past the number of market chains.
 type detailCache struct {
 	mu    sync.Mutex
-	books map[string]cachedBook // by Surplus model name
+	books map[string]cachedBook // by Surplus model name|floor
 	perf  map[string]cachedPerf // by Surplus model name
 	reqAt time.Time
 	req   map[string]int64 // chain id to requests in the last 24h
@@ -218,14 +220,14 @@ func (c *detailCache) clock() time.Time {
 	return time.Now()
 }
 
-// book returns the cached offers for name filtered under key, fetching when
+// book returns the cached offers for slot filtered under key, fetching when
 // missing or older than detailBookTTL. On a fetch error the old entry (same
 // key) is kept and returned with its old timestamp, along with the error, and
 // no refetch happens for detailRetryAfter.
-func (c *detailCache) book(name, key string, fetch func() ([]market.TrustedOffer, error)) (cachedBook, bool, error) {
+func (c *detailCache) book(slot, key string, fetch func() ([]market.TrustedOffer, error)) (cachedBook, bool, error) {
 	sfKey := "book|" + key
 	c.mu.Lock()
-	e, ok := c.books[name]
+	e, ok := c.books[slot]
 	ok = ok && e.key == key
 	cooling := c.coolingDown(sfKey)
 	c.mu.Unlock()
@@ -244,9 +246,9 @@ func (c *detailCache) book(name, key string, fetch func() ([]market.TrustedOffer
 			if c.books == nil {
 				c.books = map[string]cachedBook{}
 			}
-			c.books[name] = cachedBook{key: key, offers: offers, at: c.clock()}
+			c.books[slot] = cachedBook{key: key, offers: offers, at: c.clock()}
 		}
-		if e, ok := c.books[name]; ok && e.key == key {
+		if e, ok := c.books[slot]; ok && e.key == key {
 			return e, err
 		}
 		return nil, err
@@ -338,7 +340,7 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idx := slices.IndexFunc(chains, func(c store.Chain) bool { return strings.EqualFold(c.Name, model) })
-	if idx < 0 || chains[idx].Disabled {
+	if idx < 0 || chains[idx].Disabled || len(chains[idx].Steps) == 0 {
 		writeError(w, http.StatusNotFound, "model not found")
 		return
 	}
@@ -393,8 +395,11 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 	if snap, ok := s.detailSnapshot(c, prefix+name); trusted && ok {
 		blocked := slices.Clone(settings.SurplusBlockedProviders)
 		slices.Sort(blocked)
-		key := name + "|" + strconv.Itoa(floor) + "|" + strings.Join(blocked, ",")
-		book, ok, err := s.detail.book(name, key, func() ([]market.TrustedOffer, error) {
+		// Chains sharing a Surplus model with different floors get their own
+		// slot; the blocked list only invalidates it.
+		slot := name + "|" + strconv.Itoa(floor)
+		key := slot + "|" + strings.Join(blocked, ",")
+		book, ok, err := s.detail.book(slot, key, func() ([]market.TrustedOffer, error) {
 			return market.FetchSurplusDetail(fetchCtx, s.surplusURL, name, floor, blocked)
 		})
 		if err != nil {
