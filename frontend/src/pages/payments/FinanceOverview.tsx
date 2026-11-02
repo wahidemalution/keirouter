@@ -1,5 +1,5 @@
 import { Activity, Coins, Percent, Receipt, Wallet, Wrench } from "lucide-react";
-import type { FinanceOverview as Overview, FinanceRange } from "../../lib/api";
+import type { FinanceCustomRange, FinanceOverview as Overview, FinanceRange } from "../../lib/api";
 import { ErrorBanner, Kpi, KpiGrid, LoadingRegion, Skeleton } from "../../components/ui";
 import { count, idr, usd } from "./shared";
 
@@ -8,16 +8,33 @@ export const RANGE_LABEL: Record<FinanceRange, string> = {
   "7d": "7 days",
   "30d": "30 days",
   all: "All time",
+  custom: "Custom",
 };
+
+// A YYYY-MM-DD is already a server-zone day, so format it as-is in UTC
+// rather than shifting it through the browser's zone.
+function dayText(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** The range in words for headings and labels: "last 30 days", "Oct 1, 2026 to Oct 15, 2026". */
+export function rangeText(range: FinanceRange, custom: FinanceCustomRange): string {
+  if (range === "custom") {
+    const from = dayText(custom.from);
+    return custom.from === custom.to ? from : `${from} to ${dayText(custom.to)}`;
+  }
+  return range === "today" ? "today" : range === "all" ? "all time" : `last ${RANGE_LABEL[range].toLowerCase()}`;
+}
 
 export function FinanceOverview({
   overview,
-  range,
+  label,
   loading,
   error,
 }: {
   overview?: Overview;
-  range: FinanceRange;
+  /** The range in words, from rangeText. */
+  label: string;
   loading: boolean;
   error: string | null;
 }) {
@@ -34,12 +51,11 @@ export function FinanceOverview({
 
   const o = overview;
   const cost = o.cost_exact_usd + o.cost_estimated_usd;
-  const rangeText = RANGE_LABEL[range].toLowerCase();
 
   return (
     <div className="space-y-2">
       {error && <ErrorBanner message={`The last refresh failed, so the numbers below may be out of date. ${error}`} />}
-      <KpiGrid cols={3} label={`Credit, revenue and provider cost, ${rangeText}`}>
+      <KpiGrid cols={3} label={`Credit, revenue and provider cost, ${label}`}>
         <Kpi
           icon={Wallet}
           label="Credit received"

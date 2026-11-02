@@ -2101,7 +2101,13 @@ export interface PaymentSummary {
   count_by_status: Record<string, number>;
 }
 
-export type FinanceRange = "today" | "7d" | "30d" | "all";
+export type FinanceRange = "today" | "7d" | "30d" | "all" | "custom";
+
+/** Days for range "custom", YYYY-MM-DD in the server zone, both inclusive. */
+export interface FinanceCustomRange {
+  from: string;
+  to: string;
+}
 
 export interface FinanceOverview {
   /** What users were charged: upstream cost plus markup. */
@@ -2136,6 +2142,9 @@ export interface FinanceSeries {
 
 export interface FinanceReport {
   range: FinanceRange;
+  /** Set only for range "custom". */
+  from?: string;
+  to?: string;
   overview: FinanceOverview;
   series: FinanceSeries;
 }
@@ -2819,8 +2828,14 @@ export const api = {
   deleteHostingCost: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
 
   // Finance monitor (admin): credit, revenue and provider cost.
-  financeReport: (range: FinanceRange) =>
-    request<FinanceReport>("GET", `/payments/finance?range=${encodeURIComponent(range)}`),
+  financeReport: (range: FinanceRange, custom?: FinanceCustomRange) => {
+    const q = new URLSearchParams({ range });
+    if (range === "custom" && custom) {
+      q.set("from", custom.from);
+      q.set("to", custom.to);
+    }
+    return request<FinanceReport>("GET", `/payments/finance?${q}`);
+  },
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
   createKey: (name: string, opts?: {
