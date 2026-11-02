@@ -9,7 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { fetchPublicModelDetail, type PublicModelDetail } from "../lib/publicApi";
 import { agoLabel, detailState, fmtLatency, fmtPct, fmtTps } from "../lib/modelDetail";
-import { fmtCount, fmtRate } from "./ModelCatalog";
+import { fmtCount, fmtRate } from "../lib/format";
 
 const FOCUS = "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)]";
 
@@ -48,6 +48,18 @@ export function ModelDetailDialog({
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  // A refetch after an error goes back to "pending" in TanStack v5; keep the
+  // error block (and its focused retry button) up until data arrives.
+  const showError = query.data === undefined && query.errorUpdateCount > 0;
+  // The retry button unmounts when data arrives; keep focus inside the dialog.
+  const hadError = useRef(false);
+  useEffect(() => {
+    if (hadError.current && !showError && dialogRef.current?.contains(document.activeElement) === false) {
+      closeRef.current?.focus();
+    }
+    hadError.current = showError;
+  }, [showError]);
 
   // Keeps "Diperbarui N detik lalu" honest while the popup stays open.
   useEffect(() => {
@@ -140,22 +152,24 @@ export function ModelDetailDialog({
           </button>
         </div>
         <div className="overflow-y-auto overscroll-contain px-4 pb-[calc(16px+env(safe-area-inset-bottom))] pt-4 sm:px-5 sm:pb-5">
-          {query.isPending ? (
+          {query.data !== undefined ? (
+            <DetailBody data={query.data} />
+          ) : !showError ? (
             <DetailSkeleton />
-          ) : query.isError ? (
+          ) : (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2" role="alert">
               <p className="text-[13px] text-[var(--ink)]">Detail model gagal dimuat.</p>
               <button
                 type="button"
-                onClick={() => void query.refetch()}
-                disabled={query.isFetching}
-                className={`min-h-[44px] rounded-lg border border-[var(--line)] bg-[var(--paper)] px-4 text-[13px] font-medium text-[var(--ink)] transition-colors hover:border-[var(--line-strong)] disabled:opacity-60 ${FOCUS}`}
+                onClick={() => {
+                  if (!query.isFetching) void query.refetch();
+                }}
+                aria-disabled={query.isFetching}
+                className={`min-h-[44px] rounded-lg border border-[var(--line)] bg-[var(--paper)] px-4 text-[13px] font-medium text-[var(--ink)] transition-colors hover:border-[var(--line-strong)] aria-disabled:opacity-60 ${FOCUS}`}
               >
                 {query.isFetching ? "Memuat…" : "Coba lagi"}
               </button>
             </div>
-          ) : (
-            <DetailBody data={query.data} />
           )}
         </div>
       </div>
@@ -238,7 +252,7 @@ function DetailBody({ data }: { data: PublicModelDetail }) {
 function RouteTable({ routes }: { routes: NonNullable<PublicModelDetail["performance"]>["routes"] }) {
   const titleId = useId();
   return (
-    <section className="mt-5" aria-labelledby={titleId}>
+    <section className="mt-5">
       <h3 id={titleId} className="text-[13px] font-semibold">Performa jaringan pasar · 24 jam</h3>
       <div
         className={`mt-2 overflow-x-auto rounded-lg border border-[var(--line)] ${FOCUS}`}

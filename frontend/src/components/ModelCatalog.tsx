@@ -8,6 +8,7 @@ import { ModelCapabilityIcons } from "./ModelCapabilityIcons";
 import { ModelDetailDialog } from "./ModelDetailDialog";
 import type { PublicModel } from "../lib/publicApi";
 import { familySlug, resolveProvider } from "../lib/providerResolve";
+import { fmtCount, fmtInt, fmtRate } from "../lib/format";
 
 export { familySlug, resolveProvider } from "../lib/providerResolve";
 
@@ -49,11 +50,9 @@ export function ProviderLogo({ providerId, modelId }: { providerId: string; mode
   );
 }
 
-const fmtInt = new Intl.NumberFormat("id-ID");
 const fmtCompact = new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 });
 
-export const fmtRate = (n: number) => `$${n.toLocaleString("id-ID", { maximumFractionDigits: 6 })}`;
-export const fmtCount = (n: number) => (n > 0 ? fmtInt.format(n) : "0");
+export { fmtRate, fmtCount };
 export const fmtShort = (n: number) => (n > 0 ? fmtCompact.format(n) : "0");
 
 // Context windows read as "1M", "1,05M" or "128K". Exact binary sizes
