@@ -92,6 +92,8 @@ func detailFixture(t *testing.T) (*store.DB, *Server, *fakeSurplus) {
 				{ID: "lead1", Position: 0, Provider: "openai", Model: "gpt-4o", StaticInputPerM: 1, StaticOutputPerM: 2},
 				{ID: "lead2", Position: 1, Provider: "custom-openai-surplus", Model: "gpt-4o", MarketSlug: "surplus-trusted:gpt-4o"},
 			}},
+		{ID: "untrusted", Name: "untrusted-only", MarketSlugs: []string{"surplus:deepseek-v4.1-flash"},
+			Steps: []store.ChainStep{{ID: "u1", Provider: "custom-openai-surplus", Model: "deepseek-v4.1-flash", MarketSlug: "surplus:deepseek-v4.1-flash"}}},
 		{ID: "plain", Name: "plain", InputPerM: 2, OutputPerM: 8,
 			Steps: []store.ChainStep{{ID: "plain1", Provider: "openai", Model: "gpt-4o"}}},
 	} {
@@ -330,4 +332,52 @@ func TestModelDetailLimitsPerIP(t *testing.T) {
 	rec, _ := getDetail(t, h, "?model=nope")
 	requireDetailError(t, rec, http.StatusTooManyRequests, "rate limit exceeded: at most 60 detail requests per minute")
 	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+}
+
+// After a failure, no refetch for detailRetryAfter: an outage must not turn
+// into a retry storm.
+func TestModelDetailFailureCooldown(t *testing.T) {
+	_, gw, f := detailFixture(t)
+	clock := time.Now()
+	var mu sync.Mutex
+	gw.detail.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	f.failBook.Store(true)
+	f.failPerf.Store(true)
+
+	for range 2 {
+		rec, out := getDetail(t, gw.routes(), "?model=deepseek-v4.1-flash")
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Nil(t, out["best"])
+		require.Nil(t, out["performance"])
+	}
+	require.EqualValues(t, 1, f.bookHits.Load())
+	require.EqualValues(t, 1, f.perfHits.Load())
+
+	f.failBook.Store(false)
+	f.failPerf.Store(false)
+	mu.Lock()
+	clock = clock.Add(16 * time.Second)
+	mu.Unlock()
+	rec, out := getDetail(t, gw.routes(), "?model=deepseek-v4.1-flash")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.EqualValues(t, 2, f.bookHits.Load())
+	require.EqualValues(t, 2, f.perfHits.Load())
+	require.NotNil(t, out["best"])
+	require.NotNil(t, out["performance"])
+}
+
+// A chain priced only from a plain surplus: slug does not route through
+// trusted offers, so it gets no price; performance still shows, with no
+// routes.
+func TestModelDetailSurplusOnlyChainNoPrice(t *testing.T) {
+	_, gw, f := detailFixture(t)
+	gw.marketCache.Replace([]market.Model{{Slug: "surplus:deepseek-v4.1-flash", MinAskIn: 0.2, MinAskOut: 0.8}})
+	rec, out := getDetail(t, gw.routes(), "?model=untrusted-only")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Nil(t, out["best"])
+	require.Nil(t, out["median_discount_pct"])
+	require.Nil(t, out["offer_count"])
+	require.Zero(t, f.bookHits.Load())
+	perf := out["performance"].(map[string]any)
+	require.Empty(t, perf["routes"])
 }

@@ -101,7 +101,8 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context, prefix string) []tr
 	return out
 }
 
-// chainRoutes keeps only the chain fields Surplus binding reads.
+// chainRoutes keeps only the chain fields Surplus binding reads. Its twin is
+// gateway.detailChainRoute; keep the two in step.
 func chainRoutes(chains []store.Chain) []market.ChainRoute {
 	routes := make([]market.ChainRoute, len(chains))
 	for i, c := range chains {

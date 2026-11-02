@@ -17,9 +17,13 @@ import (
 )
 
 const (
-	detailBookTTL           = 30 * time.Second
-	detailPerfTTL           = 5 * time.Minute
-	detailRequestsTTL       = 30 * time.Second
+	detailBookTTL     = 30 * time.Second
+	detailPerfTTL     = 5 * time.Minute
+	detailRequestsTTL = 30 * time.Second
+	// detailRetryAfter holds off a refetch after an upstream failure so an
+	// outage cannot turn popups into a retry storm against Surplus.
+	detailRetryAfter        = 15 * time.Second
+	detailRequestsTimeout   = 5 * time.Second
 	detailMaxModelLen       = 200
 	detailRequestsPerMinute = 60
 )
@@ -182,7 +186,29 @@ type detailCache struct {
 	reqAt time.Time
 	req   map[string]int64 // chain id to requests in the last 24h
 	sf    singleflight.Group
-	now   func() time.Time // tests override it
+	// failed is when each fetch (singleflight key) last failed.
+	failed map[string]time.Time
+	now    func() time.Time // tests override it
+}
+
+// coolingDown reports whether fetch sfKey failed less than detailRetryAfter
+// ago. Callers hold c.mu.
+func (c *detailCache) coolingDown(sfKey string) bool {
+	at, ok := c.failed[sfKey]
+	return ok && c.clock().Sub(at) < detailRetryAfter
+}
+
+// noteResult records a failed fetch or clears an earlier failure. Callers
+// hold c.mu.
+func (c *detailCache) noteResult(sfKey string, err error) {
+	if err == nil {
+		delete(c.failed, sfKey)
+		return
+	}
+	if c.failed == nil {
+		c.failed = map[string]time.Time{}
+	}
+	c.failed[sfKey] = c.clock()
 }
 
 func (c *detailCache) clock() time.Time {
@@ -194,18 +220,26 @@ func (c *detailCache) clock() time.Time {
 
 // book returns the cached offers for name filtered under key, fetching when
 // missing or older than detailBookTTL. On a fetch error the old entry (same
-// key) is kept and returned with its old timestamp, along with the error.
+// key) is kept and returned with its old timestamp, along with the error, and
+// no refetch happens for detailRetryAfter.
 func (c *detailCache) book(name, key string, fetch func() ([]market.TrustedOffer, error)) (cachedBook, bool, error) {
+	sfKey := "book|" + key
 	c.mu.Lock()
 	e, ok := c.books[name]
+	ok = ok && e.key == key
+	cooling := c.coolingDown(sfKey)
 	c.mu.Unlock()
-	if ok && e.key == key && c.clock().Sub(e.at) < detailBookTTL {
+	if ok && (cooling || c.clock().Sub(e.at) < detailBookTTL) {
 		return e, true, nil
 	}
-	v, err, _ := c.sf.Do("book|"+key, func() (any, error) {
+	if cooling {
+		return cachedBook{}, false, nil
+	}
+	v, err, _ := c.sf.Do(sfKey, func() (any, error) {
 		offers, err := fetch()
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		c.noteResult(sfKey, err)
 		if err == nil {
 			if c.books == nil {
 				c.books = map[string]cachedBook{}
@@ -223,16 +257,22 @@ func (c *detailCache) book(name, key string, fetch func() ([]market.TrustedOffer
 
 // performance is book for the route performance feed, cached detailPerfTTL.
 func (c *detailCache) performance(name string, fetch func() ([]market.RoutePerf, time.Time, error)) (cachedPerf, bool, error) {
+	sfKey := "perf|" + name
 	c.mu.Lock()
 	e, ok := c.perf[name]
+	cooling := c.coolingDown(sfKey)
 	c.mu.Unlock()
-	if ok && c.clock().Sub(e.at) < detailPerfTTL {
+	if ok && (cooling || c.clock().Sub(e.at) < detailPerfTTL) {
 		return e, true, nil
 	}
-	v, err, _ := c.sf.Do("perf|"+name, func() (any, error) {
+	if cooling {
+		return cachedPerf{}, false, nil
+	}
+	v, err, _ := c.sf.Do(sfKey, func() (any, error) {
 		routes, asOf, err := fetch()
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		c.noteResult(sfKey, err)
 		if err == nil {
 			if c.perf == nil {
 				c.perf = map[string]cachedPerf{}
@@ -330,8 +370,12 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// Shared fetches outlive one caller's disconnect, with their own timeout.
+	fetchCtx := context.WithoutCancel(ctx)
 	reqs, err := s.detail.requests(func(since time.Time) (map[string]int64, error) {
-		return s.detailRequestCounts(ctx, since)
+		qctx, cancel := context.WithTimeout(fetchCtx, detailRequestsTimeout)
+		defer cancel()
+		return s.detailRequestCounts(qctx, since)
 	})
 	if err != nil {
 		s.log.Warn("model detail: usage query failed", "err", err)
@@ -343,9 +387,10 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 	if ref, ok := s.chainOfficialPrice(c); ok {
 		in.Official = &ref
 	}
-	// Shared fetches outlive one caller's disconnect; the fetchers time out.
-	fetchCtx := context.WithoutCancel(ctx)
-	if snap, ok := s.detailSnapshot(c, prefix+name); ok {
+	// Only trusted offers are shown, so a chain without a surplus-trusted
+	// slug does not route through them and gets no price.
+	trusted := prefix == market.SurplusTrustedPrefix
+	if snap, ok := s.detailSnapshot(c, prefix+name); trusted && ok {
 		blocked := slices.Clone(settings.SurplusBlockedProviders)
 		slices.Sort(blocked)
 		key := name + "|" + strconv.Itoa(floor) + "|" + strings.Join(blocked, ",")
@@ -438,7 +483,8 @@ func (s *Server) detailProviderFloors(ctx context.Context) (map[string]int, erro
 	return floors, nil
 }
 
-// detailChainRoute mirrors app.chainRoutes for one chain.
+// detailChainRoute mirrors app.chainRoutes (internal/app/market_sync.go) for
+// one chain; keep the two in step.
 func detailChainRoute(c store.Chain) market.ChainRoute {
 	steps := make([]market.StepRoute, len(c.Steps))
 	for i, st := range c.Steps {
