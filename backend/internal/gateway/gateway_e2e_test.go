@@ -35,12 +35,17 @@ type e2eHarness struct {
 	gateway  *Server
 	apiKey   string
 	upstream *httptest.Server
+	budget   *budget.Engine
+	db       *store.DB
 }
 
 // e2eOptions customizes the harness; the zero value matches production defaults.
 type e2eOptions struct {
 	cfg     config.Config
 	limiter *limits.Memory
+	// modelPrices seeds the meter catalog ("provider/model" keys); nil
+	// leaves every model unpriced.
+	modelPrices map[string]meter.Price
 }
 
 func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOptions)) *e2eHarness {
@@ -94,8 +99,9 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	// Wire pipeline + gateway.
 	connRegistry := connectors.DefaultRegistry()
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
-	mtr := meter.New(db.Usage(), nil, nil)
+	mtr := meter.New(db.Usage(), nil, o.modelPrices)
 	bud := budget.New(db.Budgets(), db.Usage())
+	mtr.AddUsageTracker(bud) // as internal/app wires it
 	pipeDeps := pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud}
 	gwDeps := Deps{
 		Config:   o.cfg,
@@ -115,7 +121,7 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	return &e2eHarness{server: srv, handler: handler, gateway: gw, apiKey: issued.Plaintext, upstream: upstream}
+	return &e2eHarness{server: srv, handler: handler, gateway: gw, apiKey: issued.Plaintext, upstream: upstream, budget: bud, db: db}
 }
 
 func (h *e2eHarness) post(t *testing.T, path, body, auth string) *http.Response {

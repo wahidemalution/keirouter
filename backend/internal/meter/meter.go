@@ -272,6 +272,16 @@ func (m *Meter) CostMicros(provider, model string, u core.Usage, cacheHit bool) 
 	return m.CalculateCost(provider, model, u, cacheHit, 0).CostMicros
 }
 
+// QuoteMicros prices ev's usage the way Record would bill it, without
+// persisting anything. Budget checks use it to estimate a request before
+// dispatch.
+func (m *Meter) QuoteMicros(ev Event) int64 {
+	if ev.Usage.PromptTokens+ev.Usage.CompletionTokens <= 0 {
+		return 0
+	}
+	return m.costForEvent(ev).CostMicros
+}
+
 // Record persists a canonical terminal request row and returns its actual cost
 // in micro-USD for the existing budget interface.
 func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {

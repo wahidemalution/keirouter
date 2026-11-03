@@ -49,18 +49,20 @@ func usageSpend(rec store.UsageRecord) (nanos, tokens int64) {
 
 // UsagePending implements meter.UsageTracker: the row counts toward its
 // budgets from now on, before it is written.
-func (e *Engine) UsagePending(rec store.UsageRecord) { e.adjustPending(rec, 1) }
+func (e *Engine) UsagePending(rec store.UsageRecord) { e.adjustPending(rec, 1, false) }
 
 // UsagePersisted implements meter.UsageTracker.
 func (e *Engine) UsagePersisted(rec store.UsageRecord) { e.ObserveUsage(rec) }
 
 // UsageDiscarded implements meter.UsageTracker: the row will never be
 // written, so it stops counting.
-func (e *Engine) UsageDiscarded(rec store.UsageRecord) { e.releasePending(rec) }
+func (e *Engine) UsageDiscarded(rec store.UsageRecord) { e.adjustPending(rec, -1, false) }
 
-func (e *Engine) releasePending(rec store.UsageRecord) { e.adjustPending(rec, -1) }
+// releasePending stops counting a row as pending because spend reads now
+// include it.
+func (e *Engine) releasePending(rec store.UsageRecord) { e.adjustPending(rec, -1, true) }
 
-func (e *Engine) adjustPending(rec store.UsageRecord, sign int64) {
+func (e *Engine) adjustPending(rec store.UsageRecord, sign int64, visible bool) {
 	nanos, tokens := usageSpend(rec)
 	if nanos == 0 && tokens == 0 {
 		return
@@ -69,9 +71,19 @@ func (e *Engine) adjustPending(rec store.UsageRecord, sign int64) {
 	defer e.pendMu.Unlock()
 	if e.pending == nil {
 		e.pending = map[string]*pendingSpend{}
+		e.moved = map[string]*pendingSpend{}
 	}
 	for _, sc := range pendingScopes(rec) {
 		key := reservationKey(sc.kind, sc.id)
+		if visible {
+			m := e.moved[key]
+			if m == nil {
+				m = &pendingSpend{}
+				e.moved[key] = m
+			}
+			m.nanos += nanos
+			m.tokens += tokens
+		}
 		p := e.pending[key]
 		if p == nil {
 			if sign < 0 {
@@ -95,4 +107,36 @@ func (e *Engine) getPending(kind store.BudgetScope, scopeID string) (nanos, toke
 		return max(p.nanos, 0), max(p.tokens, 0)
 	}
 	return 0, 0
+}
+
+// movedSnapshot returns, per key, the running total of pending spend that has
+// become visible to spend reads.
+func (e *Engine) movedSnapshot(keys []string) map[string]pendingSpend {
+	e.pendMu.Lock()
+	defer e.pendMu.Unlock()
+	out := make(map[string]pendingSpend, len(keys))
+	for _, k := range keys {
+		if m := e.moved[k]; m != nil {
+			out[k] = *m
+		}
+	}
+	return out
+}
+
+// pendingState returns, per key, the spend still pending and the running
+// moved total, read together so a row is in exactly one of them.
+func (e *Engine) pendingState(keys []string) (pend, moved map[string]pendingSpend) {
+	e.pendMu.Lock()
+	defer e.pendMu.Unlock()
+	pend = make(map[string]pendingSpend, len(keys))
+	moved = make(map[string]pendingSpend, len(keys))
+	for _, k := range keys {
+		if p := e.pending[k]; p != nil {
+			pend[k] = pendingSpend{nanos: max(p.nanos, 0), tokens: max(p.tokens, 0)}
+		}
+		if m := e.moved[k]; m != nil {
+			moved[k] = *m
+		}
+	}
+	return pend, moved
 }

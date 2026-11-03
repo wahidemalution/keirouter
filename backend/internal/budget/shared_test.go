@@ -52,7 +52,7 @@ func sharedEngine(t *testing.T, mr *miniredis.Miniredis, fs *fakeStores) *Engine
 	t.Helper()
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
 	t.Cleanup(func() { _ = client.Close() })
-	e := &Engine{budgets: fs, usage: fs, reservations: map[string]*reservation{},
+	e := &Engine{budgets: fs, usage: fs,
 		budgetCache: map[string]*budgetCacheEntry{}}
 	e.EnableSharedCounter(NewRedisCounter(client, 200*time.Millisecond, nil), time.Minute, nil)
 	t.Cleanup(e.Close)
@@ -198,7 +198,7 @@ func TestSharedCounterKeepsSpendWrittenDuringSeed(t *testing.T) {
 	hs := &seedHookStores{fakeStores: fs}
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
 	t.Cleanup(func() { _ = client.Close() })
-	e := &Engine{budgets: fs, usage: hs, reservations: map[string]*reservation{},
+	e := &Engine{budgets: fs, usage: hs,
 		budgetCache: map[string]*budgetCacheEntry{}}
 	e.EnableSharedCounter(NewRedisCounter(client, 200*time.Millisecond, nil), time.Minute, nil)
 	t.Cleanup(e.Close)

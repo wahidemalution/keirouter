@@ -216,13 +216,17 @@ func TestBackToBackRequestsStopAtLimit(t *testing.T) {
 			m.AddUsageTracker(eng)
 			m.StartAsync(ctx)
 
-			// Each request costs $0.03 (10k input tokens at $3/M); $1 funds
-			// 34: the 34th starts at $0.99 spent.
+			// Each request costs $0.03 (10k input tokens at $3/M). A request
+			// needs its estimate and the $0.05 minimum balance to fit, so $1
+			// funds 32: the 32nd starts at $0.93 spent, the 33rd would start
+			// with $0.04 left.
 			allowed := 0
 			for i := 0; i < 60; i++ {
-				if err := eng.Reserve(ctx, scope, 0); err != nil {
+				id, err := eng.Reserve(ctx, scope, 30_000)
+				if err != nil {
 					break
 				}
+				scope.Reservation = id
 				cost, err := m.Record(ctx, meter.Event{RequestID: fmt.Sprint(i), TenantID: scope.TenantID,
 					APIKeyID: "k1", Provider: "openai", Model: "m", Usage: core.Usage{PromptTokens: 10_000}})
 				require.NoError(t, err)
@@ -230,16 +234,101 @@ func TestBackToBackRequestsStopAtLimit(t *testing.T) {
 				eng.Confirm(scope, cost)
 				allowed++
 			}
-			require.Equal(t, 34, allowed)
+			require.Equal(t, 32, allowed)
 
 			m.Close(5 * time.Second)
 			spent, _, err := db.Usage().SpendAndTokens(ctx, store.ScopeAPIKey, "k1", time.Time{})
 			require.NoError(t, err)
-			require.Equal(t, int64(1_020_000), spent)
+			require.Equal(t, int64(960_000), spent)
 			require.Eventually(t, func() bool {
 				dec, err := eng.Check(ctx, scope)
-				return err == nil && !dec.Allowed && dec.BudgetUsage[0].CostMicros == 1_020_000
+				return err == nil && dec.BudgetUsage[0].CostMicros == 960_000
 			}, 2*time.Second, 5*time.Millisecond, "pending released into the written spend, not double counted")
+		})
+	}
+}
+
+// TestParallelRequestsNeverExceedLimit runs many clients on one key at once,
+// each reserving, waiting on a fake upstream, metering and confirming. When
+// the estimate matches the bill, the written spend must never pass the limit.
+func TestParallelRequestsNeverExceedLimit(t *testing.T) {
+	for _, mode := range []string{"usage table", "redis counters"} {
+		t.Run(mode, func(t *testing.T) {
+			db := openE2EStore(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			now := time.Now()
+			require.NoError(t, db.Budgets().Create(ctx, store.Budget{ID: "bp", TenantID: store.DefaultTenantID,
+				ScopeKind: store.ScopeAPIKey, ScopeID: "kp", Period: "total", LimitMicros: 1_000_000,
+				HardCutoff: true, CreatedAt: now, UpdatedAt: now}))
+
+			eng := New(db.Budgets(), db.Usage())
+			if mode == "redis counters" {
+				mr := miniredis.RunT(t)
+				client := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
+				t.Cleanup(func() { _ = client.Close() })
+				eng.EnableSharedCounter(NewRedisCounter(client, time.Second, nil), time.Minute, nil)
+				t.Cleanup(eng.Close)
+			}
+			m := meter.New(db.Usage(), map[string]meter.Price{"openai": {InputPerM: 3}}, nil)
+			// A short flush interval makes rows move from pending to written
+			// while other clients are mid-check.
+			m.EnableAsync(meter.AsyncConfig{Enabled: true, BatchSize: 5, FlushInterval: 2 * time.Millisecond, QueueSize: 10_000})
+			m.AddUsageTracker(eng)
+			m.StartAsync(ctx)
+
+			var served atomic.Int64
+			var seq atomic.Int64
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for w := 0; w < 24; w++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					for {
+						scope := Scope{TenantID: store.DefaultTenantID, APIKeyID: "kp"}
+						id, err := eng.Reserve(ctx, scope, 30_000)
+						if err != nil {
+							return
+						}
+						scope.Reservation = id
+						time.Sleep(time.Duration(rand.IntN(3000)) * time.Microsecond)
+						cost, err := m.Record(ctx, meter.Event{RequestID: fmt.Sprint("p", seq.Add(1)), TenantID: scope.TenantID,
+							APIKeyID: "kp", Provider: "openai", Model: "m", Usage: core.Usage{PromptTokens: 10_000}})
+						if err != nil {
+							eng.Release(scope)
+							return
+						}
+						eng.Confirm(scope, cost)
+						served.Add(1)
+					}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			m.Close(5 * time.Second)
+
+			spent, _, err := db.Usage().SpendAndTokens(ctx, store.ScopeAPIKey, "kp", time.Time{})
+			require.NoError(t, err)
+			t.Logf("served=%d spent=$%.2f", served.Load(), float64(spent)/1e6)
+			require.LessOrEqual(t, spent, int64(1_000_000), "parallel clients overspent the key")
+
+			// A client may be refused while another's cost is briefly counted
+			// twice (metered but not yet confirmed). Once all are done nothing
+			// may stay held, so whatever balance is left can still be spent.
+			require.Zero(t, eng.getReserved(store.ScopeAPIKey, "kp"), "reservation left behind")
+			require.Eventually(t, func() bool {
+				n, tok := eng.getPending(store.ScopeAPIKey, "kp")
+				return n == 0 && tok == 0
+			}, 2*time.Second, 5*time.Millisecond, "pending spend left behind")
+			scope := Scope{TenantID: store.DefaultTenantID, APIKeyID: "kp"}
+			_, err = eng.Reserve(ctx, scope, 30_000)
+			if 1_000_000-spent >= max(minKeyBalanceMicros, 30_000) {
+				require.NoError(t, err, "left balance must stay spendable")
+			} else {
+				require.Error(t, err)
+			}
 		})
 	}
 }
