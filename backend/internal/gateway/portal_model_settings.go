@@ -45,6 +45,23 @@ func (s *Server) handlePortalSetModelProvider(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
+	s.setModelProvider(w, r, key, chain)
+}
+
+// handlePortalSetModelFinalFallback serves
+// PUT /portal/api/model-settings/{model}/final-fallback.
+func (s *Server) handlePortalSetModelFinalFallback(w http.ResponseWriter, r *http.Request) {
+	key, chain, ok := s.portalModelTarget(w, r)
+	if !ok {
+		return
+	}
+	s.setModelFinalFallback(w, r, key, chain)
+}
+
+// setModelProvider turns one provider on or off for a key's model and answers
+// with the model's updated row. The portal and the admin share it, so both
+// refuse to enable a provider outside the key's admin ceiling.
+func (s *Server) setModelProvider(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
 	provider := pathParam(r, "provider")
 	if !chainHasStepProvider(chain, provider) {
 		writeError(w, http.StatusNotFound, "provider not in this model's chain")
@@ -72,13 +89,9 @@ func (s *Server) handlePortalSetModelProvider(w http.ResponseWriter, r *http.Req
 	s.writeModelSettingsRow(w, r, key, chain)
 }
 
-// handlePortalSetModelFinalFallback serves
-// PUT /portal/api/model-settings/{model}/final-fallback.
-func (s *Server) handlePortalSetModelFinalFallback(w http.ResponseWriter, r *http.Request) {
-	key, chain, ok := s.portalModelTarget(w, r)
-	if !ok {
-		return
-	}
+// setModelFinalFallback turns the final fallback on or off for a key's model
+// and answers with the model's updated row.
+func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
 	enabled, ok := decodeEnabled(w, r)
 	if !ok {
 		return
@@ -131,14 +144,21 @@ func (s *Server) portalModelTarget(w http.ResponseWriter, r *http.Request) (stor
 		writeError(w, http.StatusInternalServerError, "failed to load models")
 		return store.APIKey{}, store.Chain{}, false
 	}
+	chain, ok := findKeyChain(w, r, chains)
+	return key, chain, ok
+}
+
+// findKeyChain picks the chain named by the {model} path parameter out of the
+// chains a key may call, answering 404 when there is none.
+func findKeyChain(w http.ResponseWriter, r *http.Request, chains []store.Chain) (store.Chain, bool) {
 	model := store.NormalizeDiscountModel(pathParam(r, "model"))
 	for _, c := range chains {
 		if store.NormalizeDiscountModel(c.Name) == model {
-			return key, c, true
+			return c, true
 		}
 	}
 	writeError(w, http.StatusNotFound, "model not found for this key")
-	return store.APIKey{}, store.Chain{}, false
+	return store.Chain{}, false
 }
 
 // pathParam reads a URL parameter exactly once-decoded. chi matches on the

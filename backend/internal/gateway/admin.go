@@ -49,6 +49,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/keys/{id}/topups", s.adminListKeyTopups)
 	r.Post("/keys/{id}/limit", s.adminAdjustKeyLimit)
 	r.Get("/keys/{id}/limit-adjustments", s.adminListKeyLimitAdjustments)
+	r.Get("/keys/{id}/model-settings", s.adminKeyModelSettings)
+	r.Put("/keys/{id}/allowed-providers", s.adminSetAllowedProviders)
+	r.Put("/keys/{id}/model-settings/{model}/providers/{provider}", s.adminSetKeyModelProvider)
+	r.Put("/keys/{id}/model-settings/{model}/final-fallback", s.adminSetKeyModelFinalFallback)
 
 	r.Get("/bansos", s.adminGetBansos)
 	r.Post("/bansos", s.adminCreateBansos)
