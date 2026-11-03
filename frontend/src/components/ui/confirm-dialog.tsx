@@ -69,13 +69,13 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             </div>
             {/* Phones: full-width stacked buttons, confirm on top. */}
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <AlertDialog.Cancel className="inline-flex h-9 w-full items-center justify-center rounded-lg sm:w-auto [@media(pointer:coarse)]:h-10 border border-line-strong bg-surface px-3 text-[13px] font-medium text-fg transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+              <AlertDialog.Cancel className="inline-flex h-9 w-full items-center justify-center rounded-lg sm:w-auto [@media(pointer:coarse)]:h-11 border border-line-strong bg-surface px-3 text-[13px] font-medium text-fg transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
                 {options?.cancelLabel ?? "Cancel"}
               </AlertDialog.Cancel>
               <AlertDialog.Action
                 onClick={() => settle(true)}
                 className={cn(
-                  "inline-flex h-9 w-full items-center justify-center rounded-lg px-3 sm:w-auto [@media(pointer:coarse)]:h-10 text-[13px] font-medium transition-[background-color,opacity] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
+                  "inline-flex h-9 w-full items-center justify-center rounded-lg px-3 sm:w-auto [@media(pointer:coarse)]:h-11 text-[13px] font-medium transition-[background-color,opacity] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
                   danger
                     ? "bg-bad text-white hover:opacity-85 focus-visible:ring-bad dark:text-canvas"
                     : "bg-action text-action-fg shadow-[var(--shadow-card)] hover:bg-action-hover focus-visible:ring-accent-500",

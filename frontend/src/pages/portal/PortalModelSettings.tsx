@@ -32,8 +32,8 @@ function formatPerM(v: number): string {
 
 // priceText renders "$in / $out per 1M", or null when neither price is known.
 function priceText(input: number | null, output: number | null): string | null {
-  if (!input && !output) return null;
-  const side = (v: number | null) => (v ? formatPerM(v) : "n/a");
+  if (input == null && output == null) return null;
+  const side = (v: number | null) => (v == null ? "n/a" : formatPerM(v));
   return `${side(input)} / ${side(output)} per 1M`;
 }
 
@@ -239,13 +239,16 @@ function useRowSettings(row: PortalModelSettingsRow) {
     );
     queryClient.invalidateQueries({ queryKey: QUERY_KEY });
   };
+  const refetch = () => queryClient.invalidateQueries({ queryKey: QUERY_KEY });
   const provider = useMutation({
     mutationFn: (v: { id: string; enabled: boolean }) => setPortalModelProvider(row.model, v.id, v.enabled),
     onSuccess: apply,
+    onError: refetch,
   });
   const fallback = useMutation({
     mutationFn: (enabled: boolean) => setPortalFinalFallback(row.model, enabled),
     onSuccess: apply,
+    onError: refetch,
   });
 
   const enabledCount = row.providers.filter((p) => p.enabled).length;
@@ -267,7 +270,29 @@ function useRowSettings(row: PortalModelSettingsRow) {
       });
       if (!ok) return;
     }
+    fallback.reset();
     provider.mutate({ id: p.id, enabled: next });
+  }
+
+  async function setFallback(on: boolean) {
+    // With every provider off, the fallback is the only route left.
+    if (!on && enabledCount === 0) {
+      const ok = await confirm({
+        title: "Turn off the final fallback?",
+        description: (
+          <>
+            Every provider for <span className="break-all font-mono text-fg">{row.model}</span> is off, so requests will
+            fail until you turn a provider or the final fallback back on.
+          </>
+        ),
+        confirmLabel: "Turn off",
+        cancelLabel: "Keep it on",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    provider.reset();
+    fallback.mutate(on);
   }
 
   return {
@@ -275,7 +300,7 @@ function useRowSettings(row: PortalModelSettingsRow) {
     busy: provider.isPending || fallback.isPending,
     toggleProvider,
     providerError: provider.error,
-    setFallback: (on: boolean) => fallback.mutate(on),
+    setFallback,
     fallbackError: fallback.error,
   };
 }
@@ -286,7 +311,7 @@ type RowSettings = ReturnType<typeof useRowSettings>;
 // its clicks to the switch it names, so the padding is live.
 function ToggleTarget({ htmlFor, children }: { htmlFor: string; children: ReactNode }) {
   return (
-    <label htmlFor={htmlFor} className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center">
+    <label htmlFor={htmlFor} className="flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center has-[:disabled]:cursor-not-allowed justify-center">
       {children}
     </label>
   );
@@ -312,7 +337,7 @@ function ProvidersButton({
         onClick={onToggle}
         className={`-ml-2 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-[13px] font-medium tabular-nums text-fg transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 ${TOUCH}`}
       >
-        {row.providers.length === 0 ? "None" : `${settings.enabledCount} of ${row.providers.length}`}
+        {settings.enabledCount} of {row.providers.length}
         <span className="sr-only"> providers on for {row.model}</span>
         <ChevronDown
           className={`h-4 w-4 text-fg-muted transition-transform duration-150 ${open ? "rotate-180" : ""}`}
@@ -334,7 +359,7 @@ function FallbackControl({ row, settings }: { row: PortalModelSettingsRow; setti
           <Toggle
             id={toggleId}
             checked={row.final_fallback}
-            onChange={settings.setFallback}
+            onChange={(on) => void settings.setFallback(on)}
             disabled={settings.busy}
             label={`Final fallback for ${row.model}`}
           />
@@ -392,7 +417,7 @@ function ProviderItem({ p, model, settings }: { p: PortalModelProvider; model: s
 // ProvidersPanel is the open row: one switch per provider, then the
 // fallback's normal price.
 function ProvidersPanel({ row, settings, id }: { row: PortalModelSettingsRow; settings: RowSettings; id: string }) {
-  const fallbackPrice = priceText(row.fallback_input_per_m, row.fallback_output_per_m);
+  const fallbackPrice = priceText(row.fallback_input_per_m || null, row.fallback_output_per_m || null);
   return (
     <div id={id} className="space-y-2 rounded-lg border border-line bg-subtle px-3 py-1 sm:px-4">
       {row.providers.length > 0 ? (
@@ -653,7 +678,7 @@ export function PortalModelSettingsPage() {
   }
 
   if (settings.isLoading) return <Spinner label="Loading model settings" />;
-  if (settings.isError || !settings.data) {
+  if (!settings.data) {
     return (
       <div className="space-y-6">
         <PageHeader icon={SlidersHorizontal} title="Model Settings" />
