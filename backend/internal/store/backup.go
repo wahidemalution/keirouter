@@ -219,10 +219,44 @@ func (db *DB) RestoreBackup(ctx context.Context, b Backup) (RestoreStats, error)
 		}
 		stmt.Close()
 	}
+	// A backup older than per-key routing has none of its tables, and the
+	// clear above wiped the rows migration 0061 seeded, so seed them again
+	// from the restored keys and chains.
+	if migrationNumber(b.SchemaVersion) < keyRoutingMigration {
+		seed, err := keyRoutingSeedSQL()
+		if err != nil {
+			return RestoreStats{}, err
+		}
+		if _, err := tx.ExecContext(ctx, db.rebind(seed)); err != nil {
+			return RestoreStats{}, fmt.Errorf("store: seed key routing: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return RestoreStats{}, err
 	}
 	return stats, nil
+}
+
+const (
+	keyRoutingMigration     = 61
+	keyRoutingMigrationFile = "migrations/0061_key_provider_routing.sql"
+	keyRoutingSeedStart     = "INSERT INTO api_key_model_options"
+)
+
+// keyRoutingSeedSQL returns the statement migration 0061 uses to give every
+// existing key the final fallback its chains run today. It is cut from the
+// embedded migration (the statement runs from its INSERT to the end of the
+// file), so restore and migration cannot drift apart.
+func keyRoutingSeedSQL() (string, error) {
+	body, err := migrationsFS.ReadFile(keyRoutingMigrationFile)
+	if err != nil {
+		return "", fmt.Errorf("store: read %s: %w", keyRoutingMigrationFile, err)
+	}
+	i := strings.Index(string(body), keyRoutingSeedStart)
+	if i < 0 {
+		return "", fmt.Errorf("store: %s has no key routing seed statement", keyRoutingMigrationFile)
+	}
+	return strings.TrimSpace(string(body)[i:]), nil
 }
 
 // restoreValue converts a decoded JSON value to the Go type the target column

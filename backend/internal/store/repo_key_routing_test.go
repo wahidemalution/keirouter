@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,4 +142,15 @@ func TestAPIKeyProviderEnabled(t *testing.T) {
 	open := APIKey{ModelDisabledProviders: map[string][]string{"m": {"p2"}}}
 	require.False(t, open.ProviderEnabled("M", "p2"))
 	require.True(t, open.ProviderEnabled("M", "p3"))
+}
+
+// The restore path reuses the seed cut from the 0061 file; it must stay one
+// statement, on the options table, that never overwrites an existing row.
+func TestKeyRoutingSeedSQLIsTheMigrationSeed(t *testing.T) {
+	seed, err := keyRoutingSeedSQL()
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(seed, "INSERT INTO api_key_model_options"))
+	require.True(t, strings.HasSuffix(seed, "ON CONFLICT (api_key_id, model) DO NOTHING;"))
+	require.Equal(t, 1, strings.Count(seed, ";"), "exactly one statement")
+	require.Contains(t, seed, "WHERE c.fallback_provider <> '' AND c.fallback_model <> ''")
 }
