@@ -1843,7 +1843,12 @@ export interface PortalStatus {
   key_id?: string;
   has_key?: boolean;
   provisioning_enabled?: boolean;
+  /** Present and true only when the server was started with portal_sso.dev_login. */
+  dev_login?: boolean;
 }
+
+/** Email on the session that the local dev sign-in issues. */
+export const PORTAL_DEV_EMAIL = "dev@localhost";
 
 export interface PortalPlan {
   id: string;
@@ -1892,6 +1897,15 @@ export async function fetchPortalStatus(): Promise<PortalStatus> {
   const resp = await fetch("/portal/auth/status");
   if (!resp.ok) return { authenticated: false };
   return resp.json();
+}
+
+/**
+ * Local development sign-in. Only exists when the server runs with
+ * portal_sso.dev_login and the request comes straight from this machine.
+ */
+export async function devLoginPortal(): Promise<void> {
+  const resp = await fetch("/portal/auth/dev-login", { method: "POST" });
+  if (!resp.ok) throw new Error("Dev sign-in is not available from this address");
 }
 
 /**

@@ -5,7 +5,7 @@ import {
   BadgePercent, BarChart3, Bell, BookOpen, Coins, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, Sun, Wallet, X,
   type LucideIcon,
 } from "lucide-react";
-import { fetchPortalStatus, portalLogout, type LandingNotification } from "../../lib/api";
+import { fetchPortalStatus, PORTAL_DEV_EMAIL, portalLogout, type LandingNotification } from "../../lib/api";
 import { takePortalReturn } from "../../lib/portalReturn";
 import { fetchPublicNotifications } from "../../lib/publicApi";
 import { useBranding } from "../../contexts/BrandingContext";
@@ -301,6 +301,13 @@ export function PortalLayoutPage() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {status.data?.email === PORTAL_DEV_EMAIL && (
+          <div
+            className="shrink-0 border-b border-warn/25 bg-warn/12 px-4 py-1 text-center text-[12px] font-medium text-warn sm:px-6 lg:px-8"
+          >
+            Development sign-in. Not for production.
+          </div>
+        )}
         <header className="flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b border-line bg-surface px-4 pt-[env(safe-area-inset-top)] sm:gap-3 sm:px-6 lg:px-8">
           <button
             type="button"

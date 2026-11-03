@@ -127,6 +127,10 @@ type PortalSSOConfig struct {
 	AllowedDomains     []string      `koanf:"allowed_domains"`
 	RedirectURL        string        `koanf:"redirect_url"`
 	SessionTTL         time.Duration `koanf:"session_ttl"`
+	// DevLogin adds POST /portal/auth/dev-login, a sign-in that skips Google
+	// and Turnstile. It only answers requests that come straight from this
+	// machine. Development only (KEIROUTER_PORTAL_SSO__DEV_LOGIN=true).
+	DevLogin bool `koanf:"dev_login"`
 }
 
 // PaymentConfig configures the SumoPod payment gateway used for portal

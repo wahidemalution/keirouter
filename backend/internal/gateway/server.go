@@ -286,6 +286,9 @@ func New(d Deps) *Server {
 		paymentClient:       d.Payment,
 		inflight:            d.Inflight,
 	}
+	if d.Config.PortalSSO.DevLogin {
+		s.log.Warn("portal dev login is ON: anyone on this machine can open the portal")
+	}
 	if d.Config.PortalSSO.Enabled {
 		s.portalSSO = portalauth.New(portalauth.Config{
 			ClientID:       d.Config.PortalSSO.GoogleClientID,
@@ -431,6 +434,9 @@ func (s *Server) routes() chi.Router {
 	r.Get("/portal/auth/google/start", s.handlePortalLoginStart)
 	r.Get("/portal/auth/google/callback", s.handlePortalLoginCallback)
 	r.Get("/portal/auth/status", s.handlePortalStatus)
+	if s.cfg.PortalSSO.DevLogin {
+		r.Post("/portal/auth/dev-login", s.handlePortalDevLogin)
+	}
 	r.Get("/portal/plans", s.handlePortalPlans)
 	r.Get("/portal/payment/config", s.handlePortalPaymentConfig)
 	r.Get("/portal/token/packages", s.handlePortalTokenPackages)
