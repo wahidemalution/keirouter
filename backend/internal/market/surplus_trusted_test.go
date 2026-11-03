@@ -267,3 +267,81 @@ func TestTrustedBookIgnoresMalformedProviderLabel(t *testing.T) {
 		t.Fatalf("string label offers %+v", offers)
 	}
 }
+
+// openrouter asks $1/$2, alibaba-cn asks $0.5/$1, both against a $2/$4 list.
+const twoProviderBook = `{"model":"qwen-plus","offers":[
+  {"provider_id":"openrouter","price_input_per_1m":1000000,"price_output_per_1m":2000000,"direct_input_per_1m":2000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true},
+  {"provider_id":"alibaba-cn","price_input_per_1m":500000,"price_output_per_1m":1000000,"direct_input_per_1m":2000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true}
+]}`
+
+func TestParseSurplusTrustedBookForProvider(t *testing.T) {
+	q, err := ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 0, nil, "OpenRouter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(q.Providers, []string{"openrouter"}) {
+		t.Fatalf("providers = %v", q.Providers)
+	}
+	if !approx(q.BestIn, 1.0) || !approx(q.BestOut, 2.0) {
+		t.Fatalf("best = (%v,%v), want (1,2)", q.BestIn, q.BestOut)
+	}
+	// 50% below list, ceiling 50-2 = 48 => cap 52% of list. Never alibaba's 0.5.
+	if q.MinDiscountPct != 48 || !approx(q.CapIn, 1.04) || !approx(q.CapOut, 2.08) {
+		t.Fatalf("ceiling = %d%% cap (%v,%v), want 48%% (1.04,2.08)", q.MinDiscountPct, q.CapIn, q.CapOut)
+	}
+	if q.BestDiscountPct != 50 {
+		t.Fatalf("best discount = %d, want 50", q.BestDiscountPct)
+	}
+	if q.Eligible != 1 {
+		t.Fatalf("eligible = %d, want 1", q.Eligible)
+	}
+
+	missing, err := ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 0, nil, "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing.Found {
+		t.Fatal("unknown provider must not be found")
+	}
+
+	all, err := ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(all.Providers, []string{"alibaba-cn", "openrouter"}) {
+		t.Fatalf("providers = %v", all.Providers)
+	}
+	if !approx(all.BestIn, 0.5) || all.BestDiscountPct != 75 {
+		t.Fatalf("whole book best = %v at %d%%, want 0.5 at 75%%", all.BestIn, all.BestDiscountPct)
+	}
+}
+
+func TestParseSurplusTrustedBookForProviderFloor(t *testing.T) {
+	// A 60% floor drops openrouter (50% off); alibaba-cn (75% off) survives.
+	q, _ := ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 60, nil, "openrouter")
+	if q.Found {
+		t.Fatal("openrouter misses the floor")
+	}
+	q, _ = ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 60, nil, "alibaba-cn")
+	if !q.Found || !approx(q.FloorCapIn, 0.8) {
+		t.Fatalf("alibaba-cn floor cap = %v found=%v, want 0.8", q.FloorCapIn, q.Found)
+	}
+}
+
+func TestBestDiscountPctWithoutListPrice(t *testing.T) {
+	q, _ := ParseSurplusTrustedBook(strings.NewReader(`{"offers":[{"provider_id":"a","price_input_per_1m":1000,"price_output_per_1m":2000,"available":true,"healthy":true,"trusted":true}]}`), 3, 0, nil)
+	if !q.Found || q.BestDiscountPct != 0 {
+		t.Fatalf("found=%v discount=%d, want found with 0", q.Found, q.BestDiscountPct)
+	}
+}
+
+func TestProviderModelUsesCanonicalSlug(t *testing.T) {
+	q, _ := ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 0, nil, "openrouter")
+	m := q.ProviderModel("OpenRouter", "qwen-plus")
+	if m.Slug != "surplus-trusted@openrouter:qwen-plus" {
+		t.Fatalf("slug = %q", m.Slug)
+	}
+	if m.BestDiscountPct != 50 || !approx(m.FailoverIn, 1.04) || m.MinDiscountPct != 48 {
+		t.Fatalf("model = %+v", m)
+	}
+}

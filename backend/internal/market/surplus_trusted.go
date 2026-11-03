@@ -56,11 +56,22 @@ type TrustedQuote struct {
 	// as `provider_order` (surplus-fast: fastest first).
 	ProviderOrder []string
 	Eligible      int
+	// BestDiscountPct is how far the cheapest ask sits below its list price on
+	// its better-discounted rate, floored to whole percent (0..100). Zero when
+	// the book publishes no list price for that ask.
+	BestDiscountPct int
 }
 
 // Model converts the quote into a snapshot model keyed surplus-trusted:<name>.
 func (q TrustedQuote) Model(name string) Model {
 	return q.model(SurplusTrustedPrefix + name)
+}
+
+// ProviderModel converts the quote into a snapshot model keyed
+// surplus-trusted@<provider>:<name>, with the provider lowercased so the key
+// matches the canonical slug.
+func (q TrustedQuote) ProviderModel(provider, name string) Model {
+	return q.model(ProviderSlug(strings.ToLower(provider), name))
 }
 
 // FastModel converts the quote into a snapshot model keyed surplus-fast:<name>.
@@ -70,14 +81,15 @@ func (q TrustedQuote) FastModel(name string) Model {
 
 func (q TrustedQuote) model(slug string) Model {
 	return Model{
-		Slug:           slug,
-		MinAskIn:       q.BestIn,
-		MinAskOut:      q.BestOut,
-		FailoverIn:     q.CapIn,
-		FailoverOut:    q.CapOut,
-		MinDiscountPct: q.MinDiscountPct,
-		Providers:      q.Providers,
-		ProviderOrder:  q.ProviderOrder,
+		Slug:            slug,
+		MinAskIn:        q.BestIn,
+		MinAskOut:       q.BestOut,
+		FailoverIn:      q.CapIn,
+		FailoverOut:     q.CapOut,
+		MinDiscountPct:  q.MinDiscountPct,
+		Providers:       q.Providers,
+		ProviderOrder:   q.ProviderOrder,
+		BestDiscountPct: q.BestDiscountPct,
 	}
 }
 
@@ -110,6 +122,12 @@ type TrustedOffer struct {
 // floor: offers that cannot prove at least that discount below list on both
 // rates are dropped, as Surplus would skip them.
 func EligibleTrustedOffers(r io.Reader, floorPct int, blocked []string) ([]TrustedOffer, error) {
+	return eligibleTrustedOffers(r, floorPct, blocked, "")
+}
+
+// eligibleTrustedOffers is EligibleTrustedOffers narrowed to one provider id
+// (case-insensitive) when provider is non-empty.
+func eligibleTrustedOffers(r io.Reader, floorPct int, blocked []string, provider string) ([]TrustedOffer, error) {
 	var body trustedBookEnvelope
 	if err := json.NewDecoder(r).Decode(&body); err != nil {
 		return nil, err
@@ -118,6 +136,9 @@ func EligibleTrustedOffers(r io.Reader, floorPct int, blocked []string) ([]Trust
 	skip := providerSet(blocked)
 	for _, o := range body.Offers {
 		if !o.Trusted || !o.Available || !o.Healthy || o.ProviderID == "" || skip[strings.ToLower(o.ProviderID)] {
+			continue
+		}
+		if provider != "" && !strings.EqualFold(o.ProviderID, provider) {
 			continue
 		}
 		if o.PriceInputPer1M == nil || o.PriceOutputPer1M == nil {
@@ -148,7 +169,16 @@ func EligibleTrustedOffers(r io.Reader, floorPct int, blocked []string) ([]Trust
 // levels the ceiling admits; fewer levels use the deepest. floorPct and
 // blocked are passed through to the filter.
 func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int, blocked []string) (TrustedQuote, error) {
-	offers, err := EligibleTrustedOffers(r, floorPct, blocked)
+	return ParseSurplusTrustedBookFor(r, depth, floorPct, blocked, "")
+}
+
+// ParseSurplusTrustedBookFor is ParseSurplusTrustedBook restricted to one
+// Surplus provider (case-insensitive). The ceiling, caps and allow-list are
+// computed from that provider's offers alone, so a pinned request is never
+// billed against another provider's cheaper rate. An empty provider quotes the
+// whole book.
+func ParseSurplusTrustedBookFor(r io.Reader, depth, floorPct int, blocked []string, provider string) (TrustedQuote, error) {
+	offers, err := eligibleTrustedOffers(r, floorPct, blocked, provider)
 	if err != nil {
 		return TrustedQuote{}, err
 	}
@@ -189,6 +219,10 @@ func ParseSurplusTrustedBook(r io.Reader, depth, floorPct int, blocked []string)
 		q.Providers = append(q.Providers, p)
 	}
 	sort.Strings(q.Providers)
+	if best := asks[0]; best.directIn > 0 && best.directOut > 0 {
+		disc := math.Max(1-best.in/best.directIn, 1-best.out/best.directOut) * 100
+		q.BestDiscountPct = min(max(int(math.Floor(disc+1e-9)), 0), 100)
+	}
 	if floorPct > 0 {
 		// Every eligible offer passed the floor, so list × (1-N) bounds them all;
 		// the max with the deepest offer only guards float rounding.

@@ -111,6 +111,14 @@ func FetchSurplusDetail(ctx context.Context, marketsURL, model string, floorPct 
 	return EligibleTrustedOffers(bytes.NewReader(data), floorPct, blocked)
 }
 
+// FetchSurplusBookRaw downloads one model's order book as raw JSON, so a caller
+// can quote several providers from a single fetch. Any non-200 status, 404
+// included, is an error.
+func FetchSurplusBookRaw(ctx context.Context, marketsURL, model string) ([]byte, error) {
+	data, _, err := getCapped(ctx, SurplusBookURL(marketsURL, model), false)
+	return data, err
+}
+
 // FetchSurplusPerformanceRoutes downloads one model's per-route performance.
 // A 404 (no recent traffic) returns no routes and no error.
 func FetchSurplusPerformanceRoutes(ctx context.Context, marketsURL, model string) ([]RoutePerf, time.Time, error) {
