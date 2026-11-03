@@ -17,13 +17,15 @@ var devLoginForwardingHeaders = []string{"X-Forwarded-For", "X-Real-IP", "CF-Con
 // devLoginRequestAllowed reports whether r is a direct local request: loopback
 // peer address, no proxy forwarding headers, and a loopback Host. Every check
 // must pass, so a proxy that rewrites the peer to 127.0.0.1 still fails on the
-// headers or the Host it forwards.
-func devLoginRequestAllowed(r *http.Request) bool {
+// headers or the Host it forwards. allowPrivatePeer also accepts a private
+// peer (the Docker gateway a host request arrives from inside a container).
+func devLoginRequestAllowed(r *http.Request, allowPrivatePeer bool) bool {
 	peer, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return false
 	}
-	if ip := net.ParseIP(peer); ip == nil || !ip.IsLoopback() {
+	ip := net.ParseIP(peer)
+	if ip == nil || !(ip.IsLoopback() || (allowPrivatePeer && ip.IsPrivate())) {
 		return false
 	}
 	for _, h := range devLoginForwardingHeaders {
@@ -46,7 +48,7 @@ func devLoginRequestAllowed(r *http.Request) bool {
 // It is only routed when portal_sso.dev_login is on, and it answers 404 to any
 // request that is not a direct local one, so it looks absent from outside.
 func (s *Server) handlePortalDevLogin(w http.ResponseWriter, r *http.Request) {
-	if !devLoginRequestAllowed(r) {
+	if !devLoginRequestAllowed(r, s.cfg.PortalSSO.DevLoginDocker) {
 		http.NotFound(w, r)
 		return
 	}

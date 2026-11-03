@@ -298,6 +298,9 @@ func New(d Deps) *Server {
 	}
 	if d.Config.PortalSSO.DevLogin {
 		s.log.Warn("portal dev login is ON: anyone on this machine can open the portal")
+		if d.Config.PortalSSO.DevLoginDocker {
+			s.log.Warn("portal dev login also accepts private peer addresses (Docker mode): publish the port on 127.0.0.1 only")
+		}
 	}
 	if d.Config.PortalSSO.Enabled {
 		s.portalSSO = portalauth.New(portalauth.Config{
