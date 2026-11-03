@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Lock } from "lucide-react";
 import type { PortalModelProvider, PortalModelSettingsRow } from "../../lib/api";
@@ -52,24 +52,33 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
     queryClient.invalidateQueries({ queryKey: source.queryKey });
   };
   const refetch = () => queryClient.invalidateQueries({ queryKey: source.queryKey });
+  // One write per row at a time. The ref is set in the event handler itself,
+  // so a second event before the re-render (key repeat, a fast double click)
+  // already sees it; isPending would only change on a later tick.
+  const writing = useRef(false);
+  const done = () => {
+    writing.current = false;
+  };
   const provider = useMutation({
     mutationFn: (v: { id: string; enabled: boolean }) => source.setProvider(row.model, v.id, v.enabled),
     onSuccess: apply,
     onError: refetch,
+    onSettled: done,
   });
   const fallback = useMutation({
     mutationFn: (enabled: boolean) => source.setFallback(row.model, enabled),
     onSuccess: apply,
     onError: refetch,
+    onSettled: done,
   });
 
   const enabledCount = row.providers.filter((p) => p.enabled).length;
-  // One write per row at a time. The switches stay enabled while a write runs:
-  // disabling the focused switch would drop keyboard focus to the page.
+  // The switches stay enabled while a write runs (disabling the focused one
+  // would drop keyboard focus to the page); they show busy instead.
   const busy = provider.isPending || fallback.isPending;
 
   async function toggleProvider(p: PortalModelProvider, next: boolean) {
-    if (busy) return;
+    if (writing.current) return;
     // Turning off the last provider with no fallback leaves nothing to serve.
     if (!next && p.enabled && enabledCount === 1 && !fallbackOn(row)) {
       const ok = await confirm({
@@ -84,14 +93,15 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
         cancelLabel: "Keep it on",
         tone: "danger",
       });
-      if (!ok) return;
+      if (!ok || writing.current) return;
     }
+    writing.current = true;
     fallback.reset();
     provider.mutate({ id: p.id, enabled: next });
   }
 
   async function setFallback(on: boolean) {
-    if (busy) return;
+    if (writing.current) return;
     // With every provider off, the fallback is the only route left.
     if (!on && enabledCount === 0) {
       const ok = await confirm({
@@ -106,14 +116,16 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
         cancelLabel: "Keep it on",
         tone: "danger",
       });
-      if (!ok) return;
+      if (!ok || writing.current) return;
     }
+    writing.current = true;
     provider.reset();
     fallback.mutate(on);
   }
 
   return {
     enabledCount,
+    busy,
     toggleProvider,
     providerError: provider.error,
     setFallback,
@@ -176,6 +188,7 @@ export function FallbackControl({ row, settings }: { row: PortalModelSettingsRow
             id={toggleId}
             checked={row.final_fallback}
             onChange={(on) => void settings.setFallback(on)}
+            busy={settings.busy}
             label={`Final fallback for ${row.model}`}
           />
         </ToggleTarget>
@@ -228,6 +241,7 @@ function ProviderItem({
           checked={p.enabled}
           onChange={(next) => void settings.toggleProvider(p, next)}
           disabled={p.locked}
+          busy={settings.busy && !p.locked}
           aria-labelledby={nameId}
           aria-describedby={infoId}
         />

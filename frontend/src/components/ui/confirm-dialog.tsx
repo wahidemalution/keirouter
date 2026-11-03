@@ -32,13 +32,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const resolver = useRef<((ok: boolean) => void) | null>(null);
   // The dialog opens from code, not from a Radix trigger, so Radix has nowhere
-  // to return focus on close. Remember the control that asked instead.
+  // to return focus on close. Remember the control that had focus when the
+  // dialog mounted instead.
   const returnFocus = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback<ConfirmFn>((next) => {
-    if (!resolver.current && document.activeElement instanceof HTMLElement) {
-      returnFocus.current = document.activeElement;
-    }
     // A second request while one is open resolves the first as cancelled.
     resolver.current?.(false);
     setOptions(next);
@@ -62,13 +60,22 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/45 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
           <AlertDialog.Content
+            onOpenAutoFocus={() => {
+              // Runs before Radix moves focus into the dialog. Skip body (Safari
+              // and macOS Firefox don't focus a clicked button) and menu items:
+              // the menu is closing and returns focus to its own trigger.
+              const opener = document.activeElement;
+              returnFocus.current =
+                opener instanceof HTMLElement && opener !== document.body && !opener.closest('[role="menu"]') ? opener : null;
+            }}
             onCloseAutoFocus={(e) => {
               const el = returnFocus.current;
               returnFocus.current = null;
-              if (el?.isConnected) {
-                e.preventDefault();
-                el.focus();
-              }
+              if (!el?.isConnected) return;
+              el.focus();
+              // Keep Radix's fallback when the opener could not take focus
+              // (hidden, inert or disabled by now).
+              if (document.activeElement === el) e.preventDefault();
             }}
             className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98]">
             <div className="flex items-start gap-3">
