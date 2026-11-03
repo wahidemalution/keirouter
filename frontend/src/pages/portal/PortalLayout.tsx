@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BadgePercent, BarChart3, Bell, BookOpen, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, Sun, Wallet, X,
+  BarChart3, Bell, BookOpen, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, SlidersHorizontal, Sun, Wallet, X,
   type LucideIcon,
 } from "lucide-react";
 import { fetchPortalStatus, PORTAL_DEV_EMAIL, portalLogout, type LandingNotification } from "../../lib/api";
@@ -40,7 +40,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: portal("/key"), label: "API Key", icon: Key },
       { to: portal("/models"), label: "Models", icon: Layers },
-      { to: portal("/discounts"), label: "Discount Settings", icon: BadgePercent },
+      { to: portal("/model-settings"), label: "Model Settings", icon: SlidersHorizontal },
     ],
   },
   {
@@ -65,7 +65,7 @@ const TITLES: Record<string, string> = {
   "/portal/key": "API Key",
   "/portal/usage": "Usage",
   "/portal/models": "Models",
-  "/portal/discounts": "Discount Settings",
+  "/portal/model-settings": "Model Settings",
   "/portal/topup": "Topup",
   "/portal/hosting": "Hosting 9router",
   "/portal/docs": "Docs",
