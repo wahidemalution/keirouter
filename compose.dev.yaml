@@ -1,0 +1,14 @@
+# Development override: opens the customer portal without Google sign-in.
+# Use together with compose.localhost.yaml, never in production:
+#   docker compose -f compose.localhost.yaml -f compose.dev.yaml up -d --build
+# Then open http://localhost:20180/portal and click "Dev sign-in".
+#
+# Dev sign-in only answers requests with a localhost Host and no proxy
+# headers. DEV_LOGIN_DOCKER also accepts the Docker gateway address that host
+# requests arrive from, so keep the port published on 127.0.0.1 only (as
+# compose.localhost.yaml does).
+services:
+  keirouter:
+    environment:
+      KEIROUTER_PORTAL_SSO__DEV_LOGIN: "true"
+      KEIROUTER_PORTAL_SSO__DEV_LOGIN_DOCKER: "true"

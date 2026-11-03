@@ -110,3 +110,40 @@ func TestPortalStatusDevLoginFlagWhenSignedOut(t *testing.T) {
 	require.Equal(t, false, body["authenticated"])
 	require.Equal(t, true, body["dev_login"])
 }
+
+func TestPortalDevLoginDockerPeer(t *testing.T) {
+	dockerGateway := "172.18.0.1:40000"
+
+	srv := newPortalTestServer(t)
+	srv.cfg.PortalSSO.DevLogin = true
+	srv.router = srv.routes()
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, devLoginRequest(dockerGateway, "localhost:20180", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code, "a private peer needs dev_login_docker")
+
+	srv = newPortalTestServer(t)
+	srv.cfg.PortalSSO.DevLogin = true
+	srv.cfg.PortalSSO.DevLoginDocker = true
+	srv.router = srv.routes()
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, devLoginRequest(dockerGateway, "localhost:20180", nil))
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.NotEmpty(t, rec.Result().Cookies())
+
+	for _, tc := range []struct {
+		name    string
+		remote  string
+		host    string
+		headers map[string]string
+	}{
+		{"public peer", "203.0.113.5:1", "localhost:20180", nil},
+		{"private peer behind a proxy", dockerGateway, "localhost:20180", map[string]string{"X-Forwarded-For": "198.51.100.7"}},
+		{"private peer with a public host", dockerGateway, "keirouter.example.com", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, devLoginRequest(tc.remote, tc.host, tc.headers))
+			require.Equal(t, http.StatusNotFound, rec.Code)
+		})
+	}
+}
