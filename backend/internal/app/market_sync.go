@@ -169,6 +169,11 @@ func (a *App) fetchSurplusBooks(ctx context.Context, models []string) map[string
 	a.surplusBooksMu.Lock()
 	a.surplusBooks = books
 	a.surplusBooksMu.Unlock()
+	for _, body := range books {
+		if labels, err := market.ParseSurplusProviderLabels(bytes.NewReader(body)); err == nil {
+			a.marketCache.MergeProviderLabels(labels)
+		}
+	}
 	return books
 }
 

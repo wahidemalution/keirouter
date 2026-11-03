@@ -119,7 +119,7 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 			index[t.Provider] = len(row.Providers)
 			row.Providers = append(row.Providers, modelSettingsProvider{
 				ID:      t.Provider,
-				Name:    providerDisplayName(names, t.Provider),
+				Name:    s.stepProviderName(names, t),
 				Enabled: key.ProviderEnabled(c.Name, t.Provider),
 				Locked:  !key.ProviderAllowed(t.Provider),
 			})
@@ -177,6 +177,16 @@ func (s *Server) providerNames(ctx context.Context) map[string]string {
 		}
 	}
 	return names
+}
+
+// stepProviderName is the name a customer sees for a step: for a
+// surplus-trusted@<provider> step, the label Surplus publishes for that
+// provider (e.g. "OpenRouter"); otherwise the keirouter provider's name.
+func (s *Server) stepProviderName(names map[string]string, t dispatch.Target) string {
+	if label := s.marketCache.ProviderLabel(market.SlugProvider(t.MarketSlug)); label != "" {
+		return label
+	}
+	return providerDisplayName(names, t.Provider)
 }
 
 // providerDisplayName resolves id through names, then the catalog.

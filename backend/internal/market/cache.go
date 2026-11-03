@@ -13,6 +13,8 @@ type SnapshotCache struct {
 	fetched time.Time
 	fast    *FastHealth
 	skips   *SlugSkips
+	// labels maps a Surplus provider id to its display label.
+	labels map[string]string
 }
 
 func NewSnapshotCache() *SnapshotCache {

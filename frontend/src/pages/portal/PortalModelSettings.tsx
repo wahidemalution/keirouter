@@ -11,6 +11,7 @@ import { Badge, Button, EmptyState, ErrorCard, Input, Spinner } from "../../comp
 import {
   FallbackControl, ProvidersButton, ProvidersPanel, TOUCH, errorText, useRowSettings,
   type RowSettingsSource,
+  MODEL_SETTINGS_POLL_MS,
 } from "../../components/modelSettings/ProviderControls";
 import { modelGroup } from "../../lib/modelGroup";
 import { portal } from "../../lib/portalRoutes";
@@ -430,7 +431,14 @@ function ModelsPanel({ data }: { data: PortalModelSettings }) {
 
 export function PortalModelSettingsPage() {
   const status = useQuery({ queryKey: ["portal-status"], queryFn: fetchPortalStatus, retry: false });
-  const settings = useQuery({ queryKey: QUERY_KEY, queryFn: fetchPortalModelSettings, enabled: !!status.data?.has_key });
+  // Prices and offers move with the market (the server refreshes them every
+  // few seconds), so the page polls while it is visible.
+  const settings = useQuery({
+    queryKey: QUERY_KEY,
+    queryFn: fetchPortalModelSettings,
+    enabled: !!status.data?.has_key,
+    refetchInterval: MODEL_SETTINGS_POLL_MS,
+  });
 
   if (status.isLoading) return <Spinner />;
   if (!status.data) return <ErrorCard message="Failed to load portal status" />;

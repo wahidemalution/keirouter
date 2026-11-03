@@ -4,6 +4,9 @@ import { ChevronDown, Lock } from "lucide-react";
 import type { PortalModelProvider, PortalModelSettingsRow } from "../../lib/api";
 import { Badge, Toggle } from "../ui";
 import { useConfirm } from "../ui/confirm-dialog";
+
+/** How often model settings pages refetch prices and offers while visible. */
+export const MODEL_SETTINGS_POLL_MS = 15_000;
 import { formatCostUSD } from "../../lib/format";
 
 // Provider and final-fallback controls shared by the portal's Model Settings

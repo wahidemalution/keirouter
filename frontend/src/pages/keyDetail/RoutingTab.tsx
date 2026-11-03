@@ -9,6 +9,7 @@ import { Button, EmptyState, ErrorCard, Input, Skeleton } from "../../components
 import {
   FallbackControl, ProvidersButton, ProvidersPanel, TOUCH, errorText, useRowSettings,
   type RowSettingsSource,
+  MODEL_SETTINGS_POLL_MS,
 } from "../../components/modelSettings/ProviderControls";
 import { useToast } from "../../components/Toast";
 import { PanelCard } from "../portal/components";
@@ -216,7 +217,11 @@ function ModelsCard({ keyId, models }: { keyId: string; models: KeyModelSettings
 }
 
 export function RoutingTab({ apiKey }: { apiKey: APIKey }) {
-  const settings = useQuery({ queryKey: settingsKey(apiKey.id), queryFn: () => fetchKeyModelSettings(apiKey.id) });
+  const settings = useQuery({
+    queryKey: settingsKey(apiKey.id),
+    queryFn: () => fetchKeyModelSettings(apiKey.id),
+    refetchInterval: MODEL_SETTINGS_POLL_MS,
+  });
 
   if (settings.isLoading) return <Skeleton className="h-72 w-full rounded-2xl" />;
   if (!settings.data) {

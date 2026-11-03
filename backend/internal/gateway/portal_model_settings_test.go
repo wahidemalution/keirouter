@@ -408,3 +408,31 @@ func TestBuildModelSettingsLeavesFastHealthUntouched(t *testing.T) {
 	// still gets the trial slot.
 	require.Equal(t, []string{"slowco", "fastco"}, health.Filter("fm", []string{"slowco", "fastco"}))
 }
+
+func TestBuildModelSettingsUsesSurplusProviderLabels(t *testing.T) {
+	f := newModelSettingsFixture(t, store.Chain{
+		ID: "ms7", Name: "labelled", Strategy: "priority",
+		Steps: []store.ChainStep{
+			{ID: "ms7a", Position: 0, Provider: "custom-openai-surplus-dashscope-cn", Model: "lm", MarketSlug: "surplus-trusted@dashscope-cn:lm"},
+			{ID: "ms7b", Position: 1, Provider: "custom-openai-surplus", Model: "lm", MarketSlug: "surplus-trusted:lm"},
+		},
+	})
+	cache := market.NewSnapshotCache()
+	// No quote for the dashscope slug (no offer right now): the label must
+	// still come through.
+	cache.MergeProviderLabels(map[string]string{"dashscope-cn": "Alibaba DashScope - China"})
+	f.srv.marketCache = cache
+
+	ctx := context.Background()
+	chains, err := f.srv.chains.ListByTenant(ctx, store.DefaultTenantID)
+	require.NoError(t, err)
+	key, err := f.srv.identity.Get(ctx, f.keyID)
+	require.NoError(t, err)
+	resp, err := f.srv.buildModelSettings(ctx, key, chains)
+	require.NoError(t, err)
+	providers := resp.Models[0].Providers
+	require.Equal(t, "Alibaba DashScope - China", providers[0].Name)
+	require.False(t, providers[0].Available)
+	require.NotEqual(t, "", providers[1].Name, "a plain step keeps its keirouter name")
+	require.NotEqual(t, "Alibaba DashScope - China", providers[1].Name)
+}
