@@ -345,7 +345,7 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := chains[idx]
-	name, prefix, ok := detailSurplusModel(c)
+	name, prefix, slug, ok := detailSurplusModel(c)
 	if !ok {
 		writeError(w, http.StatusNotFound, "no market detail")
 		return
@@ -365,11 +365,17 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "detail unavailable")
 		return
 	}
-	floor := 0
+	// A plain trusted slug uses its own binding's floor. A chain whose
+	// trusted steps all pin a provider takes the lowest floor among them, so
+	// the popup lists every offer at least one step can use.
+	pinned := slug != prefix+name
+	floor, found := 0, false
 	for _, b := range market.BindTrustedSurplus([]market.ChainRoute{detailChainRoute(c)}, prefix, floors) {
-		if b.Name == name && b.Provider == "" {
-			floor = b.FloorPct
-			break
+		if b.Name != name || (b.Provider != "") != pinned {
+			continue
+		}
+		if !found || b.FloorPct < floor {
+			floor, found = b.FloorPct, true
 		}
 	}
 	// Shared fetches outlive one caller's disconnect, with their own timeout.
@@ -392,7 +398,7 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 	// Only trusted offers are shown, so a chain without a surplus-trusted
 	// slug does not route through them and gets no price.
 	trusted := prefix == market.SurplusTrustedPrefix
-	if snap, ok := s.detailSnapshot(c, prefix+name); trusted && ok {
+	if snap, ok := s.detailSnapshot(c, slug); trusted && ok {
 		blocked := slices.Clone(settings.SurplusBlockedProviders)
 		slices.Sort(blocked)
 		// Chains sharing a Surplus model with different floors get their own
@@ -424,17 +430,28 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 // detailSurplusModel picks the Surplus model the popup reads: the chain's
-// first surplus-trusted slug, else its first surplus slug.
-func detailSurplusModel(c store.Chain) (name, prefix string, ok bool) {
+// first surplus-trusted: slug, else its first surplus-trusted@<p>:<m> slug,
+// else its first surplus: slug. Both trusted forms report the
+// surplus-trusted: prefix. slug is the snapshot key the popup prices from:
+// the canonical per-provider slug for the @ form, prefix+name otherwise.
+func detailSurplusModel(c store.Chain) (name, prefix, slug string, ok bool) {
 	slugs := surplusSlugs(c)
-	for _, p := range []string{market.SurplusTrustedPrefix, market.SurplusPrefix} {
-		for _, slug := range slugs {
-			if n, found := strings.CutPrefix(slug, p); found && n != "" {
-				return n, p, true
-			}
+	for _, s := range slugs {
+		if n, found := strings.CutPrefix(s, market.SurplusTrustedPrefix); found && n != "" {
+			return n, market.SurplusTrustedPrefix, s, true
 		}
 	}
-	return "", "", false
+	for _, s := range slugs {
+		if provider, n, found := market.ParseProviderSlug(s); found {
+			return n, market.SurplusTrustedPrefix, market.ProviderSlug(provider, n), true
+		}
+	}
+	for _, s := range slugs {
+		if n, found := strings.CutPrefix(s, market.SurplusPrefix); found && n != "" {
+			return n, market.SurplusPrefix, s, true
+		}
+	}
+	return "", "", "", false
 }
 
 // detailSnapshot returns the routing snapshot entry for slug with its

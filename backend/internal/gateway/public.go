@@ -234,7 +234,7 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 				}
 			}
 		}
-		_, detailPrefix, detailOK := detailSurplusModel(c)
+		_, detailPrefix, _, detailOK := detailSurplusModel(c)
 		hasDetail := !soldOut && !leadStatic && detailOK && detailPrefix == market.SurplusTrustedPrefix
 		u := usage[c.ID]
 		rows = append(rows, publicModelRow{

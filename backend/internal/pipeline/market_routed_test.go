@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -69,7 +72,8 @@ func TestOutOfStockAddsSlugSkip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := newPlannerDispatcherWithConnector(t, slugSkipConnector{err: tc.err}, "acc-1")
 			skips := &market.SlugSkips{}
-			p := New(Deps{Dispatcher: d, SlugSkips: skips})
+			var logs bytes.Buffer
+			p := New(Deps{Dispatcher: d, SlugSkips: skips, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 			req := &core.ChatRequest{
 				Model: "gpt-4o",
 				Messages: []core.Message{{
@@ -86,6 +90,8 @@ func TestOutOfStockAddsSlugSkip(t *testing.T) {
 			}
 			require.Error(t, err)
 			require.Equal(t, tc.want, skips.Has(tc.slug))
+			line := "level=INFO msg=\"market slug set aside until the next refresh: out of stock\" slug=" + tc.slug
+			require.Equal(t, tc.want, strings.Count(logs.String(), line) == 1, logs.String())
 		})
 	}
 }

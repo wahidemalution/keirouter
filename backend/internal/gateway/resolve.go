@@ -84,8 +84,8 @@ func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (re
 	// narrows the route to steps that can guarantee it. Models that cannot
 	// guarantee any discount are exempt: they run at their set price, so a
 	// minimum never blocks them.
-	if key, ok := authedKey(ctx); ok && res.DiscountCapable {
-		if pct := key.EffectiveMinDiscount(model); pct > 0 {
+	if key, ok := authedKey(ctx); ok {
+		if pct := keyDiscountFloor(key, model, res.DiscountCapable); pct > 0 {
 			if res.Targets, err = applyDiscountFloor(res.Targets, pct, model); err != nil {
 				return resolveResult{}, err
 			}
@@ -557,6 +557,9 @@ func narrowFastProviders(kept, providers, order []string) ([]string, []string) {
 type badModelError struct {
 	msg    string
 	status int
+	// noProvider marks the 422 for a model with no provider this key may
+	// use, so the console does not blame the discount floor.
+	noProvider bool
 }
 
 func (e badModelError) Error() string { return e.msg }

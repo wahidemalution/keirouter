@@ -2285,6 +2285,11 @@ export interface PortalModelSettingsRow extends PortalDiscountModel {
   final_fallback: boolean;
   /** On because it was kept from before per-key routing, not chosen. */
   final_fallback_kept?: boolean;
+  /**
+   * Routing really tries the fallback for this key and model. False when it
+   * is off, or kept from before while a minimum discount applies.
+   */
+  fallback_runs: boolean;
   /** The fallback's normal price per 1M tokens. */
   fallback_input_per_m: number;
   fallback_output_per_m: number;

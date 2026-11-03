@@ -35,7 +35,7 @@ func errNoEnabledProvider(model string, byAdmin bool) error {
 	if byAdmin {
 		msg = "model " + model + " has no provider this key is allowed to use. Contact support to change the providers on your key"
 	}
-	return badModelError{msg: msg, status: http.StatusUnprocessableEntity}
+	return badModelError{msg: msg, status: http.StatusUnprocessableEntity, noProvider: true}
 }
 
 // errSoldOutFallbackOff is the sold-out answer for a chain whose final

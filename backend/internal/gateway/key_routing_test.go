@@ -322,3 +322,16 @@ func TestFilterStepsForKey(t *testing.T) {
 	require.Equal(t, []string{"pB"}, providersOf(kept))
 	require.False(t, byAdmin)
 }
+
+// The console names a no-provider 422 for what it is, not a discount floor.
+func TestResolveRejectCopyNoProvider(t *testing.T) {
+	var bad badModelError
+	require.ErrorAs(t, errNoEnabledProvider("m", false), &bad)
+	title, hint := resolveRejectCopy("m", bad)
+	require.Equal(t, `Rejected · model "m" has no provider this key can use`, title)
+	require.Contains(t, hint, "Routing tab")
+
+	require.ErrorAs(t, errDiscountFloor("m", 30), &bad)
+	title, _ = resolveRejectCopy("m", bad)
+	require.Equal(t, `Rejected · model "m" cannot meet the key's discount floor`, title)
+}

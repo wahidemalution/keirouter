@@ -29,8 +29,15 @@ export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : "Something went wrong. Try again.";
 }
 
+// fallbackOn is whether the fallback really runs, not the switch position: a
+// fallback kept from before is on but does not run under a minimum discount.
 export function fallbackOn(row: PortalModelSettingsRow): boolean {
-  return row.has_fallback && row.final_fallback;
+  return row.has_fallback && row.fallback_runs;
+}
+
+// fallbackStopped is a switch that shows on for a fallback routing skips.
+export function fallbackStopped(row: PortalModelSettingsRow): boolean {
+  return row.has_fallback && row.final_fallback && !row.fallback_runs;
 }
 
 /** Where a page keeps its settings in the query cache and how it writes them. */
@@ -103,7 +110,7 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
   async function setFallback(on: boolean) {
     if (writing.current) return;
     // With every provider off, the fallback is the only route left.
-    if (!on && enabledCount === 0) {
+    if (!on && enabledCount === 0 && fallbackOn(row)) {
       const ok = await confirm({
         title: "Turn off the final fallback?",
         description: (
@@ -194,6 +201,11 @@ export function FallbackControl({ row, settings }: { row: PortalModelSettingsRow
         </ToggleTarget>
         <span className="text-[12.5px] text-fg-muted" aria-hidden="true">{row.final_fallback ? "On" : "Off"}</span>
       </div>
+      {fallbackStopped(row) && (
+        <p className="max-w-56 text-[12px] text-warn">
+          On from before, but the minimum discount stops it. Turn it off and on again to let it run at the normal price.
+        </p>
+      )}
       {settings.fallbackError && <p role="alert" className="text-[12px] text-bad">{errorText(settings.fallbackError)}</p>}
     </div>
   );
@@ -262,6 +274,9 @@ export function ProvidersPanel({
   lockedLabel?: string;
 }) {
   const fallbackPrice = priceText(row.fallback_input_per_m || null, row.fallback_output_per_m || null);
+  // Only a fallback turned on after deploy skips the minimum discount; one
+  // kept from before still obeys it.
+  const skipsMinimum = row.supported && !row.final_fallback_kept ? " It ignores the minimum discount." : "";
   return (
     <div id={id} className="space-y-2 rounded-lg border border-line bg-subtle px-3 py-1 sm:px-4">
       {row.providers.length > 0 ? (
@@ -283,8 +298,11 @@ export function ProvidersPanel({
             {fallbackPrice
               ? `Runs last, at the normal price of ${fallbackPrice}, only when every provider above fails.`
               : "Runs last, at the normal price, only when every provider above fails."}
+            {skipsMinimum}
           </p>
-          {row.final_fallback && row.final_fallback_kept && <p className="text-[12px]">On from before.</p>}
+          {row.final_fallback && row.final_fallback_kept && row.fallback_runs && (
+            <p className="text-[12px]">On from before.</p>
+          )}
         </div>
       )}
     </div>

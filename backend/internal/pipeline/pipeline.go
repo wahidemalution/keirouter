@@ -1875,7 +1875,9 @@ func (p *Pipeline) recordTerminalStreamFailure(ctx context.Context, req *core.Ch
 // serve it. Seller stock is the same for every key, so this is per slug.
 func (p *Pipeline) skipOutOfStockSlug(attempt dispatch.Attempt, pe *core.ProviderError) {
 	if pe != nil && pe.Kind == core.ErrModelOutOfStock && market.IsUpstreamCostSlug(attempt.Target.MarketSlug) {
-		p.slugSkips.Add(attempt.Target.MarketSlug)
+		if p.slugSkips.Add(attempt.Target.MarketSlug) {
+			p.log.Info("market slug set aside until the next refresh: out of stock", "slug", attempt.Target.MarketSlug)
+		}
 	}
 }
 

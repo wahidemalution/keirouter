@@ -68,10 +68,11 @@ func officialCandidateNames(c store.Chain) []string {
 		out = append(out, name)
 	}
 	slugName := func(slug string) string {
-		for _, prefix := range []string{market.SurplusTrustedPrefix, market.SurplusFastPrefix, market.SurplusPrefix} {
-			if name, ok := strings.CutPrefix(slug, prefix); ok {
-				return name
-			}
+		if name, ok := market.CutUpstreamCostSlug(slug); ok {
+			return name
+		}
+		if name, ok := strings.CutPrefix(slug, market.SurplusPrefix); ok {
+			return name
 		}
 		return slug
 	}

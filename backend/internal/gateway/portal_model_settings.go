@@ -27,11 +27,13 @@ func (s *Server) handlePortalModelSettings(w http.ResponseWriter, r *http.Reques
 	}
 	chains, err := s.keyChains(r, key, u.PlanID)
 	if err != nil {
+		s.log.Error("portal model settings: list models failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load models")
 		return
 	}
 	resp, err := s.buildModelSettings(r.Context(), key, chains)
 	if err != nil {
+		s.log.Error("portal model settings: build failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load model settings")
 		return
 	}
@@ -73,6 +75,7 @@ func (s *Server) setModelProvider(w http.ResponseWriter, r *http.Request, key st
 	}
 	routing, err := s.identity.Keys().KeyRouting(r.Context(), key.ID)
 	if err != nil {
+		s.log.Error("model settings: load key routing failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load model settings")
 		return
 	}
@@ -82,6 +85,7 @@ func (s *Server) setModelProvider(w http.ResponseWriter, r *http.Request, key st
 		return
 	}
 	if err := s.identity.Keys().SetModelProviderEnabled(r.Context(), key.ID, chain.Name, provider, enabled); err != nil {
+		s.log.Error("model settings: save provider failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to save provider setting")
 		return
 	}
@@ -97,6 +101,7 @@ func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, k
 		return
 	}
 	if err := s.identity.Keys().SetModelFinalFallback(r.Context(), key.ID, chain.Name, enabled); err != nil {
+		s.log.Error("model settings: save final fallback failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to save final fallback")
 		return
 	}
@@ -108,6 +113,7 @@ func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, k
 func (s *Server) writeModelSettingsRow(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
 	resp, err := s.buildModelSettings(r.Context(), key, []store.Chain{chain})
 	if err != nil || len(resp.Models) != 1 {
+		s.log.Error("model settings: build row failed", "model", chain.Name, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load model settings")
 		return
 	}
@@ -122,6 +128,7 @@ func (s *Server) portalKey(w http.ResponseWriter, r *http.Request, u store.Porta
 			writeError(w, http.StatusNotFound, "key no longer exists")
 			return store.APIKey{}, false
 		}
+		s.log.Error("portal model settings: load key failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load key")
 		return store.APIKey{}, false
 	}
@@ -141,6 +148,7 @@ func (s *Server) portalModelTarget(w http.ResponseWriter, r *http.Request) (stor
 	}
 	chains, err := s.keyChains(r, key, u.PlanID)
 	if err != nil {
+		s.log.Error("portal model settings: list models failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load models")
 		return store.APIKey{}, store.Chain{}, false
 	}

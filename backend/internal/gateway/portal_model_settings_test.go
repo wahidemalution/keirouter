@@ -84,6 +84,7 @@ type settingsRowJSON struct {
 	HasFallback        bool                   `json:"has_fallback"`
 	FinalFallback      bool                   `json:"final_fallback"`
 	FinalFallbackKept  bool                   `json:"final_fallback_kept"`
+	FallbackRuns       bool                   `json:"fallback_runs"`
 	FallbackInputPerM  float64                `json:"fallback_input_per_m"`
 	FallbackOutputPerM float64                `json:"fallback_output_per_m"`
 }
@@ -201,6 +202,45 @@ func TestPortalModelSettingsFinalFallbackKept(t *testing.T) {
 	got, err := repo.KeyRouting(ctx, f.keyID)
 	require.NoError(t, err)
 	require.Equal(t, store.FinalFallbackChosen, got.FinalFallback["deepseek-v4.1-flash"])
+}
+
+// fallback_runs says whether routing really tries the fallback: a kept
+// fallback (2) is dropped by a minimum discount, a chosen one (1) is not.
+// Each case also resolves a request, so the row cannot drift from routing.
+func TestPortalModelSettingsFallbackRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setting int
+		minPct  int
+		runs    bool
+	}{
+		{"kept with minimum discount", store.FinalFallbackKept, 30, false},
+		{"chosen with minimum discount", store.FinalFallbackChosen, 30, true},
+		{"kept without minimum discount", store.FinalFallbackKept, 0, true},
+		{"off", store.FinalFallbackOff, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newModelSettingsFixture(t, twoProviderChain())
+			ctx := context.Background()
+			if tc.setting != store.FinalFallbackOff {
+				_, err := f.srv.db.SQL().ExecContext(ctx, `INSERT INTO api_key_model_options (api_key_id, model, final_fallback, updated_at) VALUES (?, ?, ?, ?)`,
+					f.keyID, "deepseek-v4.1-flash", tc.setting, time.Now().UTC().Format(time.RFC3339Nano))
+				require.NoError(t, err)
+			}
+			require.NoError(t, f.srv.db.APIKeys().SetMinDiscountPct(ctx, f.keyID, tc.minPct))
+
+			_, _, rows := f.list(t)
+			require.Len(t, rows, 1)
+			require.Equal(t, tc.setting != store.FinalFallbackOff, rows[0].FinalFallback)
+			require.Equal(t, tc.runs, rows[0].FallbackRuns)
+
+			key := store.APIKey{ID: f.keyID, MinDiscountPct: tc.minPct,
+				ModelFinalFallback: map[string]int{"deepseek-v4.1-flash": tc.setting}}
+			res, err := f.srv.resolveTargets(context.WithValue(ctx, apiKeyCtxKey, key), store.DefaultTenantID, "deepseek-v4.1-flash")
+			routed := err == nil && len(res.Targets) > 0 && res.Targets[len(res.Targets)-1].ChainFallback
+			require.Equal(t, tc.runs, routed, "routing agrees with the row (err %v)", err)
+		})
+	}
 }
 
 func TestPortalModelSettingsToggleProvider(t *testing.T) {

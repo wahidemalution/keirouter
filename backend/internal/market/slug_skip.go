@@ -12,16 +12,21 @@ type SlugSkips struct {
 	slugs map[string]struct{}
 }
 
-func (s *SlugSkips) Add(slug string) {
+// Add sets slug aside and reports whether it was not already on the list.
+func (s *SlugSkips) Add(slug string) bool {
 	if s == nil || slug == "" {
-		return
+		return false
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.slugs == nil {
 		s.slugs = map[string]struct{}{}
 	}
+	if _, ok := s.slugs[slug]; ok {
+		return false
+	}
 	s.slugs[slug] = struct{}{}
-	s.mu.Unlock()
+	return true
 }
 
 func (s *SlugSkips) Has(slug string) bool {

@@ -103,12 +103,16 @@ function DefaultDiscountCard({ current, max }: { current: number; max: number })
           <p className="font-medium text-fg">How it works</p>
           <p>
             Pick how much cheaper than the official price a request must be. Example: the official price is{" "}
-            ${EXAMPLE_LIST_PRICE.toFixed(2)} per 1M tokens. At {examplePct}%, you never pay more than{" "}
+            ${EXAMPLE_LIST_PRICE.toFixed(2)} per 1M tokens. At {examplePct}%, you pay at most{" "}
             <span className="font-medium tabular-nums text-fg">${examplePays.toFixed(2)}</span> per 1M tokens.
           </p>
           <p>
             If no one sells the model that cheaply right now, we stop the request (error 422) and you pay nothing. Try
             again in 15 seconds, or lower the number.
+          </p>
+          <p>
+            A model with its final fallback turned on skips this limit: when every provider fails, the fallback runs
+            and bills the normal price.
           </p>
           <p>A higher number means you pay less, but more requests get stopped. Set 0 to turn it off.</p>
         </div>
@@ -270,7 +274,7 @@ function ModelCard({ row, defaultPct, max, open, onToggle }: RowProps) {
         <ProvidersButton row={row} settings={settings} open={open} panelId={panelId} onToggle={onToggle} />
       </div>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[12px] font-medium text-fg-muted">Final fallback</span>
+        <span className="shrink-0 text-[12px] font-medium text-fg-muted">Final fallback</span>
         <FallbackControl row={row} settings={settings} />
       </div>
       {open && <ProvidersPanel row={row} settings={settings} id={panelId} />}

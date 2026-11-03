@@ -510,3 +510,44 @@ func TestPublicModelsHasDetail(t *testing.T) {
 	gw.marketCache.Replace(nil)
 	require.False(t, publicRowsByName(t, gw)["deepseek-v4.1-flash"].HasDetail, "sold out")
 }
+
+// A chain whose trusted steps all pin a provider (surplus-trusted@<p>:<m>)
+// still gets the popup: it lists the model's trusted offers, priced from a
+// pinned step's quote, at the lowest floor among its steps.
+func TestModelDetailProviderSlugOnlyChain(t *testing.T) {
+	db, gw, f := detailFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, p := range []struct{ id, url string }{
+		{"custom-openai-min10", "https://surplus.test/min10/v1"},
+		{"custom-openai-min30", "https://surplus.test/min30/v1"},
+	} {
+		require.NoError(t, db.CustomProviders().CreateProvider(ctx, store.CustomProvider{
+			ID: p.id, TenantID: store.DefaultTenantID, DisplayName: p.id, Alias: p.id,
+			Dialect: "openai", BaseURL: p.url, CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "pin", TenantID: store.DefaultTenantID, Name: "pinned-only", Strategy: "priority",
+		Steps: []store.ChainStep{
+			{ID: "pin1", Position: 0, Provider: "custom-openai-min30", Model: "deepseek-v4.1-flash",
+				MarketSlug: "surplus-trusted@alpha:deepseek-v4.1-flash"},
+			{ID: "pin2", Position: 1, Provider: "custom-openai-min10", Model: "deepseek-v4.1-flash",
+				MarketSlug: "surplus-trusted@beta:deepseek-v4.1-flash"},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	quote := market.TrustedQuote{Found: true, BestIn: 0.2, BestOut: 0.8, CapIn: 0.5, CapOut: 2, Providers: []string{"alpha"}}
+	gw.marketCache.Replace([]market.Model{quote.ProviderModel("alpha", "deepseek-v4.1-flash")})
+
+	rec, out := getDetail(t, gw.routes(), "?model=pinned-only")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotNil(t, out["best"], "priced from the pinned step's quote")
+	require.EqualValues(t, 1, f.bookHits.Load())
+	gw.detail.mu.Lock()
+	_, ok := gw.detail.books["deepseek-v4.1-flash|10"]
+	gw.detail.mu.Unlock()
+	require.True(t, ok, "lowest floor among the pinned steps")
+
+	require.True(t, publicRowsByName(t, gw)["pinned-only"].HasDetail)
+}

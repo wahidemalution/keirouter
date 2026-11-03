@@ -44,7 +44,11 @@ type modelSettingsRow struct {
 	FinalFallback bool `json:"final_fallback"`
 	// FinalFallbackKept is set only for a fallback the migration kept for a
 	// key that existed before per-key routing, never one the customer chose.
-	FinalFallbackKept  bool    `json:"final_fallback_kept,omitempty"`
+	FinalFallbackKept bool `json:"final_fallback_kept,omitempty"`
+	// FallbackRuns is whether routing actually tries the fallback for this
+	// key and model. A kept fallback (2) is on but does not run while a
+	// minimum discount applies to the model.
+	FallbackRuns       bool    `json:"fallback_runs"`
 	FallbackInputPerM  float64 `json:"fallback_input_per_m"`
 	FallbackOutputPerM float64 `json:"fallback_output_per_m"`
 }
@@ -97,7 +101,7 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 		FallbackOutputPerM: c.OutputPerM,
 	}
 	if row.Supported {
-		row.EffectivePct = key.EffectiveMinDiscount(c.Name)
+		row.EffectivePct = keyDiscountFloor(key, c.Name, row.Supported)
 		if pct, ok := key.ModelDiscounts[store.NormalizeDiscountModel(c.Name)]; ok {
 			row.OverridePct = &pct
 		}
@@ -105,6 +109,7 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 	setting := key.ModelFinalFallback[store.NormalizeDiscountModel(c.Name)]
 	row.FinalFallback = key.FinalFallbackOn(c.Name)
 	row.FinalFallbackKept = setting == store.FinalFallbackKept
+	row.FallbackRuns = row.HasFallback && finalFallbackRuns(key, c.Name, row.Supported)
 
 	index := map[string]int{}
 	for _, t := range dispatch.TargetsFromChain(c) {
