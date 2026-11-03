@@ -118,9 +118,9 @@ func resolveTargetsWith(ctx context.Context, chains ChainSource, aliases AliasSo
 	if err == nil {
 		return res, nil
 	}
-	// The chain exists but is sold out: say so rather than falling through to
-	// "unknown model".
-	if bad, ok := err.(badModelError); ok && bad.status == http.StatusServiceUnavailable {
+	// The chain exists but cannot route (sold out, or no provider this key
+	// may use): say so rather than falling through to "unknown model".
+	if bad, ok := err.(badModelError); ok && (bad.status == http.StatusServiceUnavailable || bad.status == http.StatusUnprocessableEntity) {
 		return resolveResult{}, err
 	}
 
@@ -156,6 +156,19 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			if len(steps) == 0 {
 				return resolveResult{}, errBadModel("chain has no steps: " + name)
 			}
+			hasFallback := c.FallbackProvider != "" && c.FallbackModel != ""
+			// Without an authenticated key (probes, admin playground) the
+			// chain routes as configured, fallback included.
+			fallbackOn := true
+			if key, ok := authedKey(ctx); ok {
+				fallbackOn = key.FinalFallbackOn(name)
+				var byAdmin bool
+				steps, byAdmin = filterStepsForKey(steps, key, name)
+				if len(steps) == 0 && !(hasFallback && fallbackOn) {
+					return resolveResult{}, errNoEnabledProvider(name, byAdmin)
+				}
+			}
+			useFallback := hasFallback && fallbackOn
 
 			opts := dispatch.PlanOptions{ChainID: c.ID}
 			markupPercent := market.EffectiveMarkup(c.MarkupPercent, markupPercent)
@@ -173,7 +186,10 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			steps = priceMarketSteps(steps, cache, markupPercent)
 			steps = priceStaticSteps(steps, markupPercent)
 			steps = stampSurplusTrusted(steps, c.MarketSlugs, cache, markupPercent)
-			if len(steps) == 0 && (c.FallbackProvider == "" || c.FallbackModel == "") {
+			if len(steps) == 0 && !useFallback {
+				if hasFallback {
+					return resolveResult{}, errSoldOutFallbackOff(name)
+				}
 				return resolveResult{}, errSoldOut(name)
 			}
 			// Ordering strategies reorder the chain steps before the optional
@@ -196,8 +212,10 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			}
 
 			targets := steps
-			// Append fallback model as last-resort target when configured.
-			if c.FallbackProvider != "" && c.FallbackModel != "" {
+			// Append fallback model as last-resort target when configured and
+			// turned on for this key. Left out, nothing is pinned, so
+			// round-robin rotates every step.
+			if useFallback {
 				targets = append(targets, dispatch.Target{
 					Provider:       c.FallbackProvider,
 					Model:          c.FallbackModel,
@@ -205,6 +223,7 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 					OutputPerM:     c.OutputPerM,
 					CacheWritePerM: c.CacheWritePerM,
 					CacheReadPerM:  c.CacheReadPerM,
+					ChainFallback:  true,
 				})
 				opts.PinnedTail = 1
 			}
@@ -282,6 +301,7 @@ func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, ma
 		if out[i].MarketSlug == "" {
 			continue
 		}
+		out[i].MarketSlug = canonicalSlug(out[i].MarketSlug)
 		if r, ok := cache.Rate(out[i].MarketSlug); ok {
 			stampMarketRate(&out[i], r, mult)
 		}
@@ -396,6 +416,9 @@ func stampMarketRate(t *dispatch.Target, r market.Rate, mult float64) {
 // order, fastest first, minus providers FastHealth has set aside (a step
 // left with none is dropped), and a short first-output timeout so a stuck
 // seller hands over to the next step quickly.
+// A step whose slug Surplus reported out of stock (the cache's skip list) is
+// dropped until the next refresh. Each kept step carries its quote's best
+// discount for the customer's minimum-discount check.
 // It runs after any market reordering so the ceiling overrides cheapest-ask stamps.
 func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
 	byModel := map[string]string{}
@@ -413,6 +436,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		if slug == "" && !steps[i].StaticPrice {
 			slug = byModel[steps[i].Model]
 		}
+		slug = canonicalSlug(slug)
 		if !market.IsUpstreamCostSlug(slug) {
 			if copied {
 				out = append(out, steps[i])
@@ -422,6 +446,11 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		if !copied {
 			out = append(make([]dispatch.Target, 0, len(steps)), steps[:i]...)
 			copied = true
+		}
+		// Surplus reported this slug out of stock: skip it until the next
+		// refresh rather than spend a request finding out again.
+		if cache.Skips().Has(slug) {
+			continue
 		}
 		var m market.Model
 		ok := false
@@ -444,6 +473,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		t.BillUpstreamCost = true
 		t.UpstreamCostMult = mult
 		t.MinDiscountPct = m.MinDiscountPct
+		t.BestDiscountPct = m.BestDiscountPct
 		t.UpstreamProviders = strings.Join(providers, ",")
 		t.UpstreamProviderOrder = strings.Join(order, ",")
 		if fast {
@@ -465,6 +495,17 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		return steps
 	}
 	return out
+}
+
+// canonicalSlug returns a surplus-trusted@<provider>:<model> slug with its
+// provider lowercased, the form the snapshot cache keys quotes by, so a step
+// stored with a mixed-case provider still finds its quote. Other slugs pass
+// through unchanged.
+func canonicalSlug(slug string) string {
+	if provider, model, ok := market.ParseProviderSlug(slug); ok {
+		return market.ProviderSlug(provider, model)
+	}
+	return slug
 }
 
 // liveFastProviders drops the providers h has set aside for model from the

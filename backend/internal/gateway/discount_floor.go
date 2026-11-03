@@ -34,20 +34,32 @@ func upstreamDiscountForFloor(floorPct int, mult float64) int {
 // applyDiscountFloor keeps only the chain steps that can guarantee the
 // customer's floor: surplus-trusted steps, which Surplus refuses (without
 // charging) when no offer is at least X-Min-Discount below list. Other steps
-// and the chain fallback cannot prove a discount and are dropped. The header
-// becomes the stricter of the system ceiling and the customer's floor. Billing
-// is untouched: the bill stays upstream cost × markup, so a floor never makes
-// a request cost less than what Surplus charges.
+// cannot prove a discount and are dropped. The chain fallback is kept as is:
+// the customer turned it on knowing it runs at the chain's normal price. The
+// header becomes the stricter of the system ceiling and the customer's floor.
+// A Surplus step whose cached best offer is already below the required
+// discount is dropped here, since Surplus would refuse it anyway; with no
+// list price (BestDiscountPct 0) Surplus decides. Billing is untouched: the
+// bill stays upstream cost × markup, so a floor never makes a request cost
+// less than what Surplus charges.
 func applyDiscountFloor(targets []dispatch.Target, floorPct int, model string) ([]dispatch.Target, error) {
 	if floorPct <= 0 {
 		return targets, nil
 	}
 	out := make([]dispatch.Target, 0, len(targets))
 	for _, t := range targets {
+		if t.ChainFallback {
+			out = append(out, t)
+			continue
+		}
 		if !t.BillUpstreamCost || !market.IsUpstreamCostSlug(t.MarketSlug) {
 			continue
 		}
-		t.MinDiscountPct = max(t.MinDiscountPct, upstreamDiscountForFloor(floorPct, t.UpstreamCostMult))
+		need := upstreamDiscountForFloor(floorPct, t.UpstreamCostMult)
+		if t.BestDiscountPct > 0 && t.BestDiscountPct < need {
+			continue
+		}
+		t.MinDiscountPct = max(t.MinDiscountPct, need)
 		out = append(out, t)
 	}
 	if len(out) == 0 {

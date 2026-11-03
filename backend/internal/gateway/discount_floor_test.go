@@ -72,7 +72,7 @@ func TestApplyDiscountFloorDropsStepsThatCannotProveDiscount(t *testing.T) {
 		{Provider: "inferhub", Model: "glm", MarketSlug: "inferhub:glm"},
 		trustedStep("glm", 1.2, 0),
 		{Provider: "surplus", Model: "glm", MarketSlug: market.SurplusPrefix + "glm"},
-		{Provider: "openai", Model: "gpt-4o"}, // chain fallback model
+		{Provider: "openai", Model: "gpt-4o"}, // plain step, no discount guarantee
 	}
 	out, err := applyDiscountFloor(in, 30, "chain-x")
 	require.NoError(t, err)
@@ -188,9 +188,60 @@ func TestServerResolveTargetsExemptsChainsWithoutDiscountGuarantee(t *testing.T)
 	require.Len(t, res.Targets, 1)
 	require.Equal(t, 0, res.Targets[0].MinDiscountPct)
 
+	// Final fallback off (no row): the trusted chain with no live quote is
+	// sold out, and the answer says how to avoid it.
 	_, err = gw.resolveTargets(keyed, store.DefaultTenantID, "glm")
-	require.Error(t, err, "trusted chain with no live quote must not fall through to its fallback")
+	require.Error(t, err, "trusted chain with no live quote must not fall through to a fallback that is off")
 	bad, ok := err.(badModelError)
 	require.True(t, ok)
-	require.Equal(t, http.StatusUnprocessableEntity, bad.status)
+	require.Equal(t, http.StatusServiceUnavailable, bad.status)
+	require.Contains(t, bad.Error(), "Turn on the final fallback")
+
+	// Final fallback on: the customer chose its normal price, so the minimum
+	// does not block it.
+	keyed = context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50, ModelFinalFallback: map[string]bool{"glm": true}})
+	res, err = gw.resolveTargets(keyed, store.DefaultTenantID, "glm")
+	require.NoError(t, err)
+	require.Len(t, res.Targets, 1)
+	require.True(t, res.Targets[0].ChainFallback)
+	require.Equal(t, 0, res.Targets[0].MinDiscountPct)
+}
+
+func TestDiscountFloorKeepsChainFallback(t *testing.T) {
+	fallback := dispatch.Target{Provider: "openai", Model: "gpt-4o", InputPerM: 1, OutputPerM: 2, ChainFallback: true}
+	in := []dispatch.Target{trustedStep("glm", 1.0, 0), {Provider: "openai", Model: "gpt-4o"}, fallback}
+
+	out, err := applyDiscountFloor(in, 30, "chain-x")
+	require.NoError(t, err)
+	require.Len(t, out, 2, "the plain step is dropped, the fallback stays")
+	require.Equal(t, 30, out[0].MinDiscountPct)
+	require.Equal(t, fallback, out[1], "fallback untouched: no minimum discount")
+
+	// A result holding only the fallback is valid.
+	out, err = applyDiscountFloor([]dispatch.Target{fallback}, 30, "chain-x")
+	require.NoError(t, err)
+	require.Equal(t, []dispatch.Target{fallback}, out)
+}
+
+func TestDiscountFloorLocalCheck(t *testing.T) {
+	step := func(best int) dispatch.Target {
+		s := trustedStep("glm", 1.0, 0)
+		s.BestDiscountPct = best
+		return s
+	}
+	// Floor 30 with no markup needs 30% upstream.
+	out, err := applyDiscountFloor([]dispatch.Target{step(20), step(0), step(40), step(30)}, 30, "chain-x")
+	require.NoError(t, err)
+	require.Len(t, out, 3)
+	require.Equal(t, 0, out[0].BestDiscountPct, "no list price: kept, Surplus decides")
+	require.Equal(t, 40, out[1].BestDiscountPct)
+	require.Equal(t, 30, out[2].BestDiscountPct, "exactly the requirement can pass")
+
+	// The requirement includes the markup: floor 30 at 1.2 needs 42%.
+	s := trustedStep("glm", 1.2, 0)
+	s.BestDiscountPct = 40
+	_, err = applyDiscountFloor([]dispatch.Target{s}, 30, "chain-x")
+	var bad badModelError
+	require.ErrorAs(t, err, &bad, "every step dropped: the discount-floor error")
+	require.Equal(t, http.StatusUnprocessableEntity, bad.HTTPStatus())
 }

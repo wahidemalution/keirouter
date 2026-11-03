@@ -166,6 +166,14 @@ type Target struct {
 	// StepMarkupPercent overrides the chain markup when StepMarkupSet.
 	StepMarkupPercent float64
 	StepMarkupSet     bool
+
+	// ChainFallback marks the chain's last-resort fallback target, billed at
+	// the chain price. The customer's minimum discount does not apply to it.
+	ChainFallback bool
+	// BestDiscountPct is how far below list the cheapest ask of MarketSlug
+	// sits, from the cached quote (0 = no list price). A step whose best
+	// discount cannot meet the customer's minimum is dropped before dispatch.
+	BestDiscountPct int
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the
