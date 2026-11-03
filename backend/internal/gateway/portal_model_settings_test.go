@@ -311,3 +311,60 @@ func TestPortalModelSettingsRequiresSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, got.FinalFallback)
 }
+
+// A literal '%' in a model name is decoded exactly once.
+func TestPortalModelSettingsPercentInModelName(t *testing.T) {
+	f := newModelSettingsFixture(t,
+		store.Chain{ID: "ms4", Name: "Ali/GLM%41", Strategy: "priority",
+			Steps: []store.ChainStep{{ID: "ms4a", Provider: "deepseek", Model: "deepseek-chat"}}},
+		store.Chain{ID: "ms5", Name: "pct-100%", Strategy: "priority",
+			Steps: []store.ChainStep{{ID: "ms5a", Provider: "deepseek", Model: "deepseek-chat"}}},
+	)
+	rec := f.do(http.MethodPut, "/portal/api/model-settings/Ali%2FGLM%2541/final-fallback", `{"enabled":true}`, true)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec = f.do(http.MethodPut, "/portal/api/model-settings/pct-100%25/final-fallback", `{"enabled":true}`, true)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got, err := f.srv.db.APIKeys().KeyRouting(context.Background(), f.keyID)
+	require.NoError(t, err)
+	require.Equal(t, store.FinalFallbackChosen, got.FinalFallback["ali/glm%41"])
+	require.Equal(t, store.FinalFallbackChosen, got.FinalFallback["pct-100%"])
+}
+
+// Building the page must not advance surplus-fast recovery trials: the next
+// real routing call still gets the trial slot.
+func TestBuildModelSettingsLeavesFastHealthUntouched(t *testing.T) {
+	f := newModelSettingsFixture(t, store.Chain{
+		ID: "ms6", Name: "fast-model", Strategy: "priority",
+		Steps: []store.ChainStep{
+			{ID: "ms6a", Position: 0, Provider: "custom-openai-surplus", Model: "fm", MarketSlug: "surplus-fast:fm"},
+		},
+	})
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{{
+		Slug: "surplus-fast:fm", MinAskIn: 0.2, MinAskOut: 0.8,
+		Providers: []string{"slowco", "fastco"}, ProviderOrder: []string{"fastco", "slowco"},
+	}})
+	f.srv.marketCache = cache
+	now := time.Now()
+	health := cache.FastHealth()
+	health.SetClock(func() time.Time { return now })
+
+	ctx := context.Background()
+	chains, err := f.srv.chains.ListByTenant(ctx, store.DefaultTenantID)
+	require.NoError(t, err)
+	key, err := f.srv.identity.Get(ctx, f.keyID)
+	require.NoError(t, err)
+
+	// slowco answers slowly, then its cooldown ends: it is now due a trial.
+	health.Observe("fm", "slowco", 20*time.Second, true)
+	now = now.Add(market.FastCooldownMax + time.Second)
+
+	for i := 0; i < 5; i++ {
+		resp, err := f.srv.buildModelSettings(ctx, key, chains)
+		require.NoError(t, err)
+		require.True(t, resp.Models[0].Providers[0].Available)
+	}
+	// Five page builds did not count as requests: this first routing call
+	// still gets the trial slot.
+	require.Equal(t, []string{"slowco", "fastco"}, health.Filter("fm", []string{"slowco", "fastco"}))
+}

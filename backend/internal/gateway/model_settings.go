@@ -134,12 +134,13 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 // stepCustomerPrice prices one chain step the way routing bills it: the same
 // pricing passes as chainResultWith run on the step alone, so a step routing
 // would drop (no live quote, slug out of stock) is reported unavailable. The
-// returned prices are per million tokens with markup included, nil if unknown.
+// FastHealth is only peeked at, never advanced: a page load must not shift
+// the recovery-trial cadence live routing relies on. The returned prices are per million tokens with markup included, nil if unknown.
 func (s *Server) stepCustomerPrice(c store.Chain, t dispatch.Target, markup float64) (available bool, in, out *float64) {
 	steps := []dispatch.Target{t}
 	steps = priceMarketSteps(steps, s.marketCache, markup)
 	steps = priceStaticSteps(steps, markup)
-	steps = stampSurplusTrusted(steps, c.MarketSlugs, s.marketCache, markup)
+	steps = stampSurplusTrustedWith(steps, c.MarketSlugs, s.marketCache, markup, peekFastProviders)
 	if len(steps) == 0 {
 		return false, nil, nil
 	}

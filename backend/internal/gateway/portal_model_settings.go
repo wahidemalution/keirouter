@@ -141,11 +141,13 @@ func (s *Server) portalModelTarget(w http.ResponseWriter, r *http.Request) (stor
 	return store.APIKey{}, store.Chain{}, false
 }
 
-// pathParam reads a URL parameter and undoes percent-encoding: chi matches on
-// the raw path, so a model name with a slash arrives as "Ali%2FGLM-5".
+// pathParam reads a URL parameter exactly once-decoded. chi matches on the
+// raw path when the request has one (a model name with a slash arrives as
+// "Ali%2FGLM-5"), so the value is decoded here only in that case; without a
+// RawPath chi's value is already decoded and a literal '%' must survive.
 func pathParam(r *http.Request, name string) string {
 	v := chi.URLParam(r, name)
-	if strings.Contains(v, "%") {
+	if r.URL.RawPath != "" {
 		if dec, err := url.PathUnescape(v); err == nil {
 			v = dec
 		}

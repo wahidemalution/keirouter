@@ -429,6 +429,13 @@ func stampMarketRate(t *dispatch.Target, r market.Rate, mult float64) {
 // discount for the customer's minimum-discount check.
 // It runs after any market reordering so the ceiling overrides cheapest-ask stamps.
 func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
+	return stampSurplusTrustedWith(steps, chainSlugs, cache, markupPercent, liveFastProviders)
+}
+
+// stampSurplusTrustedWith is stampSurplusTrusted with the surplus-fast
+// provider filter supplied. Routing passes liveFastProviders, which advances
+// the recovery-trial cadence; read-only callers pass a peeking filter.
+func stampSurplusTrustedWith(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64, fastFilter func(h *market.FastHealth, model string, providers, order []string) ([]string, []string)) []dispatch.Target {
 	byModel := map[string]string{}
 	for _, slug := range chainSlugs {
 		if name, ok := market.CutUpstreamCostSlug(slug); ok {
@@ -472,7 +479,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		fast := strings.HasPrefix(slug, market.SurplusFastPrefix)
 		if fast {
 			name, _ := market.CutUpstreamCostSlug(slug)
-			if providers, order = liveFastProviders(cache.FastHealth(), name, providers, order); len(providers) == 0 {
+			if providers, order = fastFilter(cache.FastHealth(), name, providers, order); len(providers) == 0 {
 				continue
 			}
 		}
@@ -519,7 +526,15 @@ func canonicalSlug(slug string) string {
 // liveFastProviders drops the providers h has set aside for model from the
 // allow-list and the attempt order alike.
 func liveFastProviders(h *market.FastHealth, model string, providers, order []string) ([]string, []string) {
-	kept := h.Filter(model, providers)
+	return narrowFastProviders(h.Filter(model, providers), providers, order)
+}
+
+// peekFastProviders is liveFastProviders without side effects, for displays.
+func peekFastProviders(h *market.FastHealth, model string, providers, order []string) ([]string, []string) {
+	return narrowFastProviders(h.Peek(model, providers), providers, order)
+}
+
+func narrowFastProviders(kept, providers, order []string) ([]string, []string) {
 	if len(kept) == len(providers) {
 		return providers, order
 	}
