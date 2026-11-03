@@ -429,6 +429,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Telemetry:          healthSvc,
 		Inflight:           inflightTracker,
 		FastHealth:         marketCache.FastHealth(),
+		SlugSkips:          marketCache.Skips(),
 	})
 
 	// Resolve frontend dist directory. Check common install locations, then cwd.

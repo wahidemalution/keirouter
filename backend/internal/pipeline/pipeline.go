@@ -73,6 +73,7 @@ type Pipeline struct {
 	telemetry  *health.Service
 	inflight   *inflight.Tracker
 	fastHealth *market.FastHealth
+	slugSkips  *market.SlugSkips
 
 	requestTimeout     time.Duration // upper bound on non-streaming upstream calls
 	streamStallTimeout time.Duration // aborts a stream with no bytes for this long
@@ -107,6 +108,9 @@ type Deps struct {
 	Inflight *inflight.Tracker
 	// FastHealth receives each surplus-fast attempt's outcome. Optional.
 	FastHealth *market.FastHealth
+	// SlugSkips collects market slugs Surplus reports out of stock, so routing
+	// stops sending to them until the next market refresh. Optional.
+	SlugSkips *market.SlugSkips
 }
 
 // New builds a Pipeline.
@@ -130,6 +134,7 @@ func New(d Deps) *Pipeline {
 		telemetry:  d.Telemetry,
 		inflight:   d.Inflight,
 		fastHealth: d.FastHealth,
+		slugSkips:  d.SlugSkips,
 
 		requestTimeout:     d.RequestTimeout,
 		streamStallTimeout: d.StreamStallTimeout,
@@ -1866,11 +1871,22 @@ func (p *Pipeline) recordTerminalStreamFailure(ctx context.Context, req *core.Ch
 	return pe
 }
 
+// skipOutOfStockSlug sets a market slug aside once Surplus says no seller can
+// serve it. Seller stock is the same for every key, so this is per slug.
+func (p *Pipeline) skipOutOfStockSlug(attempt dispatch.Attempt, pe *core.ProviderError) {
+	if pe != nil && pe.Kind == core.ErrModelOutOfStock && market.IsUpstreamCostSlug(attempt.Target.MarketSlug) {
+		p.slugSkips.Add(attempt.Target.MarketSlug)
+	}
+}
+
 // recordFailureTelemetry emits a best-effort health telemetry event for a
 // failed upstream attempt. fallbackable reports whether the dispatcher
-// advanced to the next candidate (i.e. fallback was triggered).
+// advanced to the next candidate (i.e. fallback was triggered). Every chat and
+// stream failure passes through here, so it is also where an out-of-stock
+// slug is recorded.
 func (p *Pipeline) recordFailureTelemetry(meta core.RequestMetadata, attempt dispatch.Attempt,
 	pe *core.ProviderError, latency time.Duration, fallbackable bool) {
+	p.skipOutOfStockSlug(attempt, pe)
 	if p.telemetry == nil || pe == nil {
 		return
 	}
