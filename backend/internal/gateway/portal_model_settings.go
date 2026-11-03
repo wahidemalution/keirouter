@@ -1,0 +1,175 @@
+package gateway
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/mydisha/keirouter/backend/internal/store"
+)
+
+// handlePortalModelSettings serves GET /portal/api/model-settings: the key's
+// default and maximum minimum discount and, for every chain the key may call,
+// its discount, provider toggles and final-fallback setting.
+func (s *Server) handlePortalModelSettings(w http.ResponseWriter, r *http.Request) {
+	u, ok := s.portalUserOrError(w, r)
+	if !ok {
+		return
+	}
+	key, ok := s.portalKey(w, r, u)
+	if !ok {
+		return
+	}
+	chains, err := s.keyChains(r, key, u.PlanID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load models")
+		return
+	}
+	resp, err := s.buildModelSettings(r.Context(), key, chains)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load model settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handlePortalSetModelProvider serves
+// PUT /portal/api/model-settings/{model}/providers/{provider}.
+func (s *Server) handlePortalSetModelProvider(w http.ResponseWriter, r *http.Request) {
+	key, chain, ok := s.portalModelTarget(w, r)
+	if !ok {
+		return
+	}
+	provider := pathParam(r, "provider")
+	if !chainHasStepProvider(chain, provider) {
+		writeError(w, http.StatusNotFound, "provider not in this model's chain")
+		return
+	}
+	enabled, ok := decodeEnabled(w, r)
+	if !ok {
+		return
+	}
+	routing, err := s.identity.Keys().KeyRouting(r.Context(), key.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load model settings")
+		return
+	}
+	key.AllowedProviders = routing.AllowedProviders
+	if enabled && !key.ProviderAllowed(provider) {
+		writeError(w, http.StatusForbidden, "this provider is locked by your administrator")
+		return
+	}
+	if err := s.identity.Keys().SetModelProviderEnabled(r.Context(), key.ID, chain.Name, provider, enabled); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save provider setting")
+		return
+	}
+	s.identity.InvalidateAuthCacheForKey(key.ID)
+	s.writeModelSettingsRow(w, r, key, chain)
+}
+
+// handlePortalSetModelFinalFallback serves
+// PUT /portal/api/model-settings/{model}/final-fallback.
+func (s *Server) handlePortalSetModelFinalFallback(w http.ResponseWriter, r *http.Request) {
+	key, chain, ok := s.portalModelTarget(w, r)
+	if !ok {
+		return
+	}
+	enabled, ok := decodeEnabled(w, r)
+	if !ok {
+		return
+	}
+	if err := s.identity.Keys().SetModelFinalFallback(r.Context(), key.ID, chain.Name, enabled); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save final fallback")
+		return
+	}
+	s.identity.InvalidateAuthCacheForKey(key.ID)
+	s.writeModelSettingsRow(w, r, key, chain)
+}
+
+// writeModelSettingsRow answers a successful write with the model's updated row.
+func (s *Server) writeModelSettingsRow(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
+	resp, err := s.buildModelSettings(r.Context(), key, []store.Chain{chain})
+	if err != nil || len(resp.Models) != 1 {
+		writeError(w, http.StatusInternalServerError, "failed to load model settings")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp.Models[0])
+}
+
+// portalKey loads the portal user's key.
+func (s *Server) portalKey(w http.ResponseWriter, r *http.Request, u store.PortalUser) (store.APIKey, bool) {
+	key, err := s.identity.Get(r.Context(), u.KeyID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "key no longer exists")
+			return store.APIKey{}, false
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load key")
+		return store.APIKey{}, false
+	}
+	return key, true
+}
+
+// portalModelTarget resolves the signed-in user, their key and the {model}
+// path parameter, which must be a chain the key may call.
+func (s *Server) portalModelTarget(w http.ResponseWriter, r *http.Request) (store.APIKey, store.Chain, bool) {
+	u, ok := s.portalUserOrError(w, r)
+	if !ok {
+		return store.APIKey{}, store.Chain{}, false
+	}
+	key, ok := s.portalKey(w, r, u)
+	if !ok {
+		return store.APIKey{}, store.Chain{}, false
+	}
+	chains, err := s.keyChains(r, key, u.PlanID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load models")
+		return store.APIKey{}, store.Chain{}, false
+	}
+	model := store.NormalizeDiscountModel(pathParam(r, "model"))
+	for _, c := range chains {
+		if store.NormalizeDiscountModel(c.Name) == model {
+			return key, c, true
+		}
+	}
+	writeError(w, http.StatusNotFound, "model not found for this key")
+	return store.APIKey{}, store.Chain{}, false
+}
+
+// pathParam reads a URL parameter and undoes percent-encoding: chi matches on
+// the raw path, so a model name with a slash arrives as "Ali%2FGLM-5".
+func pathParam(r *http.Request, name string) string {
+	v := chi.URLParam(r, name)
+	if strings.Contains(v, "%") {
+		if dec, err := url.PathUnescape(v); err == nil {
+			v = dec
+		}
+	}
+	return strings.TrimSpace(v)
+}
+
+func chainHasStepProvider(c store.Chain, provider string) bool {
+	for _, st := range c.Steps {
+		if st.Provider == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeEnabled reads {"enabled": bool}; the field is required.
+func decodeEnabled(w http.ResponseWriter, r *http.Request) (bool, bool) {
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&body); err != nil || body.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "body must be {\"enabled\": true|false}")
+		return false, false
+	}
+	return *body.Enabled, true
+}
