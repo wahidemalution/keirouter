@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -86,7 +87,7 @@ func TestKeyRoutingDisabledProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"pA", "pC"}, providersOf(res.Targets), "fallback off: not appended")
 
-	key.ModelFinalFallback = map[string]bool{"m": true}
+	key.ModelFinalFallback = map[string]int{"m": store.FinalFallbackChosen}
 	res, err = resolveRouting(withKey(key), routingChain(), routingCache())
 	require.NoError(t, err)
 	require.Equal(t, []string{"pA", "pC", "fb"}, providersOf(res.Targets))
@@ -124,7 +125,7 @@ func TestKeyRoutingMixedCausesUseCustomerCopy(t *testing.T) {
 // serves: the error copy names the fallback as a way out, and the admin
 // ceiling covers steps only.
 func TestKeyRoutingAllStepsOffFallbackOnServesFallback(t *testing.T) {
-	key := store.APIKey{ID: "k", AllowedProviders: []string{"pZ"}, ModelFinalFallback: map[string]bool{"m": true}}
+	key := store.APIKey{ID: "k", AllowedProviders: []string{"pZ"}, ModelFinalFallback: map[string]int{"m": store.FinalFallbackChosen}}
 	res, err := resolveRouting(withKey(key), routingChain(), routingCache())
 	require.NoError(t, err)
 	require.Equal(t, []string{"fb"}, providersOf(res.Targets))
@@ -133,7 +134,7 @@ func TestKeyRoutingAllStepsOffFallbackOnServesFallback(t *testing.T) {
 }
 
 func TestKeyRoutingFallbackToggle(t *testing.T) {
-	key := store.APIKey{ID: "k", ModelFinalFallback: map[string]bool{"m": false}}
+	key := store.APIKey{ID: "k", ModelFinalFallback: map[string]int{"m": store.FinalFallbackOff}}
 	res, err := resolveRouting(withKey(key), routingChain(), routingCache())
 	require.NoError(t, err)
 	require.Equal(t, []string{"pA", "pB", "pC"}, providersOf(res.Targets))
@@ -143,7 +144,7 @@ func TestKeyRoutingFallbackToggle(t *testing.T) {
 	}
 
 	// The toggle is keyed by the normalised model name.
-	key.ModelFinalFallback = map[string]bool{"m": true}
+	key.ModelFinalFallback = map[string]int{"m": store.FinalFallbackChosen}
 	res, err = resolveTargetsWith(withKey(key), &fakeChains{chains: []store.Chain{routingChain()}}, &fakeAliases{}, nil, routingCache(), 0, "t1", "chain:m")
 	require.NoError(t, err)
 	last := res.Targets[len(res.Targets)-1]
@@ -176,6 +177,68 @@ func TestKeyRoutingSkipList(t *testing.T) {
 	require.Equal(t, []string{"pB", "pC", "fb"}, providersOf(res.Targets))
 }
 
+// A step stored with a mixed-case provider is matched against the skip list
+// in canonical form, the form the pipeline adds after a failed attempt.
+func TestKeyRoutingSkipListMatchesCanonicalSlug(t *testing.T) {
+	c := routingChain()
+	c.Steps[0].MarketSlug = "surplus-trusted@OpenRouter:m"
+	cache := routingCache()
+	cache.Skips().Add(routingSlugA)
+	res, err := resolveRouting(withKey(store.APIKey{ID: "k"}), c, cache)
+	require.NoError(t, err)
+	require.Equal(t, []string{"pB", "pC"}, providersOf(res.Targets))
+}
+
+// The fallback target records whether the key turned it on explicitly, which
+// decides whether a minimum discount may remove it.
+func TestKeyRoutingMarksFallbackExemption(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		exempt bool
+	}{
+		{"no key", context.Background(), false},
+		{"kept from before", withKey(store.APIKey{ID: "k", ModelFinalFallback: map[string]int{"m": store.FinalFallbackKept}}), false},
+		{"chosen", withKey(store.APIKey{ID: "k", ModelFinalFallback: map[string]int{"m": store.FinalFallbackChosen}}), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := resolveRouting(tc.ctx, routingChain(), routingCache())
+			require.NoError(t, err)
+			last := res.Targets[len(res.Targets)-1]
+			require.True(t, last.ChainFallback)
+			require.Equal(t, tc.exempt, last.FallbackFloorExempt)
+			require.Equal(t, 1, res.PlanOpts.PinnedTail)
+		})
+	}
+}
+
+// The guardrails judge resolves its own chain: the triggering key's ceiling
+// and missing fallback row must not strip it.
+func TestJudgeIgnoresKeyRouting(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "judge", TenantID: store.DefaultTenantID, Name: "judge", Strategy: "priority",
+		FallbackProvider: "openai", FallbackModel: "gpt-4o-mini",
+		Steps: []store.ChainStep{
+			{ID: "j1", Provider: "openai", Model: "gpt-4o", Position: 0},
+			{ID: "j2", Provider: "anthropic", Model: "claude-3.5", Position: 1},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	keyed := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", AllowedProviders: []string{"pZ"}})
+
+	_, err := gw.resolveTargets(keyed, store.DefaultTenantID, "judge")
+	require.Error(t, err, "the key itself may not use this chain")
+
+	res, err := gw.resolveJudgeTargets(keyed, store.DefaultTenantID, "judge")
+	require.NoError(t, err)
+	require.Equal(t, []string{"openai", "anthropic", "openai"}, providersOf(res.Targets))
+	require.True(t, res.Targets[2].ChainFallback)
+	require.Equal(t, 1, res.PlanOpts.PinnedTail)
+}
+
 func TestKeyRoutingSkipListCoversPlainAndFastSlugs(t *testing.T) {
 	cache := market.NewSnapshotCache()
 	q := market.TrustedQuote{Found: true, BestIn: 1, BestOut: 2, CapIn: 3, CapOut: 4, Providers: []string{"x"}, ProviderOrder: []string{"x"}}
@@ -199,15 +262,15 @@ func TestKeyRoutingSoldOutFallbackOff(t *testing.T) {
 
 	_, err := resolveRouting(withKey(store.APIKey{ID: "k"}), c, empty)
 	requireBadModel(t, err, http.StatusServiceUnavailable,
-		"model m is sold out: no offer currently meets its price floor, try again later Turn on the final fallback in Model Settings to avoid this error")
+		"model m is sold out: no offer currently meets its price floor, try again later. Turn on the final fallback in Model Settings to avoid this error")
 
 	// Bare name: still the sold-out answer, not "unknown model".
 	_, err = resolveTargetsWith(withKey(store.APIKey{ID: "k"}), &fakeChains{chains: []store.Chain{c}}, &fakeAliases{}, nil, empty, 0, "t1", "m")
 	requireBadModel(t, err, http.StatusServiceUnavailable,
-		"model m is sold out: no offer currently meets its price floor, try again later Turn on the final fallback in Model Settings to avoid this error")
+		"model m is sold out: no offer currently meets its price floor, try again later. Turn on the final fallback in Model Settings to avoid this error")
 
 	// Fallback on: the fallback serves.
-	res, err := resolveRouting(withKey(store.APIKey{ID: "k", ModelFinalFallback: map[string]bool{"m": true}}), c, empty)
+	res, err := resolveRouting(withKey(store.APIKey{ID: "k", ModelFinalFallback: map[string]int{"m": store.FinalFallbackChosen}}), c, empty)
 	require.NoError(t, err)
 	require.Equal(t, []string{"fb"}, providersOf(res.Targets))
 

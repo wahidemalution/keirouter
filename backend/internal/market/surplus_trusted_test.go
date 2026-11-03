@@ -335,6 +335,27 @@ func TestBestDiscountPctWithoutListPrice(t *testing.T) {
 	}
 }
 
+// List prices differ per offer: the dearer offer b sits deeper below its own
+// list (50%) than the cheapest offer a (16%), and the quote reports the deeper.
+func TestBestDiscountPctIsDeepestAcrossOffers(t *testing.T) {
+	book := `{"offers":[
+  {"provider_id":"a","price_input_per_1m":1000000,"price_output_per_1m":2000000,"direct_input_per_1m":1200000,"direct_output_per_1m":2400000,"available":true,"healthy":true,"trusted":true},
+  {"provider_id":"b","price_input_per_1m":1500000,"price_output_per_1m":3000000,"direct_input_per_1m":3000000,"direct_output_per_1m":6000000,"available":true,"healthy":true,"trusted":true},
+  {"provider_id":"c","price_input_per_1m":2000000,"price_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true}
+]}`
+	q, err := ParseSurplusTrustedBook(strings.NewReader(book), 3, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approx(q.BestIn, 1.0) || q.BestDiscountPct != 50 {
+		t.Fatalf("best = %v at %d%%, want cheapest 1.0 and deepest discount 50%%", q.BestIn, q.BestDiscountPct)
+	}
+	pinned, _ := ParseSurplusTrustedBookFor(strings.NewReader(book), 3, 0, nil, "a")
+	if pinned.BestDiscountPct != 16 {
+		t.Fatalf("pinned to a: discount = %d, want 16", pinned.BestDiscountPct)
+	}
+}
+
 func TestProviderModelUsesCanonicalSlug(t *testing.T) {
 	q, _ := ParseSurplusTrustedBookFor(strings.NewReader(twoProviderBook), 3, 0, nil, "openrouter")
 	m := q.ProviderModel("OpenRouter", "qwen-plus")

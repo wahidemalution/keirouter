@@ -14,15 +14,16 @@ type KeyRouting struct {
 	// DisabledProviders holds, per normalized model, the providers the
 	// customer turned off.
 	DisabledProviders map[string][]string
-	// FinalFallback holds the customer's final-fallback choice per normalized
-	// model. A missing entry means off.
-	FinalFallback map[string]bool
+	// FinalFallback holds the final-fallback setting per normalized model
+	// (FinalFallbackOff, FinalFallbackChosen or FinalFallbackKept). A missing
+	// entry means off.
+	FinalFallback map[string]int
 }
 
 // KeyRouting loads a key's provider ceiling, per-model disabled providers and
 // per-model final-fallback choices.
 func (r *APIKeyRepo) KeyRouting(ctx context.Context, keyID string) (KeyRouting, error) {
-	out := KeyRouting{DisabledProviders: map[string][]string{}, FinalFallback: map[string]bool{}}
+	out := KeyRouting{DisabledProviders: map[string][]string{}, FinalFallback: map[string]int{}}
 
 	q := r.db.rebind(`SELECT provider_id FROM api_key_allowed_providers WHERE api_key_id = ? ORDER BY provider_id`)
 	rows, err := r.db.sql.QueryContext(ctx, q, keyID)
@@ -67,11 +68,11 @@ func (r *APIKeyRepo) KeyRouting(ctx context.Context, keyID string) (KeyRouting, 
 	defer orows.Close()
 	for orows.Next() {
 		var model string
-		var on int
-		if err := orows.Scan(&model, &on); err != nil {
+		var setting int
+		if err := orows.Scan(&model, &setting); err != nil {
 			return KeyRouting{}, fmt.Errorf("store: scan model option: %w", err)
 		}
-		out.FinalFallback[NormalizeDiscountModel(model)] = on != 0
+		out.FinalFallback[NormalizeDiscountModel(model)] = setting
 	}
 	return out, orows.Err()
 }
@@ -133,11 +134,12 @@ func (r *APIKeyRepo) SetModelProviderEnabled(ctx context.Context, keyID, model, 
 }
 
 // SetModelFinalFallback stores whether the chain's last-resort fallback may
-// run for a key and model.
+// run for a key and model. A write is an explicit choice, so on stores
+// FinalFallbackChosen, never FinalFallbackKept.
 func (r *APIKeyRepo) SetModelFinalFallback(ctx context.Context, keyID, model string, on bool) error {
-	flag := 0
+	flag := FinalFallbackOff
 	if on {
-		flag = 1
+		flag = FinalFallbackChosen
 	}
 	q := r.db.rebind(`INSERT INTO api_key_model_options (api_key_id, model, final_fallback, updated_at)
 		VALUES (?, ?, ?, ?)

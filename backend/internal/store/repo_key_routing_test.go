@@ -51,7 +51,7 @@ func TestKeyRoutingRoundTrip(t *testing.T) {
 	require.NoError(t, repo.SetModelFinalFallback(ctx, "k-kr", "other", false))
 	got, err = repo.KeyRouting(ctx, "k-kr")
 	require.NoError(t, err)
-	require.Equal(t, map[string]bool{"glm-fast": true, "other": false}, got.FinalFallback)
+	require.Equal(t, map[string]int{"glm-fast": FinalFallbackChosen, "other": FinalFallbackOff}, got.FinalFallback)
 
 	require.NoError(t, repo.Delete(ctx, "k-kr"))
 	for _, table := range []string{"api_key_allowed_providers", "api_key_model_disabled_providers", "api_key_model_options"} {
@@ -92,17 +92,19 @@ func TestMigration0061SeedsFallback(t *testing.T) {
 	}))
 
 	require.NoError(t, db.Migrate(ctx))
-	seeded := func() map[string]bool {
+	seeded := func() map[string]int {
 		got, err := db.APIKeys().KeyRouting(ctx, "k-old")
 		require.NoError(t, err)
 		return got.FinalFallback
 	}
-	require.Equal(t, map[string]bool{"glm-fast": true}, seeded())
+	require.Equal(t, map[string]int{"glm-fast": FinalFallbackKept}, seeded(), "seeded rows are marked kept-from-before")
 
 	// A user switching it off must survive another startup.
 	require.NoError(t, db.APIKeys().SetModelFinalFallback(ctx, "k-old", "glm-fast", false))
 	require.NoError(t, db.Migrate(ctx))
-	require.Equal(t, map[string]bool{"glm-fast": false}, seeded(), "a second Migrate is a no-op")
+	require.Equal(t, map[string]int{"glm-fast": FinalFallbackOff}, seeded(), "a second Migrate is a no-op")
+	require.NoError(t, db.APIKeys().SetModelFinalFallback(ctx, "k-old", "glm-fast", true))
+	require.Equal(t, map[string]int{"glm-fast": FinalFallbackChosen}, seeded(), "turning it back on is an explicit choice")
 
 	require.NoError(t, db.APIKeys().Create(ctx, APIKey{
 		ID: "k-new", TenantID: DefaultTenantID, Name: "new", KeyHash: "h",
@@ -117,11 +119,12 @@ func TestAPIKeyProviderEnabled(t *testing.T) {
 	require.True(t, APIKey{}.ProviderAllowed("p2"))
 	require.True(t, APIKey{}.ProviderEnabled("any", "p2"))
 	require.False(t, APIKey{}.FinalFallbackOn("any"))
+	require.False(t, APIKey{}.FinalFallbackExempt("any"))
 
 	k := APIKey{
 		AllowedProviders:       []string{"p1"},
 		ModelDisabledProviders: map[string][]string{"deepseek-v4": {"p1"}},
-		ModelFinalFallback:     map[string]bool{"deepseek-v4": true},
+		ModelFinalFallback:     map[string]int{"deepseek-v4": FinalFallbackChosen, "kept": FinalFallbackKept, "off": FinalFallbackOff},
 	}
 	require.True(t, k.ProviderAllowed("p1"))
 	require.False(t, k.ProviderAllowed("p2"), "outside the ceiling")
@@ -129,6 +132,10 @@ func TestAPIKeyProviderEnabled(t *testing.T) {
 	require.True(t, k.ProviderEnabled("other", "p1"))
 	require.False(t, k.ProviderEnabled("chain:DeepSeek-V4", "p1"), "the disabled list wins over the ceiling")
 	require.True(t, k.FinalFallbackOn("chain:DeepSeek-V4"))
+	require.True(t, k.FinalFallbackExempt("chain:DeepSeek-V4"), "explicitly turned on")
+	require.True(t, k.FinalFallbackOn("Kept"))
+	require.False(t, k.FinalFallbackExempt("Kept"), "kept from before: the minimum discount still applies")
+	require.False(t, k.FinalFallbackOn("off"))
 	require.False(t, k.FinalFallbackOn("other"))
 
 	open := APIKey{ModelDisabledProviders: map[string][]string{"m": {"p2"}}}

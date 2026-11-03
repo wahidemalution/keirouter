@@ -197,9 +197,17 @@ func TestServerResolveTargetsExemptsChainsWithoutDiscountGuarantee(t *testing.T)
 	require.Equal(t, http.StatusServiceUnavailable, bad.status)
 	require.Contains(t, bad.Error(), "Turn on the final fallback")
 
-	// Final fallback on: the customer chose its normal price, so the minimum
-	// does not block it.
-	keyed = context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50, ModelFinalFallback: map[string]bool{"glm": true}})
+	// Fallback kept from before per-key routing: the minimum still removes
+	// it, so the answer is the discount-floor refusal it was before.
+	keyed = context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50, ModelFinalFallback: map[string]int{"glm": store.FinalFallbackKept}})
+	_, err = gw.resolveTargets(keyed, store.DefaultTenantID, "glm")
+	bad, ok = err.(badModelError)
+	require.True(t, ok)
+	require.Equal(t, http.StatusUnprocessableEntity, bad.status)
+
+	// Final fallback turned on explicitly: the customer chose its normal
+	// price, so the minimum does not block it.
+	keyed = context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50, ModelFinalFallback: map[string]int{"glm": store.FinalFallbackChosen}})
 	res, err = gw.resolveTargets(keyed, store.DefaultTenantID, "glm")
 	require.NoError(t, err)
 	require.Len(t, res.Targets, 1)
@@ -208,7 +216,7 @@ func TestServerResolveTargetsExemptsChainsWithoutDiscountGuarantee(t *testing.T)
 }
 
 func TestDiscountFloorKeepsChainFallback(t *testing.T) {
-	fallback := dispatch.Target{Provider: "openai", Model: "gpt-4o", InputPerM: 1, OutputPerM: 2, ChainFallback: true}
+	fallback := dispatch.Target{Provider: "openai", Model: "gpt-4o", InputPerM: 1, OutputPerM: 2, ChainFallback: true, FallbackFloorExempt: true}
 	in := []dispatch.Target{trustedStep("glm", 1.0, 0), {Provider: "openai", Model: "gpt-4o"}, fallback}
 
 	out, err := applyDiscountFloor(in, 30, "chain-x")
@@ -221,6 +229,60 @@ func TestDiscountFloorKeepsChainFallback(t *testing.T) {
 	out, err = applyDiscountFloor([]dispatch.Target{fallback}, 30, "chain-x")
 	require.NoError(t, err)
 	require.Equal(t, []dispatch.Target{fallback}, out)
+
+	// A fallback kept from before per-key routing is dropped, as it always was.
+	kept := fallback
+	kept.FallbackFloorExempt = false
+	out, err = applyDiscountFloor([]dispatch.Target{trustedStep("glm", 1.0, 0), kept}, 30, "chain-x")
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.False(t, out[0].ChainFallback)
+	_, err = applyDiscountFloor([]dispatch.Target{kept}, 30, "chain-x")
+	var bad badModelError
+	require.ErrorAs(t, err, &bad)
+	require.Equal(t, http.StatusUnprocessableEntity, bad.HTTPStatus())
+}
+
+// End to end through Server.resolveTargets with a live trusted quote and a
+// floor: a seeded fallback (2) is removed and nothing stays pinned; an
+// explicitly chosen one (1) stays, pinned last, with no minimum discount.
+func TestServerResolveTargetsFallbackUnderFloorBySetting(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "glm", TenantID: store.DefaultTenantID, Name: "glm", Strategy: "round_robin",
+		InputPerM: 5, OutputPerM: 10, FallbackProvider: "openai", FallbackModel: "gpt-4o",
+		Steps: []store.ChainStep{
+			{ID: "s1", Provider: "custom-openai-surplus", Model: "glm-5.3", MarketSlug: "surplus-trusted:glm-5.3", Position: 0},
+			{ID: "s2", Provider: "custom-openai-surplus-2", Model: "glm-5.3", MarketSlug: "surplus-trusted:glm-5.3", Position: 1},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{market.TrustedQuote{
+		Found: true, BestIn: 1, BestOut: 2, CapIn: 3, CapOut: 4, MinDiscountPct: 10, Providers: []string{"zai"},
+	}.Model("glm-5.3")})
+	gw.marketCache = cache
+
+	seeded := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 30, ModelFinalFallback: map[string]int{"glm": store.FinalFallbackKept}})
+	res, err := gw.resolveTargets(seeded, store.DefaultTenantID, "glm")
+	require.NoError(t, err)
+	require.Len(t, res.Targets, 2, "seeded fallback removed by the floor, as today")
+	for _, tg := range res.Targets {
+		require.False(t, tg.ChainFallback)
+	}
+	require.Equal(t, 0, res.PlanOpts.PinnedTail, "both trusted steps rotate")
+
+	chosen := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 30, ModelFinalFallback: map[string]int{"glm": store.FinalFallbackChosen}})
+	res, err = gw.resolveTargets(chosen, store.DefaultTenantID, "glm")
+	require.NoError(t, err)
+	require.Len(t, res.Targets, 3)
+	last := res.Targets[2]
+	require.True(t, last.ChainFallback)
+	require.Equal(t, 0, last.MinDiscountPct)
+	require.Equal(t, 5.0, last.InputPerM, "fallback billed at chain price")
+	require.Equal(t, 1, res.PlanOpts.PinnedTail)
 }
 
 func TestDiscountFloorLocalCheck(t *testing.T) {

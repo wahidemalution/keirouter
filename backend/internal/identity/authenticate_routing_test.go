@@ -34,4 +34,5 @@ func TestAuthenticateLoadsKeyRouting(t *testing.T) {
 	require.False(t, rec.ProviderEnabled("chain:deepseek-v4", "p1"))
 	require.True(t, rec.ProviderEnabled("chain:deepseek-v4", "p2"))
 	require.True(t, rec.FinalFallbackOn("DeepSeek-V4"))
+	require.True(t, rec.FinalFallbackExempt("DeepSeek-V4"), "set after deploy: an explicit choice")
 }

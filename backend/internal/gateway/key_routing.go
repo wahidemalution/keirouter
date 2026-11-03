@@ -41,7 +41,8 @@ func errNoEnabledProvider(model string, byAdmin bool) error {
 // errSoldOutFallbackOff is the sold-out answer for a chain whose final
 // fallback would have served but is turned off for this key.
 func errSoldOutFallbackOff(name string) error {
-	err := errSoldOut(name).(badModelError)
-	err.msg += " Turn on the final fallback in Model Settings to avoid this error"
-	return err
+	return badModelError{
+		msg:    errSoldOut(name).Error() + ". Turn on the final fallback in Model Settings to avoid this error",
+		status: http.StatusServiceUnavailable,
+	}
 }

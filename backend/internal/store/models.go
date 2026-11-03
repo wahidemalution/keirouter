@@ -70,10 +70,10 @@ type APIKey struct {
 	// ModelDisabledProviders lists the providers the customer turned off per
 	// model, keyed by NormalizeDiscountModel. Only filled on authentication.
 	ModelDisabledProviders map[string][]string
-	// ModelFinalFallback records the customer's final-fallback choice per
-	// model, keyed by NormalizeDiscountModel. A missing entry means off. Only
-	// filled on authentication.
-	ModelFinalFallback map[string]bool
+	// ModelFinalFallback records the final-fallback setting per model, keyed
+	// by NormalizeDiscountModel: FinalFallbackChosen, FinalFallbackKept, or
+	// FinalFallbackOff (also a missing entry). Only filled on authentication.
+	ModelFinalFallback map[string]int
 }
 
 // ProviderAllowed reports whether provider is inside the admin ceiling.
@@ -103,10 +103,34 @@ func (k APIKey) ProviderEnabled(model, provider string) bool {
 	return true
 }
 
+// Final-fallback settings, as stored in api_key_model_options.final_fallback.
+const (
+	// FinalFallbackOff leaves the chain fallback out. No row means the same.
+	FinalFallbackOff = 0
+	// FinalFallbackChosen is a fallback the customer or admin turned on. The
+	// customer accepted its normal price, so a minimum discount does not
+	// apply to it.
+	FinalFallbackChosen = 1
+	// FinalFallbackKept is a fallback the migration kept for a key that
+	// existed before per-key routing. It runs as before: a minimum discount
+	// still removes it.
+	FinalFallbackKept = 2
+)
+
 // FinalFallbackOn reports whether the chain's last-resort fallback may run
 // for model.
 func (k APIKey) FinalFallbackOn(model string) bool {
-	return k.ModelFinalFallback[NormalizeDiscountModel(model)]
+	switch k.ModelFinalFallback[NormalizeDiscountModel(model)] {
+	case FinalFallbackChosen, FinalFallbackKept:
+		return true
+	}
+	return false
+}
+
+// FinalFallbackExempt reports whether the chain fallback for model runs even
+// under the key's minimum discount: only when it was turned on explicitly.
+func (k APIKey) FinalFallbackExempt(model string) bool {
+	return k.ModelFinalFallback[NormalizeDiscountModel(model)] == FinalFallbackChosen
 }
 
 // EffectiveMinDiscount returns the minimum discount that applies to a request

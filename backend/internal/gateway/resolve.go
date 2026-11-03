@@ -89,6 +89,11 @@ func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (re
 			if res.Targets, err = applyDiscountFloor(res.Targets, pct, model); err != nil {
 				return resolveResult{}, err
 			}
+			// The floor may have removed the fallback; then nothing is pinned,
+			// or round-robin would hold the last step out of rotation.
+			if n := len(res.Targets); n == 0 || !res.Targets[n-1].ChainFallback {
+				res.PlanOpts.PinnedTail = 0
+			}
 		}
 	}
 	return res, nil
@@ -159,9 +164,10 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			hasFallback := c.FallbackProvider != "" && c.FallbackModel != ""
 			// Without an authenticated key (probes, admin playground) the
 			// chain routes as configured, fallback included.
-			fallbackOn := true
+			fallbackOn, fallbackExempt := true, false
 			if key, ok := authedKey(ctx); ok {
 				fallbackOn = key.FinalFallbackOn(name)
+				fallbackExempt = key.FinalFallbackExempt(name)
 				var byAdmin bool
 				steps, byAdmin = filterStepsForKey(steps, key, name)
 				if len(steps) == 0 && !(hasFallback && fallbackOn) {
@@ -223,7 +229,9 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 					OutputPerM:     c.OutputPerM,
 					CacheWritePerM: c.CacheWritePerM,
 					CacheReadPerM:  c.CacheReadPerM,
-					ChainFallback:  true,
+
+					ChainFallback:       true,
+					FallbackFloorExempt: fallbackExempt,
 				})
 				opts.PinnedTail = 1
 			}

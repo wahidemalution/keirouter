@@ -56,9 +56,10 @@ type TrustedQuote struct {
 	// as `provider_order` (surplus-fast: fastest first).
 	ProviderOrder []string
 	Eligible      int
-	// BestDiscountPct is how far the cheapest ask sits below its list price on
-	// its better-discounted rate, floored to whole percent (0..100). Zero when
-	// the book publishes no list price for that ask.
+	// BestDiscountPct is the deepest discount below list of any eligible
+	// offer, each taken on its better-discounted rate and floored to whole
+	// percent (0..100). Offers without a list price count for nothing; zero
+	// when none has one.
 	BestDiscountPct int
 }
 
@@ -219,9 +220,16 @@ func ParseSurplusTrustedBookFor(r io.Reader, depth, floorPct int, blocked []stri
 		q.Providers = append(q.Providers, p)
 	}
 	sort.Strings(q.Providers)
-	if best := asks[0]; best.directIn > 0 && best.directOut > 0 {
-		disc := math.Max(1-best.in/best.directIn, 1-best.out/best.directOut) * 100
-		q.BestDiscountPct = min(max(int(math.Floor(disc+1e-9)), 0), 100)
+	// List prices differ per offer, so a dearer offer can sit deeper below its
+	// own list than the cheapest one. The deepest discount of any eligible
+	// offer bounds what Surplus could serve under X-Min-Discount, so routing
+	// never drops a step one of these offers would have taken.
+	for _, a := range asks {
+		if a.directIn <= 0 || a.directOut <= 0 {
+			continue
+		}
+		disc := math.Max(1-a.in/a.directIn, 1-a.out/a.directOut) * 100
+		q.BestDiscountPct = max(q.BestDiscountPct, min(max(int(math.Floor(disc+1e-9)), 0), 100))
 	}
 	if floorPct > 0 {
 		// Every eligible offer passed the floor, so list × (1-N) bounds them all;
