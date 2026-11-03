@@ -1,9 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -15,8 +15,8 @@ import (
 const (
 	marketCacheReadMult  = market.CacheReadMult
 	marketCacheWriteMult = market.CacheWriteMult
-	// maxSurplusBooksPerSync bounds order-book fetches per sync when the safety
-	// margin is on, so a large slug set cannot fan out unboundedly.
+	// maxSurplusBooksPerSync bounds the distinct order books one sync fetches,
+	// so a large slug set cannot fan out unboundedly.
 	maxSurplusBooksPerSync = 50
 )
 
@@ -27,15 +27,15 @@ func (a *App) MarketCache() *market.SnapshotCache { return a.marketCache }
 // whatever succeeded. A single-source outage leaves the other source usable; if
 // both fail an error is returned and the caller keeps the previous snapshot.
 func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
-	// The three sources are independent, so fetch them concurrently: a sync
-	// then takes as long as the slowest source instead of their sum.
+	// The sources are independent, so fetch them concurrently: a sync then
+	// takes as long as the slowest source instead of their sum.
 	var (
 		wg                 sync.WaitGroup
 		inferhub, surplus  []market.Model
 		trusted, fast      []market.Model
 		inferErr, surplErr error
 	)
-	wg.Add(4)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		inferhub, inferErr = market.Fetch(ctx, a.marketURL)
@@ -46,11 +46,18 @@ func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
 	}()
 	go func() {
 		defer wg.Done()
-		trusted = a.fetchSurplusTrusted(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		fast = a.fetchSurplusFast(ctx)
+		trustedBound := a.boundTrustedSurplusModels(ctx, market.SurplusTrustedPrefix)
+		fastBound := a.boundTrustedSurplusModels(ctx, market.SurplusFastPrefix)
+		names := make([]string, 0, len(trustedBound)+len(fastBound))
+		for _, b := range trustedBound {
+			names = append(names, b.name)
+		}
+		for _, b := range fastBound {
+			names = append(names, b.name)
+		}
+		books := a.fetchSurplusBooks(ctx, names)
+		trusted = a.fetchSurplusTrusted(ctx, trustedBound, books)
+		fast = a.fetchSurplusFast(ctx, fastBound, books)
 	}()
 	wg.Wait()
 
@@ -73,8 +80,11 @@ func (a *App) fetchMergedModels(ctx context.Context) ([]market.Model, error) {
 
 // trustedBinding is one surplus-trusted or surplus-fast model referenced by
 // the chains, with the /min{N} floor of the provider base URL serving it.
+// provider is the pinned Surplus provider of a surplus-trusted@ step, "" for
+// the plain forms.
 type trustedBinding struct {
 	name     string
+	provider string
 	floorPct int
 }
 
@@ -96,7 +106,7 @@ func (a *App) boundTrustedSurplusModels(ctx context.Context, prefix string) []tr
 	}
 	var out []trustedBinding
 	for _, b := range market.BindTrustedSurplus(chainRoutes(chains), prefix, floors) {
-		out = append(out, trustedBinding{name: b.Name, floorPct: b.FloorPct})
+		out = append(out, trustedBinding{name: b.Name, provider: b.Provider, floorPct: b.FloorPct})
 	}
 	return out
 }
@@ -115,19 +125,61 @@ func chainRoutes(chains []store.Chain) []market.ChainRoute {
 	return routes
 }
 
+// fetchSurplusBooks downloads each distinct model's order book once, at most
+// maxSurplusBooksPerSync of them, 8 at a time. A failed fetch leaves the model
+// out of the result. The result replaces a.surplusBooks so the failover
+// enrichment of the same run can reuse it.
+func (a *App) fetchSurplusBooks(ctx context.Context, models []string) map[string][]byte {
+	seen := make(map[string]bool, len(models))
+	var distinct []string
+	for _, m := range models {
+		if !seen[m] {
+			seen[m] = true
+			distinct = append(distinct, m)
+		}
+	}
+	if len(distinct) > maxSurplusBooksPerSync {
+		a.log.Warn("surplus: order-book fetch capped", "cap", maxSurplusBooksPerSync, "bound", len(distinct))
+		distinct = distinct[:maxSurplusBooksPerSync]
+	}
+	bodies := make([][]byte, len(distinct))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	for i, name := range distinct {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			body, err := market.FetchSurplusBookRaw(ctx, a.surplusURL, name)
+			if err != nil {
+				a.log.Debug("surplus book fetch failed", "model", name, "err", err)
+				return
+			}
+			bodies[i] = body
+		}()
+	}
+	wg.Wait()
+	books := make(map[string][]byte, len(distinct))
+	for i, name := range distinct {
+		if bodies[i] != nil {
+			books[name] = bodies[i]
+		}
+	}
+	a.surplusBooksMu.Lock()
+	a.surplusBooks = books
+	a.surplusBooksMu.Unlock()
+	return books
+}
+
 // fetchSurplusTrusted quotes every bound surplus-trusted model from its order
 // book, using only trusted+available+healthy offers that also clear the
-// provider's /min{N} floor. Books are fetched concurrently (bounded); a failed
-// or empty book drops that slug from the snapshot so routing never prices
-// against stale trusted offers.
-func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
-	bound := a.boundTrustedSurplusModels(ctx, market.SurplusTrustedPrefix)
+// provider's /min{N} floor. A provider binding quotes only that Surplus
+// provider's offers. A missing or empty book drops that slug from the
+// snapshot so routing never prices against stale trusted offers.
+func (a *App) fetchSurplusTrusted(ctx context.Context, bound []trustedBinding, books map[string][]byte) []market.Model {
 	if len(bound) == 0 {
 		return nil
-	}
-	if len(bound) > maxSurplusBooksPerSync {
-		a.log.Warn("surplus trusted: order-book fetch capped", "cap", maxSurplusBooksPerSync, "bound", len(bound))
-		bound = bound[:maxSurplusBooksPerSync]
 	}
 	settings := market.LoadSettings(ctx, a.db.Settings().Get)
 	depth, blocked := settings.SurplusFallbackDepth, settings.SurplusBlockedProviders
@@ -135,39 +187,31 @@ func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
 	if !ceiling {
 		depth = 1
 	}
-	out := make([]market.Model, len(bound))
-	ok := make([]bool, len(bound))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for i, b := range bound {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			q, err := market.FetchSurplusTrustedBook(ctx, a.surplusURL, b.name, depth, b.floorPct, blocked)
-			if err != nil || !q.Found {
-				if err != nil {
-					a.log.Debug("surplus trusted book fetch failed", "model", b.name, "err", err)
-				}
-				return
+	var models []market.Model
+	for _, b := range bound {
+		book, ok := books[b.name]
+		if !ok {
+			continue
+		}
+		q, err := market.ParseSurplusTrustedBookFor(bytes.NewReader(book), depth, b.floorPct, blocked, b.provider)
+		if err != nil || !q.Found {
+			if err != nil {
+				a.log.Debug("surplus trusted book parse failed", "model", b.name, "provider", b.provider, "err", err)
 			}
-			if !ceiling {
-				q.MinDiscountPct = 0
-				if q.FloorCapIn > 0 && q.FloorCapOut > 0 {
-					// Without a ceiling Surplus may fail over to any offer
-					// clearing the floor; bill the unreported case at that bound.
-					q.CapIn, q.CapOut = q.FloorCapIn, q.FloorCapOut
-				}
+			continue
+		}
+		if !ceiling {
+			q.MinDiscountPct = 0
+			if q.FloorCapIn > 0 && q.FloorCapOut > 0 {
+				// Without a ceiling Surplus may fail over to any offer
+				// clearing the floor; bill the unreported case at that bound.
+				q.CapIn, q.CapOut = q.FloorCapIn, q.FloorCapOut
 			}
-			out[i], ok[i] = q.Model(b.name), true
-		}()
-	}
-	wg.Wait()
-	models := out[:0]
-	for i := range out {
-		if ok[i] {
-			models = append(models, out[i])
+		}
+		if b.provider != "" {
+			models = append(models, q.ProviderModel(b.provider, b.name))
+		} else {
+			models = append(models, q.Model(b.name))
 		}
 	}
 	return models
@@ -175,16 +219,13 @@ func (a *App) fetchSurplusTrusted(ctx context.Context) []market.Model {
 
 // fetchSurplusFast quotes every bound surplus-fast model: available and
 // healthy offers of any trust within the configured price tolerance, with
-// providers ranked by published TTFT. As with trusted quotes, a failed or
-// empty book drops the slug so routing never uses stale offers.
-func (a *App) fetchSurplusFast(ctx context.Context) []market.Model {
-	bound := a.boundTrustedSurplusModels(ctx, market.SurplusFastPrefix)
+// providers ranked by published TTFT. Performance is fetched per model (a
+// failed fetch ranks by price); the book comes from books. As with trusted
+// quotes, a missing or empty book drops the slug so routing never uses stale
+// offers.
+func (a *App) fetchSurplusFast(ctx context.Context, bound []trustedBinding, books map[string][]byte) []market.Model {
 	if len(bound) == 0 {
 		return nil
-	}
-	if len(bound) > maxSurplusBooksPerSync {
-		a.log.Warn("surplus fast: order-book fetch capped", "cap", maxSurplusBooksPerSync, "bound", len(bound))
-		bound = bound[:maxSurplusBooksPerSync]
 	}
 	settings := market.LoadSettings(ctx, a.db.Settings().Get)
 	tolerance, depth, blocked := settings.SurplusFastTolerancePct, settings.SurplusFallbackDepth, settings.SurplusBlockedProviders
@@ -193,15 +234,23 @@ func (a *App) fetchSurplusFast(ctx context.Context) []market.Model {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8)
 	for i, b := range bound {
+		book, found := books[b.name]
+		if !found {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			q, err := market.FetchSurplusFastBook(ctx, a.surplusURL, b.name, tolerance, depth, b.floorPct, blocked)
+			perf, err := market.FetchSurplusPerformance(ctx, a.surplusURL, b.name)
+			if err != nil {
+				perf = nil
+			}
+			q, err := market.ParseSurplusFastBook(bytes.NewReader(book), perf, tolerance, depth, b.floorPct, blocked)
 			if err != nil || !q.Found {
 				if err != nil {
-					a.log.Debug("surplus fast book fetch failed", "model", b.name, "err", err)
+					a.log.Debug("surplus fast book parse failed", "model", b.name, "err", err)
 				}
 				return
 			}
@@ -218,11 +267,12 @@ func (a *App) fetchSurplusFast(ctx context.Context) []market.Model {
 	return models
 }
 
-// enrichSurplusFailover fetches the order book for each Surplus model actually
-// bound by a chain and stamps the next-best ask onto the snapshot model, so the
-// safety margin can floor against the fallback cost. It is only called when the
-// safety margin is enabled, and best-effort: a failed book leaves the model's
-// failover unknown (the floor then stays inert for it).
+// enrichSurplusFailover stamps the next-best ask of each Surplus model actually
+// bound by a chain onto the snapshot model, so the safety margin can floor
+// against the fallback cost. It reads the books this sync already fetched and
+// downloads only the missing ones, at most maxSurplusBooksPerSync. It is only
+// called when the safety margin is enabled, and best-effort: a failed book
+// leaves the model's failover unknown (the floor then stays inert for it).
 func (a *App) enrichSurplusFailover(ctx context.Context, models []market.Model, slugs map[string]bool) []market.Model {
 	if len(slugs) == 0 {
 		return models
@@ -231,23 +281,36 @@ func (a *App) enrichSurplusFailover(ctx context.Context, models []market.Model, 
 	for i, m := range models {
 		bySlug[m.Slug] = i
 	}
-	checked := 0
+	a.surplusBooksMu.Lock()
+	shared := a.surplusBooks
+	a.surplusBooksMu.Unlock()
+	fetched, capped := 0, false
 	for slug := range slugs {
 		idx, ok := bySlug[slug]
 		if !ok || !strings.HasPrefix(slug, market.SurplusPrefix) {
 			continue
 		}
-		if checked >= maxSurplusBooksPerSync {
-			a.log.Warn("safety margin: order-book fetch capped", "cap", maxSurplusBooksPerSync)
-			break
-		}
-		checked++
 		name := strings.TrimPrefix(slug, market.SurplusPrefix)
-		url := strings.TrimSuffix(a.surplusURL, "/") + "/" + url.PathEscape(name)
-		_, _, nextIn, nextOut, found, err := market.FetchSurplusBook(ctx, url)
+		book, ok := shared[name]
+		if !ok {
+			if fetched >= maxSurplusBooksPerSync {
+				if !capped {
+					a.log.Warn("safety margin: order-book fetch capped", "cap", maxSurplusBooksPerSync)
+					capped = true
+				}
+				continue
+			}
+			fetched++
+			var err error
+			if book, err = market.FetchSurplusBookRaw(ctx, a.surplusURL, name); err != nil {
+				a.log.Debug("surplus book fetch failed", "model", name, "err", err)
+				continue
+			}
+		}
+		_, _, nextIn, nextOut, found, err := market.ParseSurplusBook(bytes.NewReader(book))
 		if err != nil || !found {
 			if err != nil {
-				a.log.Debug("surplus book fetch failed", "model", name, "err", err)
+				a.log.Debug("surplus book parse failed", "model", name, "err", err)
 			}
 			continue
 		}

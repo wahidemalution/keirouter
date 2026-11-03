@@ -46,3 +46,34 @@ func TestBindTrustedSurplusOrderGolden(t *testing.T) {
 		t.Fatalf("bindings = %+v, want %+v", got, want)
 	}
 }
+
+func TestBindTrustedSurplusProviderSlugs(t *testing.T) {
+	floors := map[string]int{"p1": 30, "p2": 10}
+	chains := []ChainRoute{{
+		// A chain cannot pin a provider: this slug binds nothing.
+		MarketSlugs: []string{SurplusTrustedProviderPrefix + "x:m"},
+		Steps: []StepRoute{
+			{MarketSlug: SurplusTrustedProviderPrefix + "openrouter:m", Model: "m", Provider: "p1"},
+			{MarketSlug: SurplusTrustedProviderPrefix + "alibaba-cn:m", Model: "m", Provider: "p2"},
+		},
+	}}
+	got := BindTrustedSurplus(chains, SurplusTrustedPrefix, floors)
+	want := []TrustedBinding{
+		{Name: "m", Provider: "openrouter", FloorPct: 30},
+		{Name: "m", Provider: "alibaba-cn", FloorPct: 10},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bindings = %+v, want %+v", got, want)
+	}
+	// Providers are case-insensitive: one binding keeps the lower floor.
+	chains[0].Steps = append(chains[0].Steps, StepRoute{MarketSlug: SurplusTrustedProviderPrefix + "OpenRouter:m", Model: "m", Provider: "p2"})
+	got = BindTrustedSurplus(chains, SurplusTrustedPrefix, floors)
+	want[0].FloorPct = 10
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bindings after mixed-case step = %+v, want %+v", got, want)
+	}
+	// surplus-fast has no per-provider form, so these steps bind no fast model.
+	if fast := BindTrustedSurplus(chains, SurplusFastPrefix, floors); len(fast) != 0 {
+		t.Fatalf("fast bindings = %+v, want none", fast)
+	}
+}

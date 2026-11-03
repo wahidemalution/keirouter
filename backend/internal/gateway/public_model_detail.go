@@ -367,7 +367,7 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	floor := 0
 	for _, b := range market.BindTrustedSurplus([]market.ChainRoute{detailChainRoute(c)}, prefix, floors) {
-		if b.Name == name {
+		if b.Name == name && b.Provider == "" {
 			floor = b.FloorPct
 			break
 		}
