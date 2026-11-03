@@ -37,6 +37,9 @@ func (s *Server) handlePortalModelSettings(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to load model settings")
 		return
 	}
+	for i := range resp.Models {
+		redactModelSettingsRow(&resp.Models[i])
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -47,7 +50,7 @@ func (s *Server) handlePortalSetModelProvider(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	s.setModelProvider(w, r, key, chain)
+	s.setModelProvider(w, r, key, chain, true)
 }
 
 // handlePortalSetModelFinalFallback serves
@@ -57,15 +60,21 @@ func (s *Server) handlePortalSetModelFinalFallback(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	s.setModelFinalFallback(w, r, key, chain)
+	s.setModelFinalFallback(w, r, key, chain, true)
 }
 
 // setModelProvider turns one provider on or off for a key's model and answers
 // with the model's updated row. The portal and the admin share it, so both
-// refuse to enable a provider outside the key's admin ceiling.
-func (s *Server) setModelProvider(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
-	provider := pathParam(r, "provider")
-	if !chainHasStepProvider(chain, provider) {
+// refuse to enable a provider outside the key's admin ceiling. A portal
+// request names the provider by its portal id and gets a redacted row back.
+func (s *Server) setModelProvider(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain, portal bool) {
+	provider, found := pathParam(r, "provider"), false
+	if portal {
+		provider, found = resolvePortalProvider(chain, provider)
+	} else {
+		found = chainHasStepProvider(chain, provider)
+	}
+	if !found {
 		writeError(w, http.StatusNotFound, "provider not in this model's chain")
 		return
 	}
@@ -90,12 +99,12 @@ func (s *Server) setModelProvider(w http.ResponseWriter, r *http.Request, key st
 		return
 	}
 	s.identity.InvalidateAuthCacheForKey(key.ID)
-	s.writeModelSettingsRow(w, r, key, chain)
+	s.writeModelSettingsRow(w, r, key, chain, portal)
 }
 
 // setModelFinalFallback turns the final fallback on or off for a key's model
 // and answers with the model's updated row.
-func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
+func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain, portal bool) {
 	enabled, ok := decodeEnabled(w, r)
 	if !ok {
 		return
@@ -106,18 +115,23 @@ func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, k
 		return
 	}
 	s.identity.InvalidateAuthCacheForKey(key.ID)
-	s.writeModelSettingsRow(w, r, key, chain)
+	s.writeModelSettingsRow(w, r, key, chain, portal)
 }
 
-// writeModelSettingsRow answers a successful write with the model's updated row.
-func (s *Server) writeModelSettingsRow(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain) {
+// writeModelSettingsRow answers a successful write with the model's updated
+// row, redacted for the portal.
+func (s *Server) writeModelSettingsRow(w http.ResponseWriter, r *http.Request, key store.APIKey, chain store.Chain, portal bool) {
 	resp, err := s.buildModelSettings(r.Context(), key, []store.Chain{chain})
 	if err != nil || len(resp.Models) != 1 {
 		s.log.Error("model settings: build row failed", "model", chain.Name, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load model settings")
 		return
 	}
-	writeJSON(w, http.StatusOK, resp.Models[0])
+	row := resp.Models[0]
+	if portal {
+		redactModelSettingsRow(&row)
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 // portalKey loads the portal user's key.

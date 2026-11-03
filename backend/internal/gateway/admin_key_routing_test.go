@@ -101,7 +101,15 @@ func TestAdminKeyRoutingModelSettings(t *testing.T) {
 	_, _, rows := f.list(t)
 	require.Len(t, rows, 1)
 	require.True(t, rows[0].FinalFallback)
-	require.Equal(t, getAdminSettings(t, mux, f.keyID).Models, rows)
+	// The portal sees the same rows with marketplace ids and names redacted.
+	adminRows := getAdminSettings(t, mux, f.keyID).Models
+	for i := range adminRows {
+		for j := range adminRows[i].Providers {
+			p := &adminRows[i].Providers[j]
+			p.Name, p.ID = portalProviderName(p.Name, p.ID), portalProviderID(p.ID)
+		}
+	}
+	require.Equal(t, adminRows, rows)
 
 	rec = adminDo(mux, http.MethodPut, base+"/providers/deepseek", `{"enabled":false}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

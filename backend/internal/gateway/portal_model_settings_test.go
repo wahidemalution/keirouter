@@ -153,8 +153,8 @@ func TestPortalModelSettingsList(t *testing.T) {
 	require.Len(t, ds.Providers, 3)
 
 	or := ds.Providers[0]
-	require.Equal(t, "custom-openai-surplus-openrouter", or.ID)
-	require.Equal(t, "Surplus OpenRouter", or.Name)
+	require.Equal(t, "openrouter", or.ID, "the portal sees the seller id, not the provider alias")
+	require.Equal(t, "OpenRouter", or.Name, "the portal never names the marketplace")
 	require.True(t, or.Enabled)
 	require.False(t, or.Locked)
 	require.True(t, or.Available)
@@ -304,7 +304,7 @@ func TestPortalModelSettingsLockedProvider(t *testing.T) {
 	_, _, rows := f.list(t)
 	for _, p := range rows[0].Providers {
 		switch p.ID {
-		case pA:
+		case portalProviderID(pA):
 			require.False(t, p.Locked)
 			require.True(t, p.Enabled)
 		default:

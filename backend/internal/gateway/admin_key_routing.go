@@ -175,7 +175,7 @@ func (s *Server) adminSetKeyModelProvider(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	s.setModelProvider(w, r, key, chain)
+	s.setModelProvider(w, r, key, chain, false)
 }
 
 // adminSetKeyModelFinalFallback serves
@@ -185,5 +185,5 @@ func (s *Server) adminSetKeyModelFinalFallback(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
-	s.setModelFinalFallback(w, r, key, chain)
+	s.setModelFinalFallback(w, r, key, chain, false)
 }

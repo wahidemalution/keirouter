@@ -699,6 +699,7 @@ func (s *Server) handlePortalUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to build usage")
 		return
 	}
+	redactUsagePayload(payload)
 	writeJSON(w, http.StatusOK, payload)
 }
 
