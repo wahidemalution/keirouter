@@ -63,17 +63,7 @@ function AllowedProvidersCard({ keyId, data }: { keyId: string; data: KeyModelSe
     });
   };
 
-  let status;
-  if (save.isError) status = <span role="alert" className="text-bad">{errorText(save.error)}</span>;
-  else {
-    const summary = next.length === 0 ? "Every provider is allowed" : `${next.length} of ${options.length} providers allowed`;
-    status = (
-      <span className="text-fg-muted">
-        <span className="text-fg">{summary}</span>
-        {dirty ? " · Unsaved changes" : ""}
-      </span>
-    );
-  }
+  const summary = next.length === 0 ? "Every provider is allowed" : `${next.length} of ${options.length} providers allowed`;
 
   return (
     <PanelCard
@@ -82,7 +72,13 @@ function AllowedProvidersCard({ keyId, data }: { keyId: string; data: KeyModelSe
       subtitle="Empty means every provider. The customer can only choose inside this list."
       footer={
         <div className="flex flex-col gap-2 border-t border-line bg-subtle px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:px-5">
-          <div role="status" className="min-w-0 flex-1 text-[12.5px]">{status}</div>
+          <div className="min-w-0 flex-1 space-y-1 text-[12.5px]">
+            <p role="status" className="text-fg-muted">
+              <span className="text-fg">{summary}</span>
+              {dirty ? " · Unsaved changes" : ""}
+            </p>
+            {save.isError && <p role="alert" className="text-bad">{errorText(save.error)}</p>}
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center [&>button]:w-full sm:[&>button]:w-auto">
             <Button
               variant="ghost"
@@ -93,7 +89,7 @@ function AllowedProvidersCard({ keyId, data }: { keyId: string; data: KeyModelSe
                 setDraft(new Set());
               }}
             >
-              Allow every provider
+              Clear selection
             </Button>
             <Button className={TOUCH} disabled={!dirty || save.isPending} onClick={() => save.mutate(next)}>
               {save.isPending ? "Saving…" : "Save providers"}
@@ -125,7 +121,7 @@ function AllowedProvidersCard({ keyId, data }: { keyId: string; data: KeyModelSe
                 />
                 <span className="min-w-0 text-[13px] text-fg">
                   <span className="break-words font-medium">{o.name}</span>
-                  {"orphan" in o && <span className="block text-[12px] text-fg-muted">No chain uses it</span>}
+                  {"orphan" in o && <span className="block text-[12px] text-fg-muted">No chain uses it. Untick it to save.</span>}
                 </span>
               </label>
             ))}
