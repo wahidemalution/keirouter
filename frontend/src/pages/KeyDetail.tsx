@@ -42,10 +42,11 @@ import { REPORT_PERIODS } from "../lib/periods";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { fmtDate, fmtDateTime } from "../lib/serverTime";
+import { RoutingTab } from "./keyDetail/RoutingTab";
 
-type Tab = "general" | "usage" | "models" | "budget" | "guardrails";
-const TAB_VALUES: Tab[] = ["general", "usage", "models", "budget", "guardrails"];
-const TAB_LABELS: Record<Tab, string> = { general: "Overview", usage: "Model usage", models: "Models", budget: "Budget", guardrails: "Guardrails" };
+type Tab = "general" | "usage" | "models" | "routing" | "budget" | "guardrails";
+const TAB_VALUES: Tab[] = ["general", "usage", "models", "routing", "budget", "guardrails"];
+const TAB_LABELS: Record<Tab, string> = { general: "Overview", usage: "Model usage", models: "Models", routing: "Routing", budget: "Budget", guardrails: "Guardrails" };
 
 const FOCUS_RING = "focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500";
 const USAGE_DAYS = 30;
@@ -377,6 +378,7 @@ export function KeyDetailPage() {
         )}
         {tab === "usage" && <ModelUsageTab apiKey={key} />}
         {tab === "models" && <ModelsTab apiKey={key} plan={plan} plansLoading={plans.isLoading} />}
+        {tab === "routing" && <RoutingTab apiKey={key} />}
         {tab === "budget" && <BudgetTab apiKey={key} />}
         {tab === "guardrails" && <GuardrailsTab apiKey={key} />}
       </div>

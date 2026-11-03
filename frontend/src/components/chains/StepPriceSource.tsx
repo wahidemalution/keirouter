@@ -78,7 +78,7 @@ export function StepPriceSource({
       </fieldset>
 
       {step.priceSource === "market" ? (
-        <Field label="Market slug" hint="Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:">
+        <Field label="Market slug" hint={<>Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:. Per provider: <span className="font-mono text-fg">surplus-trusted@&lt;provider&gt;:&lt;model&gt;</span>, for example <span className="font-mono text-fg">surplus-trusted@openrouter:deepseek-v4.1-flash</span>.</>}>
           <Input value={step.marketSlug} onChange={(event) => onChange({ marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
         </Field>
       ) : (

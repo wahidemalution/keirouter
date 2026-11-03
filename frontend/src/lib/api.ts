@@ -2001,6 +2001,34 @@ export async function fetchKeyUsageById(id: string, days?: number): Promise<KeyU
   return request<KeyUsageData>("GET", `/keys/${encodeURIComponent(id)}/usage${qs}`);
 }
 
+/** The admin view of a key's model settings: the portal rows plus its provider ceiling. */
+export async function fetchKeyModelSettings(id: string): Promise<KeyModelSettings> {
+  return request<KeyModelSettings>("GET", `/keys/${encodeURIComponent(id)}/model-settings`);
+}
+
+/** Replace a key's allowed-providers ceiling. An empty list allows every provider. */
+export async function setKeyAllowedProviders(id: string, providers: string[]): Promise<{ allowed_providers: string[] }> {
+  return request<{ allowed_providers: string[] }>("PUT", `/keys/${encodeURIComponent(id)}/allowed-providers`, { providers });
+}
+
+/** Turn one provider on or off for one of the key's models; answers with the updated row. */
+export async function setKeyModelProvider(id: string, model: string, provider: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  return request<PortalModelSettingsRow>(
+    "PUT",
+    `/keys/${encodeURIComponent(id)}/model-settings/${encodeURIComponent(model)}/providers/${encodeURIComponent(provider)}`,
+    { enabled },
+  );
+}
+
+/** Turn a model's final fallback on or off for the key; answers with the updated row. */
+export async function setKeyFinalFallback(id: string, model: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  return request<PortalModelSettingsRow>(
+    "PUT",
+    `/keys/${encodeURIComponent(id)}/model-settings/${encodeURIComponent(model)}/final-fallback`,
+    { enabled },
+  );
+}
+
 export async function fetchPortalUsage(days?: number): Promise<KeyUsageData> {
   const qs = days ? `?days=${days}` : "";
   const resp = await fetch(`/portal/api/usage${qs}`);
@@ -2266,6 +2294,19 @@ export interface PortalModelSettings {
   default_pct: number;
   max_pct: number;
   models: PortalModelSettingsRow[];
+}
+
+/** A keirouter provider an admin may put on a key's allowed-providers ceiling. */
+export interface ProviderOption {
+  id: string;
+  name: string;
+}
+
+/** An API key's model settings as the admin sees them, plus its provider ceiling. */
+export interface KeyModelSettings extends PortalModelSettings {
+  /** Empty means every provider is allowed. */
+  allowed_providers: string[];
+  provider_options: ProviderOption[];
 }
 
 /** The key's discount, provider and final-fallback settings for every model it may call. */
