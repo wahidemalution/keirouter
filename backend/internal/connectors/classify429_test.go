@@ -384,3 +384,46 @@ func TestHTTPStatusError_SurplusMinimumDiscountNotMet(t *testing.T) {
 	require.True(t, pe.Fallbackable())
 	require.False(t, pe.Retryable())
 }
+
+// A Surplus key scoped to another upstream provider, or an account Surplus
+// restricted, fails identically on every retry of this account. Both are
+// configuration faults of the account, so they bench it and advance the chain
+// instead of reaching the customer as a request error.
+func TestHTTPStatusErrorSurplusConfigErrors(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		body         string
+		kind         core.ErrorKind
+		fallbackable bool
+	}{
+		{"400 unsupported_provider", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"unsupported_provider","message":"provider 'foo' is not supported"}}`,
+			core.ErrAuth, true},
+		{"400 account_restricted", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"account_restricted","message":"this account is restricted"}}`,
+			core.ErrAuth, true},
+		{"403 provider_not_in_key_scope", http.StatusForbidden,
+			`{"error":{"type":"permission_error","code":"provider_not_in_key_scope","message":"key is not scoped to this provider"}}`,
+			core.ErrAuth, true},
+		{"400 invalid_request", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"invalid_request","message":"messages must not be empty"}}`,
+			core.ErrBadRequest, false},
+		{"400 code named in prose only", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"invalid_request","message":"the model said unsupported_provider and account_restricted"}}`,
+			core.ErrBadRequest, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: tc.status, Header: http.Header{}}
+
+			pe := core.AsProviderError(httpStatusError("surplus", "glm-5.3", resp, []byte(tc.body)))
+
+			require.Equal(t, tc.kind, pe.Kind)
+			require.Equal(t, tc.fallbackable, pe.Fallbackable())
+			if tc.kind == core.ErrAuth {
+				require.Equal(t, core.FailureScopeAccount, pe.EffectiveScope())
+			}
+		})
+	}
+}
