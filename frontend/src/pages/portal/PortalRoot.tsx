@@ -1,19 +1,24 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Outlet } from "react-router-dom";
-import { fetchPortalStatus } from "../../lib/api";
+import { devLoginPortal, fetchPortalStatus } from "../../lib/api";
 import { useBranding } from "../../contexts/BrandingContext";
 import { Button, Spinner } from "../../components/ui";
 import { BrandMark } from "../../components/BrandMark";
 import { TurnstileWidget, useTurnstileSiteKey } from "../../components/TurnstileWidget";
 import { rememberPortalReturn } from "../../lib/portalReturn";
 
-function SignInCard() {
+function SignInCard({ devLogin }: { devLogin: boolean }) {
   const { branding, logoSrc } = useBranding();
   const siteKey = useTurnstileSiteKey();
   const [token, setToken] = useState("");
   const failed = new URLSearchParams(window.location.search).get("turnstile") === "failed";
   const ready = !siteKey || !!token;
+  const queryClient = useQueryClient();
+  const devSignIn = useMutation({
+    mutationFn: devLoginPortal,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["portal-status"] }),
+  });
 
   const start = () => {
     if (!ready) return;
@@ -55,10 +60,27 @@ function SignInCard() {
                   Verification failed. Please complete the challenge and try again.
                 </p>
               )}
-              <Button className="w-full" onClick={start} disabled={!ready}>
+              <Button className="min-h-11 w-full" onClick={start} disabled={!ready}>
                 <GoogleGlyph />
                 Sign in with Google
               </Button>
+              {devLogin && (
+                <div className="space-y-2">
+                  <Button
+                    variant="secondary"
+                    className="min-h-11 w-full"
+                    onClick={() => devSignIn.mutate()}
+                    disabled={devSignIn.isPending}
+                  >
+                    {devSignIn.isPending ? "Signing in" : "Dev sign-in"}
+                  </Button>
+                  {devSignIn.isError && (
+                    <p role="alert" className="text-center text-[12px] text-bad">
+                      {devSignIn.error.message}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <p className="rounded-b-2xl border-t border-line bg-subtle px-6 py-3 text-center text-[12px] text-fg-muted">
@@ -94,6 +116,6 @@ export function PortalRootPage() {
       </div>
     );
   }
-  if (!status?.authenticated) return <SignInCard />;
+  if (!status?.authenticated) return <SignInCard devLogin={!!status?.dev_login} />;
   return <Outlet />;
 }

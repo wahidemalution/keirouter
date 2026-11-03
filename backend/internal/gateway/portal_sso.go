@@ -105,19 +105,33 @@ func (s *Server) handlePortalLoginCallback(w http.ResponseWriter, r *http.Reques
 	http.Redirect(w, r, "/portal", http.StatusFound)
 }
 
+// portalSignedOutStatus is the status body for a visitor without a portal
+// session. dev_login is present only when the dev sign-in route exists, so the
+// sign-in screen knows whether to offer it.
+func (s *Server) portalSignedOutStatus() map[string]any {
+	out := map[string]any{"authenticated": false}
+	if s.cfg.PortalSSO.DevLogin {
+		out["dev_login"] = true
+	}
+	return out
+}
+
 // handlePortalStatus reports the portal session's authentication and claim state.
 func (s *Server) handlePortalStatus(w http.ResponseWriter, r *http.Request) {
 	c, err := r.Cookie(portalSessionCookie)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		writeJSON(w, http.StatusOK, s.portalSignedOutStatus())
 		return
 	}
 	sub, ok := s.auth.SessionSubject(c.Value)
 	if !ok || !strings.HasPrefix(sub, "portal:") {
-		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		writeJSON(w, http.StatusOK, s.portalSignedOutStatus())
 		return
 	}
 	out := map[string]any{"authenticated": true, "claimed": false, "has_key": false, "provisioning_enabled": false}
+	if s.cfg.PortalSSO.DevLogin {
+		out["dev_login"] = true
+	}
 	if email, ok := s.auth.SessionEmail(c.Value); ok {
 		out["email"] = email
 	}
