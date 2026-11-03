@@ -64,8 +64,12 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
   });
 
   const enabledCount = row.providers.filter((p) => p.enabled).length;
+  // One write per row at a time. The switches stay enabled while a write runs:
+  // disabling the focused switch would drop keyboard focus to the page.
+  const busy = provider.isPending || fallback.isPending;
 
   async function toggleProvider(p: PortalModelProvider, next: boolean) {
+    if (busy) return;
     // Turning off the last provider with no fallback leaves nothing to serve.
     if (!next && p.enabled && enabledCount === 1 && !fallbackOn(row)) {
       const ok = await confirm({
@@ -87,6 +91,7 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
   }
 
   async function setFallback(on: boolean) {
+    if (busy) return;
     // With every provider off, the fallback is the only route left.
     if (!on && enabledCount === 0) {
       const ok = await confirm({
@@ -109,7 +114,6 @@ export function useRowSettings(row: PortalModelSettingsRow, source: RowSettingsS
 
   return {
     enabledCount,
-    busy: provider.isPending || fallback.isPending,
     toggleProvider,
     providerError: provider.error,
     setFallback,
@@ -172,7 +176,6 @@ export function FallbackControl({ row, settings }: { row: PortalModelSettingsRow
             id={toggleId}
             checked={row.final_fallback}
             onChange={(on) => void settings.setFallback(on)}
-            disabled={settings.busy}
             label={`Final fallback for ${row.model}`}
           />
         </ToggleTarget>
@@ -224,7 +227,7 @@ function ProviderItem({
           id={toggleId}
           checked={p.enabled}
           onChange={(next) => void settings.toggleProvider(p, next)}
-          disabled={p.locked || settings.busy}
+          disabled={p.locked}
           aria-labelledby={nameId}
           aria-describedby={infoId}
         />

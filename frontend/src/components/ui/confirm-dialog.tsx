@@ -31,8 +31,14 @@ const ConfirmContext = createContext<ConfirmFn | null>(null);
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const resolver = useRef<((ok: boolean) => void) | null>(null);
+  // The dialog opens from code, not from a Radix trigger, so Radix has nowhere
+  // to return focus on close. Remember the control that asked instead.
+  const returnFocus = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback<ConfirmFn>((next) => {
+    if (!resolver.current && document.activeElement instanceof HTMLElement) {
+      returnFocus.current = document.activeElement;
+    }
     // A second request while one is open resolves the first as cancelled.
     resolver.current?.(false);
     setOptions(next);
@@ -55,7 +61,16 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       <AlertDialog.Root open={options !== null} onOpenChange={(open) => !open && settle(false)}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/45 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-          <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98]">
+          <AlertDialog.Content
+            onCloseAutoFocus={(e) => {
+              const el = returnFocus.current;
+              returnFocus.current = null;
+              if (el?.isConnected) {
+                e.preventDefault();
+                el.focus();
+              }
+            }}
+            className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98]">
             <div className="flex items-start gap-3">
               {icon && <IconTile icon={icon} size="md" tone={danger ? "bad" : "blue"} />}
               <div className={cn("min-w-0 flex-1", icon && "pt-1")}>

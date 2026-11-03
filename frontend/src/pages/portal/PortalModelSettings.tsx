@@ -171,19 +171,22 @@ function DiscountEditor({
           if (dirty && parsed !== null) save.mutate(parsed);
         }}
       >
-        <Input
-          id={inputId}
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={max}
-          step={1}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          aria-invalid={parsed === null}
-          aria-describedby={helpId}
-          className={`w-20 tabular-nums ${TOUCH}`}
-        />
+        {/* Input is w-full; the wrapper sets its width so % and Save stay beside it. */}
+        <div className="w-20 shrink-0">
+          <Input
+            id={inputId}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={max}
+            step={1}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            aria-invalid={parsed === null}
+            aria-describedby={helpId}
+            className={`tabular-nums ${TOUCH}`}
+          />
+        </div>
         <span className="text-[12.5px] text-fg-muted" aria-hidden="true">%</span>
         <Button type="submit" variant="secondary" disabled={!dirty || save.isPending} className={TOUCH}>
           {save.isPending ? "Saving…" : "Save"}
