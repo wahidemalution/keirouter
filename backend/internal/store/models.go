@@ -64,6 +64,49 @@ type APIKey struct {
 	// lower-cased model (chain) name. Only filled on authentication; a value
 	// of 0 turns the minimum off for that model.
 	ModelDiscounts map[string]int
+	// AllowedProviders is the admin ceiling: the keirouter providers this key
+	// may use. Empty means no ceiling. Only filled on authentication.
+	AllowedProviders []string
+	// ModelDisabledProviders lists the providers the customer turned off per
+	// model, keyed by NormalizeDiscountModel. Only filled on authentication.
+	ModelDisabledProviders map[string][]string
+	// ModelFinalFallback records the customer's final-fallback choice per
+	// model, keyed by NormalizeDiscountModel. A missing entry means off. Only
+	// filled on authentication.
+	ModelFinalFallback map[string]bool
+}
+
+// ProviderAllowed reports whether provider is inside the admin ceiling.
+func (k APIKey) ProviderAllowed(provider string) bool {
+	if len(k.AllowedProviders) == 0 {
+		return true
+	}
+	for _, p := range k.AllowedProviders {
+		if p == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// ProviderEnabled reports whether a chain step under provider may serve model
+// for this key: inside the ceiling and not turned off by the customer.
+func (k APIKey) ProviderEnabled(model, provider string) bool {
+	if !k.ProviderAllowed(provider) {
+		return false
+	}
+	for _, p := range k.ModelDisabledProviders[NormalizeDiscountModel(model)] {
+		if p == provider {
+			return false
+		}
+	}
+	return true
+}
+
+// FinalFallbackOn reports whether the chain's last-resort fallback may run
+// for model.
+func (k APIKey) FinalFallbackOn(model string) bool {
+	return k.ModelFinalFallback[NormalizeDiscountModel(model)]
 }
 
 // EffectiveMinDiscount returns the minimum discount that applies to a request
