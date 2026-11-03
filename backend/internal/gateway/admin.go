@@ -24,6 +24,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/consolelog"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
@@ -48,6 +49,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/keys/{id}/topups", s.adminListKeyTopups)
 	r.Post("/keys/{id}/limit", s.adminAdjustKeyLimit)
 	r.Get("/keys/{id}/limit-adjustments", s.adminListKeyLimitAdjustments)
+	r.Get("/keys/{id}/model-settings", s.adminKeyModelSettings)
+	r.Put("/keys/{id}/allowed-providers", s.adminSetAllowedProviders)
+	r.Put("/keys/{id}/model-settings/{model}/providers/{provider}", s.adminSetKeyModelProvider)
+	r.Put("/keys/{id}/model-settings/{model}/final-fallback", s.adminSetKeyModelFinalFallback)
 
 	r.Get("/bansos", s.adminGetBansos)
 	r.Post("/bansos", s.adminCreateBansos)
@@ -2014,6 +2019,17 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"chains": out})
 }
 
+// validateChainMarketSlugs returns the 400 message for the first chain-level
+// slug a chain may not carry, "" when all are valid.
+func validateChainMarketSlugs(slugs []string) string {
+	for _, slug := range slugs {
+		if err := market.ValidateStepSlug(slug, true); err != nil {
+			return err.Error()
+		}
+	}
+	return ""
+}
+
 func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name                string           `json:"name"`
@@ -2046,6 +2062,10 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateChainName(body.Name); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if msg := validateChainMarketSlugs(body.MarketSlugs); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -2190,6 +2210,10 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		existing.CapabilityOverrides = *body.CapabilityOverrides
 	}
 	if body.MarketSlugs != nil {
+		if msg := validateChainMarketSlugs(*body.MarketSlugs); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 		existing.MarketSlugs = *body.MarketSlugs
 	}
 	if body.ReorderByMarket != nil {

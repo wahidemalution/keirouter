@@ -54,6 +54,19 @@ export default defineConfig({
           });
         },
       },
+      // Portal sign-in and data endpoints. The SPA owns every other /portal/*
+      // path (/portal/key, /portal/usage, ...), so only these prefixes go to
+      // the backend. changeOrigin without xfwd keeps the request looking local,
+      // which the portal dev sign-in requires.
+      "^/portal/(auth|api|plans|payment)(/|$)": {
+        target: BACKEND,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("error", (_err) => {
+            // silently ignore — same startup race
+          });
+        },
+      },
       "/healthz": {
         target: BACKEND,
         changeOrigin: true,

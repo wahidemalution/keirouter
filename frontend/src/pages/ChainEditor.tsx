@@ -13,8 +13,9 @@ import { useConfirm } from "../components/ui/confirm-dialog";
 import { ChainModelPicker } from "../components/chains/ChainModelPicker";
 import { FieldMessage } from "../components/chains/FieldMessage";
 import { StepPriceSource } from "../components/chains/StepPriceSource";
+import { SurplusStepsAdder, type NewStep } from "../components/chains/SurplusStepsAdder";
 import { ChainRoutePreview, StepNumber } from "../components/chains/ChainRoutePreview";
-import { type ChainStrategy, type DraftChainStep, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
+import { type ChainStrategy, type DraftChainStep, autoMarketSlug, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
 const parseMarketSlugs = (raw: string): string[] => {
   const seen = new Set<string>();
@@ -350,6 +351,25 @@ export function ChainEditorPage() {
     if (removed && steps.length > 1) setMoveAnnouncement(`Removed ${stepName(removed)}.`);
   };
   const addStep = () => { setSteps((current) => [...current, makeDraftStep()]); setDirty(true); };
+  const providerByID = (id: string) => providers.find((provider) => provider.id === id);
+  // Picking a model on a pinned Surplus provider fills its market slug, unless
+  // the operator typed a different slug by hand.
+  const pickStepModel = (step: DraftChainStep, next: Pick<DraftChainStep, "provider" | "model">) => {
+    const previousAuto = autoMarketSlug(providerByID(step.provider), step.model);
+    const slug = step.marketSlug.trim();
+    const auto = autoMarketSlug(providerByID(next.provider), next.model);
+    updateStep(step.id, slug === "" || slug === previousAuto ? { ...next, marketSlug: auto } : next);
+  };
+  // Bulk-added steps replace a still-empty step rather than sit behind it.
+  const addSurplusSteps = (added: NewStep[]) => {
+    if (added.length === 0) return;
+    setSteps((current) => [
+      ...current.filter((step) => step.provider || step.model),
+      ...added.map((step) => ({ ...makeDraftStep({ provider: step.provider, model: step.model }), marketSlug: step.marketSlug })),
+    ]);
+    setDirty(true);
+    setMoveAnnouncement(`Added ${added.length} ${added.length === 1 ? "step" : "steps"}.`);
+  };
   // Alt+Arrow on a step row reorders it without reaching for the buttons.
   const onStepKeyDown = (event: ReactKeyboardEvent<HTMLLIElement>, index: number) => {
     if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
@@ -489,7 +509,10 @@ export function ChainEditorPage() {
           <Panel title="Market slugs" titleId="chain-market-heading" icon={Store} subtitle="Price this chain from the market.">
             <div className="space-y-3 p-4">
               <p className="text-[12px] leading-5 text-fg-muted">One slug per line. Use an inferhub.dev slug (e.g. <span className="font-mono text-fg">cbcn/deepseek-v4.1-flash</span>) or a Surplus Intelligence model as <span className="font-mono text-fg">surplus:&lt;model&gt;</span>. Use <span className="font-mono text-fg">surplus-trusted:&lt;model&gt;</span> to price only from trusted, available, healthy Surplus offers, or <span className="font-mono text-fg">surplus-fast:&lt;model&gt;</span> to route to the provider with the lowest time to first token among available, healthy offers (trusted or not) within the Surplus fast price tolerance. Requests on either are billed Surplus's reported cost plus markup. KeiRouter prices this chain from the cheapest of these plus markup. Leave empty to set the price manually.</p>
-              <Field label="Slugs">
+              <Field
+                label="Slugs"
+                hint={<>To pin one Surplus provider, set <span className="font-mono text-fg">surplus-trusted@&lt;provider&gt;:&lt;model&gt;</span> on a step's market slug. A chain-level slug cannot pin a provider.</>}
+              >
                 <Textarea
                   value={marketSlugs}
                   onChange={(event) => { setMarketSlugs(event.target.value); setDirty(true); }}
@@ -608,7 +631,7 @@ export function ChainEditorPage() {
                         <ChainModelPicker
                           value={step}
                           providers={providers}
-                          onChange={(next) => updateStep(step.id, next)}
+                          onChange={(next) => pickStepModel(step, next)}
                           autoFocus={!isEdit && index === 0 && !step.model}
                           invalid={isDuplicate}
                           label={`Step ${index + 1} model`}
@@ -656,6 +679,7 @@ export function ChainEditorPage() {
                         stepNumber={index + 1}
                         inheritedMarkup={inheritedMarkup}
                         inheritedLabel={inheritedMarkupLabel}
+                        suggestedSlug={autoMarketSlug(providerByID(step.provider), step.model)}
                         onChange={(next) => updateStep(step.id, next)}
                       />
                     </div>
@@ -674,6 +698,12 @@ export function ChainEditorPage() {
                 <Plus className="h-4 w-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
                 Add model
               </button>
+              <SurplusStepsAdder
+                providers={providers}
+                existing={steps}
+                defaultModel={[...steps].reverse().find((step) => step.model)?.model || name.trim()}
+                onAdd={addSurplusSteps}
+              />
             </div>
 
             <div className="border-t border-line">

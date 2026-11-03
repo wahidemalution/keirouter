@@ -193,6 +193,15 @@ func (s *Service) Authenticate(ctx context.Context, plaintext string) (store.API
 	if rec.ModelDiscounts, err = s.keys.ModelDiscounts(ctx, rec.ID); err != nil {
 		return store.APIKey{}, err
 	}
+	// Provider routing settings ride along for the same reason: dropping them
+	// on a load error would route through providers the customer turned off.
+	routing, err := s.keys.KeyRouting(ctx, rec.ID)
+	if err != nil {
+		return store.APIKey{}, err
+	}
+	rec.AllowedProviders = routing.AllowedProviders
+	rec.ModelDisabledProviders = routing.DisabledProviders
+	rec.ModelFinalFallback = routing.FinalFallback
 
 	// Cache the positive result for subsequent requests.
 	s.cacheAuthResult(lookup, rec)

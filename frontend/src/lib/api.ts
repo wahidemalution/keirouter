@@ -1876,6 +1876,10 @@ export interface KeyUsageData {
 export interface PortalRecentRequest {
   id: string;
   provider: string;
+  /** Provider as the customer knows it, e.g. "DeepSeek" for a Surplus route. */
+  provider_name?: string;
+  /** Billed cost's discount below the official price; null when unknown. */
+  discount_pct?: number | null;
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
@@ -1909,7 +1913,12 @@ export interface PortalStatus {
   key_id?: string;
   has_key?: boolean;
   provisioning_enabled?: boolean;
+  /** Present and true only when the server was started with portal_sso.dev_login. */
+  dev_login?: boolean;
 }
+
+/** Email on the session that the local dev sign-in issues. */
+export const PORTAL_DEV_EMAIL = "dev@localhost";
 
 export interface PortalPlan {
   id: string;
@@ -1961,6 +1970,15 @@ export async function fetchPortalStatus(): Promise<PortalStatus> {
 }
 
 /**
+ * Local development sign-in. Only exists when the server runs with
+ * portal_sso.dev_login and the request comes straight from this machine.
+ */
+export async function devLoginPortal(): Promise<void> {
+  const resp = await fetch("/portal/auth/dev-login", { method: "POST" });
+  if (!resp.ok) throw new Error("Dev sign-in is not available from this address");
+}
+
+/**
  * Claim the signed-in user's API key. Requires the full key; the server
  * verifies it and binds it to the Google identity.
  */
@@ -1985,6 +2003,34 @@ export async function claimPortalKey(apiKey: string): Promise<{ ok: boolean; key
 export async function fetchKeyUsageById(id: string, days?: number): Promise<KeyUsageData> {
   const qs = days ? `?days=${days}` : "";
   return request<KeyUsageData>("GET", `/keys/${encodeURIComponent(id)}/usage${qs}`);
+}
+
+/** The admin view of a key's model settings: the portal rows plus its provider ceiling. */
+export async function fetchKeyModelSettings(id: string): Promise<KeyModelSettings> {
+  return request<KeyModelSettings>("GET", `/keys/${encodeURIComponent(id)}/model-settings`);
+}
+
+/** Replace a key's allowed-providers ceiling. An empty list allows every provider. */
+export async function setKeyAllowedProviders(id: string, providers: string[]): Promise<{ allowed_providers: string[] }> {
+  return request<{ allowed_providers: string[] }>("PUT", `/keys/${encodeURIComponent(id)}/allowed-providers`, { providers });
+}
+
+/** Turn one provider on or off for one of the key's models; answers with the updated row. */
+export async function setKeyModelProvider(id: string, model: string, provider: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  return request<PortalModelSettingsRow>(
+    "PUT",
+    `/keys/${encodeURIComponent(id)}/model-settings/${encodeURIComponent(model)}/providers/${encodeURIComponent(provider)}`,
+    { enabled },
+  );
+}
+
+/** Turn a model's final fallback on or off for the key; answers with the updated row. */
+export async function setKeyFinalFallback(id: string, model: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  return request<PortalModelSettingsRow>(
+    "PUT",
+    `/keys/${encodeURIComponent(id)}/model-settings/${encodeURIComponent(model)}/final-fallback`,
+    { enabled },
+  );
 }
 
 export async function fetchPortalUsage(days?: number): Promise<KeyUsageData> {
@@ -2190,7 +2236,7 @@ export async function setPortalDiscountFloor(minDiscountPct: number): Promise<{ 
   return data;
 }
 
-/** One model row on the portal's Discount Settings page. */
+/** The discount fields of one model row on the portal's Model Settings page. */
 export interface PortalDiscountModel {
   model: string;
   /** False when no step of the chain can guarantee a discount. */
@@ -2199,20 +2245,6 @@ export interface PortalDiscountModel {
   override_pct: number | null;
   /** What requests for this model must meet. */
   effective_pct: number;
-}
-
-export interface PortalDiscounts {
-  default_pct: number;
-  max_pct: number;
-  models: PortalDiscountModel[];
-}
-
-/** The key's default minimum discount and its per-model overrides. */
-export async function fetchPortalDiscounts(): Promise<PortalDiscounts> {
-  const resp = await fetch("/portal/api/discounts");
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load discount settings");
-  return data;
 }
 
 /** Set one model's minimum discount, overriding the key default. */
@@ -2231,6 +2263,107 @@ export async function resetPortalModelDiscount(model: string): Promise<void> {
   const resp = await fetch(`/portal/api/discounts/models/${encodeURIComponent(model)}`, { method: "DELETE" });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to reset minimum discount");
+}
+
+/** One provider a model can route through, on the portal's Model Settings page. */
+export interface PortalModelProvider {
+  /** keirouter provider id, used in the toggle URL. */
+  id: string;
+  name: string;
+  /** Inside the admin ceiling and not turned off by the customer. */
+  enabled: boolean;
+  /** Outside the admin ceiling: the customer cannot turn it on. */
+  locked: boolean;
+  /** False when none of its steps has a live offer right now. */
+  available: boolean;
+  /** Best customer price per 1M tokens, markup included; null when unknown. */
+  input_per_m: number | null;
+  output_per_m: number | null;
+  /** Best price's discount below the official price; null when no official price. */
+  discount_pct?: number | null;
+  /** Published 24h median latency in ms; null when unknown. */
+  latency_p50_ms?: number | null;
+  /** Every Surplus offer, cheapest first, markup included. */
+  offers?: PortalModelOffer[];
+}
+
+/** One Surplus offer on a provider, markup included. */
+export interface PortalModelOffer {
+  input_per_m: number;
+  output_per_m: number;
+  discount_pct: number | null;
+}
+
+/** One model row: the discount fields plus provider and fallback settings. */
+export interface PortalModelSettingsRow extends PortalDiscountModel {
+  providers: PortalModelProvider[];
+  /** The model's chain has a final fallback the toggle can turn on. */
+  has_fallback: boolean;
+  final_fallback: boolean;
+  /** On because it was kept from before per-key routing, not chosen. */
+  final_fallback_kept?: boolean;
+  /**
+   * Routing really tries the fallback for this key and model. False when it
+   * is off, or kept from before while a minimum discount applies.
+   */
+  fallback_runs: boolean;
+  /** The fallback's normal price per 1M tokens. */
+  fallback_input_per_m: number;
+  fallback_output_per_m: number;
+}
+
+export interface PortalModelSettings {
+  default_pct: number;
+  max_pct: number;
+  models: PortalModelSettingsRow[];
+}
+
+/** A keirouter provider an admin may put on a key's allowed-providers ceiling. */
+export interface ProviderOption {
+  id: string;
+  name: string;
+}
+
+/** An API key's model settings as the admin sees them, plus its provider ceiling. */
+export interface KeyModelSettings extends PortalModelSettings {
+  /** Empty means every provider is allowed. */
+  allowed_providers: string[];
+  provider_options: ProviderOption[];
+}
+
+/** The key's discount, provider and final-fallback settings for every model it may call. */
+export async function fetchPortalModelSettings(): Promise<PortalModelSettings> {
+  const resp = await fetch("/portal/api/model-settings");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load model settings");
+  return data;
+}
+
+/** Turn one provider on or off for a model; answers with the updated row. */
+export async function setPortalModelProvider(model: string, provider: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  const resp = await fetch(
+    `/portal/api/model-settings/${encodeURIComponent(model)}/providers/${encodeURIComponent(provider)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to save provider setting");
+  return data;
+}
+
+/** Turn a model's final fallback on or off; answers with the updated row. */
+export async function setPortalFinalFallback(model: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  const resp = await fetch(`/portal/api/model-settings/${encodeURIComponent(model)}/final-fallback`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to save final fallback");
+  return data;
 }
 
 /** Read-only topup ledger + balance for the signed-in portal user. */

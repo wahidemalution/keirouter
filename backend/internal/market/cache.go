@@ -12,10 +12,13 @@ type SnapshotCache struct {
 	bySlug  map[string]Model
 	fetched time.Time
 	fast    *FastHealth
+	skips   *SlugSkips
+	// labels maps a Surplus provider id to its display label.
+	labels map[string]string
 }
 
 func NewSnapshotCache() *SnapshotCache {
-	return &SnapshotCache{bySlug: map[string]Model{}, fast: NewFastHealth()}
+	return &SnapshotCache{bySlug: map[string]Model{}, fast: NewFastHealth(), skips: &SlugSkips{}}
 }
 
 // FastHealth returns the live surplus-fast provider tracker, or nil.
@@ -26,7 +29,15 @@ func (c *SnapshotCache) FastHealth() *FastHealth {
 	return c.fast
 }
 
-// Replace installs a new snapshot.
+// Skips returns the out-of-stock slug list, or nil. Replace clears it.
+func (c *SnapshotCache) Skips() *SlugSkips {
+	if c == nil {
+		return nil
+	}
+	return c.skips
+}
+
+// Replace installs a new snapshot and clears the out-of-stock slug list.
 func (c *SnapshotCache) Replace(models []Model) {
 	next := make(map[string]Model, len(models))
 	for _, m := range models {
@@ -36,6 +47,7 @@ func (c *SnapshotCache) Replace(models []Model) {
 	c.bySlug = next
 	c.fetched = time.Now()
 	c.mu.Unlock()
+	c.skips.Reset()
 }
 
 // Rate returns the raw market ask for slug. ok is false when the slug is absent

@@ -68,10 +68,11 @@ func officialCandidateNames(c store.Chain) []string {
 		out = append(out, name)
 	}
 	slugName := func(slug string) string {
-		for _, prefix := range []string{market.SurplusTrustedPrefix, market.SurplusFastPrefix, market.SurplusPrefix} {
-			if name, ok := strings.CutPrefix(slug, prefix); ok {
-				return name
-			}
+		if name, ok := market.CutUpstreamCostSlug(slug); ok {
+			return name
+		}
+		if name, ok := strings.CutPrefix(slug, market.SurplusPrefix); ok {
+			return name
 		}
 		return slug
 	}
@@ -97,5 +98,6 @@ func discountPercent(inputPerM, outputPerM float64, official officialPrice) int 
 	if offered <= 0 || list <= 0 || offered >= list {
 		return 0
 	}
-	return int(math.Floor((1 - offered/list) * 100))
+	// The epsilon keeps float noise from flooring an exact 45% to 44%.
+	return int(math.Floor((1-offered/list)*100 + 1e-9))
 }

@@ -127,6 +127,16 @@ type PortalSSOConfig struct {
 	AllowedDomains     []string      `koanf:"allowed_domains"`
 	RedirectURL        string        `koanf:"redirect_url"`
 	SessionTTL         time.Duration `koanf:"session_ttl"`
+	// DevLogin adds POST /portal/auth/dev-login, a sign-in that skips Google
+	// and Turnstile. It only answers requests that come straight from this
+	// machine. Development only (KEIROUTER_PORTAL_SSO__DEV_LOGIN=true).
+	DevLogin bool `koanf:"dev_login"`
+	// DevLoginDocker lets dev login also accept a private peer address, which
+	// is what a request from the host looks like inside a Docker container.
+	// The no-proxy-header and localhost Host checks still apply. Development
+	// only, with the port published on 127.0.0.1
+	// (KEIROUTER_PORTAL_SSO__DEV_LOGIN_DOCKER=true).
+	DevLoginDocker bool `koanf:"dev_login_docker"`
 }
 
 // PaymentConfig configures the SumoPod payment gateway used for portal

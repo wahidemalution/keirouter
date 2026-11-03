@@ -15,6 +15,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/pipeline"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
@@ -548,4 +549,55 @@ func TestPublicModelsCapabilityOverrides(t *testing.T) {
 	// value (true for gpt-4o) instead of the forced off used by luna.
 	require.True(t, plain.Capabilities.Tools, "no override keeps heuristic tools")
 	require.NotEqual(t, luna.Capabilities.Tools, plain.Capabilities.Tools)
+}
+
+// A market-priced chain's card shows the cheapest live offer across its
+// Surplus providers (markup included, cache rates with it), not the rate
+// stored on the chain row, which operators fill with the official price.
+func TestPublicModelsShowsCheapestMarketPrice(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	gw.marketCache = market.NewSnapshotCache()
+	gw.marketCache.Replace([]market.Model{
+		{Slug: "surplus:pricey", MinAskIn: 0.03, MinAskOut: 0.5},
+		{Slug: "surplus:cheap", MinAskIn: 0.04, MinAskOut: 0.4},
+	})
+	chain := store.Chain{
+		ID: "mkt", TenantID: store.DefaultTenantID, Name: "market-model", Strategy: "priority",
+		InputPerM: 0.045, OutputPerM: 0.5, // official price typed into the chain row
+		Steps: []store.ChainStep{
+			{ID: "mkt-1", Provider: "custom-openai-surplus", Model: "m", MarketSlug: "surplus:pricey"},
+			{ID: "mkt-2", Provider: "custom-openai-surplus", Model: "m", MarketSlug: "surplus:cheap", Position: 1},
+		},
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	require.NoError(t, db.Chains().Create(ctx, chain))
+	created, err := db.Chains().Get(ctx, "mkt")
+	require.NoError(t, err)
+	want := gw.surplusChainPrice(created, surplusSlugs(created), market.LoadSettings(ctx, db.Settings().Get))
+	require.True(t, want.Available)
+
+	rec := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/public/models", nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var payload struct {
+		Models []struct {
+			InputPerM      float64 `json:"input_per_m"`
+			OutputPerM     float64 `json:"output_per_m"`
+			CachedPerM     float64 `json:"cached_per_m"`
+			CacheWritePerM float64 `json:"cache_write_per_m"`
+			PriceBasis     string  `json:"price_basis"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Len(t, payload.Models, 1)
+	m := payload.Models[0]
+	require.Equal(t, "live", m.PriceBasis)
+	require.Equal(t, *want.InputPerM, m.InputPerM)
+	require.Equal(t, *want.OutputPerM, m.OutputPerM)
+	require.Equal(t, *want.CachedPerM, m.CachedPerM)
+	require.Equal(t, *want.CacheWritePerM, m.CacheWritePerM)
+	require.Less(t, m.InputPerM+m.OutputPerM, 0.545, "card must not show the chain row's price")
+	// The cheaper slug by input+output (0.04/0.4) sets the price.
+	require.Less(t, m.OutputPerM, 0.5)
 }

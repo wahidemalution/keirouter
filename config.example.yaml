@@ -242,6 +242,9 @@ portal_sso:
   # Optional: defaults to <public-base-url>/portal/auth/google/callback.
   redirect_url: ""
   session_ttl: 24h
+  # WARNING: development only. Adds a "Dev sign-in" button that skips Google and
+  # Turnstile, for requests that come straight from this machine. Never set in production.
+  # dev_login: false
 
 # SumoPod payment gateway for portal credit top-ups. Secrets via env:
 # KEIROUTER_PAYMENT__API_KEY, KEIROUTER_PAYMENT__WEBHOOK_SECRET,

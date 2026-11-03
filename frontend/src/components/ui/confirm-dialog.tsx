@@ -31,6 +31,10 @@ const ConfirmContext = createContext<ConfirmFn | null>(null);
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const resolver = useRef<((ok: boolean) => void) | null>(null);
+  // The dialog opens from code, not from a Radix trigger, so Radix has nowhere
+  // to return focus on close. Remember the control that had focus when the
+  // dialog mounted instead.
+  const returnFocus = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback<ConfirmFn>((next) => {
     // A second request while one is open resolves the first as cancelled.
@@ -55,7 +59,25 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       <AlertDialog.Root open={options !== null} onOpenChange={(open) => !open && settle(false)}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/45 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-          <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98]">
+          <AlertDialog.Content
+            onOpenAutoFocus={() => {
+              // Runs before Radix moves focus into the dialog. Skip body (Safari
+              // and macOS Firefox don't focus a clicked button) and menu items:
+              // the menu is closing and returns focus to its own trigger.
+              const opener = document.activeElement;
+              returnFocus.current =
+                opener instanceof HTMLElement && opener !== document.body && !opener.closest('[role="menu"]') ? opener : null;
+            }}
+            onCloseAutoFocus={(e) => {
+              const el = returnFocus.current;
+              returnFocus.current = null;
+              if (!el?.isConnected) return;
+              el.focus();
+              // Keep Radix's fallback when the opener could not take focus
+              // (hidden, inert or disabled by now).
+              if (document.activeElement === el) e.preventDefault();
+            }}
+            className="fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 shadow-[var(--shadow-float)] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.98]">
             <div className="flex items-start gap-3">
               {icon && <IconTile icon={icon} size="md" tone={danger ? "bad" : "blue"} />}
               <div className={cn("min-w-0 flex-1", icon && "pt-1")}>
@@ -69,13 +91,13 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             </div>
             {/* Phones: full-width stacked buttons, confirm on top. */}
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <AlertDialog.Cancel className="inline-flex h-9 w-full items-center justify-center rounded-lg sm:w-auto [@media(pointer:coarse)]:h-10 border border-line-strong bg-surface px-3 text-[13px] font-medium text-fg transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+              <AlertDialog.Cancel className="inline-flex h-9 w-full items-center justify-center rounded-lg sm:w-auto [@media(pointer:coarse)]:h-11 border border-line-strong bg-surface px-3 text-[13px] font-medium text-fg transition-colors hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
                 {options?.cancelLabel ?? "Cancel"}
               </AlertDialog.Cancel>
               <AlertDialog.Action
                 onClick={() => settle(true)}
                 className={cn(
-                  "inline-flex h-9 w-full items-center justify-center rounded-lg px-3 sm:w-auto [@media(pointer:coarse)]:h-10 text-[13px] font-medium transition-[background-color,opacity] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
+                  "inline-flex h-9 w-full items-center justify-center rounded-lg px-3 sm:w-auto [@media(pointer:coarse)]:h-11 text-[13px] font-medium transition-[background-color,opacity] focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface",
                   danger
                     ? "bg-bad text-white hover:opacity-85 focus-visible:ring-bad dark:text-canvas"
                     : "bg-action text-action-fg shadow-[var(--shadow-card)] hover:bg-action-hover focus-visible:ring-accent-500",

@@ -45,6 +45,13 @@ type Model struct {
 	// ProviderOrder is the surplus-fast preferred attempt order (fastest
 	// first), sent upstream as `provider_order`.
 	ProviderOrder []string `json:"-"`
+	// BestDiscountPct is the deepest discount below list of any eligible offer
+	// (0..100, zero = no list price). It feeds the per-key minimum-discount
+	// check.
+	BestDiscountPct int `json:"-"`
+	// Offers is every eligible ask of a surplus-trusted quote, cheapest
+	// first. Display only: routing and billing never read it.
+	Offers []OfferPrice `json:"-"`
 }
 
 func ParseSnapshot(r io.Reader) ([]Model, error) {

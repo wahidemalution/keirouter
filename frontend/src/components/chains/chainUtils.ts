@@ -183,3 +183,19 @@ export const toDraftSteps = (chain?: Chain) =>
   chain?.steps.map((step) => makeDraftStep(step)) ?? [makeDraftStep()];
 
 export const isValidChainName = (name: string) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name);
+
+// surplusProviderOf returns the Surplus provider a keirouter provider is
+// pinned to, by the naming convention alias "surplus-<provider>" on a Surplus
+// base URL; "" for any other provider, the unpinned "surplus" one included.
+export const surplusProviderOf = (provider?: Pick<Provider, "alias" | "base_url">): string => {
+  if (!provider?.base_url?.includes("surplusintelligence.ai")) return "";
+  const alias = provider.alias.trim().toLowerCase();
+  return alias.startsWith("surplus-") ? alias.slice("surplus-".length) : "";
+};
+
+// autoMarketSlug is the slug a step on a pinned Surplus provider routes by:
+// surplus-trusted@<provider>:<model>; "" when it has none.
+export const autoMarketSlug = (provider: Pick<Provider, "alias" | "base_url"> | undefined, model: string): string => {
+  const surplus = surplusProviderOf(provider);
+  return surplus && model.trim() ? `surplus-trusted@${surplus}:${model.trim()}` : "";
+};

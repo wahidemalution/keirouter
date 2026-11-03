@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
@@ -33,6 +34,13 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		StaticInputPerM: in.StaticInputPerM, StaticOutputPerM: in.StaticOutputPerM,
 		StaticCacheReadPerM: in.StaticCacheReadPerM, StaticCacheWritePerM: in.StaticCacheWritePerM,
 		MarkupPercent: in.MarkupPercent, CreatedAt: now,
+	}
+	if err := market.ValidateStepSlug(st.MarketSlug, false); err != nil {
+		return st, prefix + err.Error()
+	}
+	// The market cache keys a per-provider slug by its lowercase provider id.
+	if provider, model, ok := market.ParseProviderSlug(st.MarketSlug); ok {
+		st.MarketSlug = market.ProviderSlug(provider, model)
 	}
 	for _, r := range []*float64{&in.StaticInputPerM, &in.StaticOutputPerM, in.StaticCacheReadPerM, in.StaticCacheWritePerM} {
 		if r != nil && !validRate(*r) {

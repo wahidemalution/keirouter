@@ -36,7 +36,7 @@ const PortalKeyPageRoute = lazy(routeLoaders["/portal-key"]);
 const PortalUsageRoute = lazy(routeLoaders["/portal-usage"]);
 const PortalModelsRoute = lazy(routeLoaders["/portal-models"]);
 const PortalTopupRoute = lazy(routeLoaders["/portal-topup"]);
-const PortalDiscountsRoute = lazy(routeLoaders["/portal-discounts"]);
+const PortalModelSettingsRoute = lazy(routeLoaders["/portal-model-settings"]);
 const PortalHostingRoute = lazy(routeLoaders["/portal-hosting"]);
 const PortalDocsRoute = lazy(routeLoaders["/portal-docs"]);
 const KeyDetailPage = lazy(routeLoaders["/key-detail"]);
@@ -86,7 +86,8 @@ export function App() {
             <Route path="key" element={<PortalKeyPageRoute />} />
             <Route path="usage" element={<PortalUsageRoute />} />
             <Route path="models" element={<PortalModelsRoute />} />
-            <Route path="discounts" element={<PortalDiscountsRoute />} />
+            <Route path="model-settings" element={<PortalModelSettingsRoute />} />
+            <Route path="discounts" element={<Navigate to="../model-settings" replace />} />
             <Route path="topup" element={<PortalTopupRoute />} />
             <Route path="hosting" element={<PortalHostingRoute />} />
             <Route path="docs" element={<PortalDocsRoute />} />

@@ -400,6 +400,33 @@ Each chain picks a **routing strategy**:
 
 Add an optional **final fallback** that's tried after every step fails, and watch the live route preview while you edit. Inside a provider, multiple accounts can also rotate round-robin or fill in priority order (**Settings → Routing**).
 
+### Pin a Surplus provider per step
+
+A step can route a model through one Surplus seller with the market slug `surplus-trusted@<provider>:<model>`, for example `surplus-trusted@dashscope-cn:kimi-k3`. Customers then switch each provider on or off per model in the portal's **Model Settings**.
+
+`<provider>` is Surplus's own `provider_id`, not a name you choose: `dashscope-cn` works, `dashscopecn` does not. To list the IDs that sell a model, run:
+
+```bash
+curl -s https://api.surplusintelligence.ai/api/markets/kimi-k3 | python3 -c 'import json,sys; [print(i,"=",n) for i,n in sorted({o["provider_id"]:o["provider"] for o in json.load(sys.stdin)["offers"]}.items())]'
+```
+
+Swap `kimi-k3` for the model you want. The left column is the ID for the slug, the right column is the name customers see:
+
+```text
+concentrate = Concentrate.ai
+dashscope-cn = Alibaba DashScope — China
+openrouter = OpenRouter
+```
+
+To add one, create a custom OpenAI provider with:
+
+- **Alias** `surplus-<provider>`, for example `surplus-dashscope-cn`.
+- **Base URL** of your Surplus endpoint, for example `https://api.surplusintelligence.ai/min30/v1`.
+
+The chain editor recognises that alias. **Add Surplus providers** under the route steps then creates one step per ticked provider with the slug filled in, and picking a model on such a provider fills the slug too.
+
+A misspelled ID never sends traffic. The step finds no offer, shows "No offer right now", and routing skips it.
+
 ---
 
 ## ⚡ Semantic Cache

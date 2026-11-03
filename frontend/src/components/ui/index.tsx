@@ -938,10 +938,13 @@ export function Toggle({
   id,
   "aria-labelledby": labelledBy,
   "aria-describedby": describedBy,
+  busy = false,
   className = "",
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  /** A write is in flight: aria-busy and a pulsing (reduced motion: dimmed) knob. The track keeps its colour and the switch stays focusable. */
+  busy?: boolean;
   /** Extra classes for the switch (layout only; visuals are fixed). */
   className?: string;
   /** Accessible name when no visible <label> points at this switch. */
@@ -961,6 +964,7 @@ export function Toggle({
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
       disabled={disabled}
+      aria-busy={busy || undefined}
       onClick={() => onChange(!checked)}
       // The visible track is 36×20; an invisible ::before extends the hit
       // area to 44×32 (44×40 on touch) without changing the visuals.
@@ -972,7 +976,7 @@ export function Toggle({
         aria-hidden="true"
         className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] transition-transform duration-200 ease-[cubic-bezier(0.3,1.4,0.5,1)] ${
           checked ? "translate-x-[18px]" : "translate-x-0.5"
-        }`}
+        } ${busy ? "motion-safe:animate-pulse motion-reduce:opacity-70" : ""}`}
       />
     </button>
   );

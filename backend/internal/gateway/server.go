@@ -111,6 +111,11 @@ type Server struct {
 	insightsCache    *ttlCache
 	// pricing caches the live Surplus price list behind /v1/pricing.
 	pricing pricingCache
+	// detail caches the Surplus reads behind /v1/public/model-detail.
+	detail detailCache
+	// surplusURL overrides the Surplus feed the detail popup reads; empty
+	// uses market.SurplusAPIURL.
+	surplusURL string
 	// realized caches the 7-day billed totals behind the average prices.
 	realized            realizedCache
 	liveModels          *liveModelCache
@@ -291,6 +296,12 @@ func New(d Deps) *Server {
 		paymentClient:       d.Payment,
 		inflight:            d.Inflight,
 	}
+	if d.Config.PortalSSO.DevLogin {
+		s.log.Warn("portal dev login is ON: anyone on this machine can open the portal")
+		if d.Config.PortalSSO.DevLoginDocker {
+			s.log.Warn("portal dev login also accepts private peer addresses (Docker mode): publish the port on 127.0.0.1 only")
+		}
+	}
 	if d.Config.PortalSSO.Enabled {
 		s.portalSSO = portalauth.New(portalauth.Config{
 			ClientID:       d.Config.PortalSSO.GoogleClientID,
@@ -436,6 +447,9 @@ func (s *Server) routes() chi.Router {
 	r.Get("/portal/auth/google/start", s.handlePortalLoginStart)
 	r.Get("/portal/auth/google/callback", s.handlePortalLoginCallback)
 	r.Get("/portal/auth/status", s.handlePortalStatus)
+	if s.cfg.PortalSSO.DevLogin {
+		r.Post("/portal/auth/dev-login", s.handlePortalDevLogin)
+	}
 	r.Get("/portal/plans", s.handlePortalPlans)
 	r.Get("/portal/payment/config", s.handlePortalPaymentConfig)
 	r.Group(func(r chi.Router) {
@@ -452,6 +466,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/portal/api/discounts", s.handlePortalDiscounts)
 		r.Put("/portal/api/discounts/models/{model}", s.handlePortalSetModelDiscount)
 		r.Delete("/portal/api/discounts/models/{model}", s.handlePortalDeleteModelDiscount)
+		r.Get("/portal/api/model-settings", s.handlePortalModelSettings)
+		r.Put("/portal/api/model-settings/{model}/providers/{provider}", s.handlePortalSetModelProvider)
+		r.Put("/portal/api/model-settings/{model}/final-fallback", s.handlePortalSetModelFinalFallback)
 		r.Get("/portal/api/topups", s.handlePortalTopups)
 		r.Post("/portal/api/topup/orders", s.handlePortalCreateOrder)
 		r.Get("/portal/api/topup/orders", s.handlePortalListOrders)
@@ -480,6 +497,7 @@ func (s *Server) routes() chi.Router {
 	// Public live prices for the chains an admin published (off by default).
 	// Its own per-IP budget, separate from the landing page's.
 	r.With(s.publicPricingRateLimiter).Get("/v1/public/pricing", s.publicPricing)
+	r.With(s.publicModelDetailRateLimiter).Get("/v1/public/model-detail", s.publicModelDetail)
 
 	// Dashboard auth endpoints (login/logout/status) are loopback-guarded but
 	// do not require a session — they are how a session is obtained.

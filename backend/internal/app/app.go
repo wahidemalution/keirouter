@@ -95,6 +95,12 @@ type App struct {
 	// keepalive, health checker, cooldown sweeper) so shutdown can wait for
 	// them to return before closing the store, avoiding a use-after-close race.
 	bg sync.WaitGroup
+
+	// surplusBooks holds the order books fetched by the latest market sync,
+	// keyed by Surplus model name, so later steps of the same run reuse them
+	// instead of refetching (Surplus rate-limits /api/markets per IP).
+	surplusBooksMu sync.Mutex
+	surplusBooks   map[string][]byte
 }
 
 // Build constructs the application from configuration. It opens the database,
@@ -423,6 +429,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Telemetry:          healthSvc,
 		Inflight:           inflightTracker,
 		FastHealth:         marketCache.FastHealth(),
+		SlugSkips:          marketCache.Skips(),
 	})
 
 	// Resolve frontend dist directory. Check common install locations, then cwd.

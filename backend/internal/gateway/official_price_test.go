@@ -52,6 +52,20 @@ func TestChainOfficialPriceFromModelsDev(t *testing.T) {
 	require.Equal(t, officialPrice{InputPerM: 0.5, OutputPerM: 9, Source: "manual"}, got, "manual wins over models.dev")
 }
 
+// A step pinned to a Surplus provider is known by its slug's model name,
+// even when the step's own model id differs.
+func TestChainOfficialPriceFromProviderSlug(t *testing.T) {
+	refs := market.NewReferenceCache()
+	refs.Replace(map[string]market.Reference{"deepseek-v4-1-flash": {InputPerM: 0.15, OutputPerM: 0.6, Provider: "deepseek"}})
+	s := &Server{references: refs}
+	c := store.Chain{Steps: []store.ChainStep{{Provider: "custom-openai-surplus-alpha", Model: "ds-flash",
+		MarketSlug: "surplus-trusted@alpha:deepseek-v4.1-flash"}}}
+	require.Equal(t, "deepseek-v4.1-flash", officialCandidateNames(c)[0])
+	got, ok := s.chainOfficialPrice(c)
+	require.True(t, ok)
+	require.Equal(t, "deepseek", got.Provider)
+}
+
 func TestPublicModelsReportsDiscount(t *testing.T) {
 	db, gw := newPublicTestGatewayWithDB(t)
 	in, out := 1.0, 10.0

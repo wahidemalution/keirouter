@@ -941,6 +941,18 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		kind = core.ErrBadRequest
 		bodyStr := string(body)
 		switch {
+		// Surplus: this key's account is scoped to another upstream provider
+		// or restricted by Surplus. Both are properties of the account, not
+		// the request, so bench it and let the chain try the next step. The
+		// code is matched as a quoted JSON token so model prose that merely
+		// mentions it cannot trigger this.
+		case strings.Contains(bodyStr, `"unsupported_provider"`),
+			strings.Contains(bodyStr, `"account_restricted"`):
+			kind = core.ErrAuth
+			if strings.Contains(bodyStr, `"account_restricted"`) {
+				slog.Error("surplus account restricted",
+					"provider", provider, "model", model, "surplus_code", "account_restricted")
+			}
 		// Some backends report unknown or inaccessible models as a plain 400
 		// (Codex: "The 'X' model is not supported when using Codex with a
 		// ChatGPT account"). Classify those as model-unavailable so chains

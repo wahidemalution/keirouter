@@ -34,6 +34,8 @@ export interface PublicModel {
   cached_per_m: number;
   cache_write_per_m: number;
   sold_out: boolean;
+  /** True when GET /v1/public/model-detail has market data for this model. */
+  has_detail?: boolean;
   /** Official list price per 1M tokens; null when no reference is known. */
   official_input_per_m?: number | null;
   official_output_per_m?: number | null;
@@ -124,3 +126,40 @@ export interface PublicHosting {
 }
 
 export const fetchPublicHosting = () => getJSON<PublicHosting>("/v1/public/hosting");
+
+/** One provider selling the model: its cheapest offer (what a customer pays)
+ * and its last-24h performance. Either half is null when that source has
+ * nothing for the provider. */
+export interface PublicModelDetailRoute {
+  name: string;
+  input_per_m: number | null;
+  output_per_m: number | null;
+  discount_pct: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  tokens_per_sec: number | null;
+  success_pct: number | null;
+}
+
+/** Market detail for one live-priced model. Prices are what a customer pays,
+ * margin included. Null fields mean that source is unavailable right now. */
+export interface PublicModelDetail {
+  model: string;
+  as_of: string | null;
+  official_input_per_m: number | null;
+  official_output_per_m: number | null;
+  best: { input_per_m: number; output_per_m: number; discount_pct: number | null } | null;
+  median_discount_pct: number | null;
+  offer_count: number | null;
+  requests_24h: number;
+  performance: { as_of: string; routes: PublicModelDetailRoute[] } | null;
+}
+
+/** Resolves to null on 404: the model has no market detail. */
+export async function fetchPublicModelDetail(model: string): Promise<PublicModelDetail | null> {
+  const path = "/v1/public/model-detail?model=" + encodeURIComponent(model);
+  const res = await fetch(path, { headers: { Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`public api ${path}: ${res.status}`);
+  return (await res.json()) as PublicModelDetail;
+}
