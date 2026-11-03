@@ -1589,10 +1589,13 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// missing/unknown chain id falls back to the recorded model.
 	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
 	recentOut := make([]map[string]any, 0, len(recent))
+	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	for _, rec := range recent {
 		entry := map[string]any{
 			"id":                rec.ID,
 			"provider":          rec.Provider,
+			"provider_name":     logInfo.providerName(rec),
+			"discount_pct":      logInfo.discountPct(rec),
 			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,
 			"completion_tokens": rec.CompletionTokens,

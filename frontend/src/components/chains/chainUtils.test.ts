@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveCacheRates, makeDraftStep, staticStepPreview, stepKey, stepPayload, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, deriveCacheRates, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -144,4 +144,14 @@ test("stepKey ignores a slug left over on a static step", () => {
 test("staticStepPreview rejects a zero cache override", () => {
   assert.deepEqual(staticStepPreview(staticDraft({ staticCacheReadPerM: "0" }), 0), { ok: false, error: "Cache prices must be above 0, or leave them empty." });
   assert.deepEqual(staticStepPreview(staticDraft({ staticCacheWritePerM: "0" }), 0), { ok: false, error: "Cache prices must be above 0, or leave them empty." });
+});
+
+test("autoMarketSlug pins Surplus providers by alias", () => {
+  const surplus = "https://api.surplusintelligence.ai/min30/v1";
+  assert.equal(surplusProviderOf({ alias: "surplus-dashscope-cn", base_url: surplus }), "dashscope-cn");
+  assert.equal(surplusProviderOf({ alias: "surplus", base_url: surplus }), "");
+  assert.equal(surplusProviderOf({ alias: "surplus-x", base_url: "https://example.com/v1" }), "");
+  assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, "kimi-k3"), "surplus-trusted@openrouter:kimi-k3");
+  assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, ""), "");
+  assert.equal(autoMarketSlug(undefined, "kimi-k3"), "");
 });

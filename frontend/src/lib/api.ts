@@ -1876,6 +1876,10 @@ export interface KeyUsageData {
 export interface PortalRecentRequest {
   id: string;
   provider: string;
+  /** Provider as the customer knows it, e.g. "DeepSeek" for a Surplus route. */
+  provider_name?: string;
+  /** Billed cost's discount below the official price; null when unknown. */
+  discount_pct?: number | null;
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
@@ -2272,9 +2276,22 @@ export interface PortalModelProvider {
   locked: boolean;
   /** False when none of its steps has a live offer right now. */
   available: boolean;
-  /** Customer price per 1M tokens, markup included; null when unknown. */
+  /** Best customer price per 1M tokens, markup included; null when unknown. */
   input_per_m: number | null;
   output_per_m: number | null;
+  /** Best price's discount below the official price; null when no official price. */
+  discount_pct?: number | null;
+  /** Published 24h median latency in ms; null when unknown. */
+  latency_p50_ms?: number | null;
+  /** Every Surplus offer, cheapest first, markup included. */
+  offers?: PortalModelOffer[];
+}
+
+/** One Surplus offer on a provider, markup included. */
+export interface PortalModelOffer {
+  input_per_m: number;
+  output_per_m: number;
+  discount_pct: number | null;
 }
 
 /** One model row: the discount fields plus provider and fallback settings. */

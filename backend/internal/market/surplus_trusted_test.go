@@ -366,3 +366,22 @@ func TestProviderModelUsesCanonicalSlug(t *testing.T) {
 		t.Fatalf("model = %+v", m)
 	}
 }
+
+func TestParseSurplusTrustedBookForListsOffersCheapestFirst(t *testing.T) {
+	q, err := ParseSurplusTrustedBookFor(strings.NewReader(trustedBookFixture), 3, 0, nil, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []OfferPrice{{0.009, 0.054}, {0.012, 0.072}, {0.02, 0.12}}
+	if len(q.Offers) != len(want) {
+		t.Fatalf("offers = %v, want %v", q.Offers, want)
+	}
+	for i, o := range want {
+		if !approx(q.Offers[i].In, o.In) || !approx(q.Offers[i].Out, o.Out) {
+			t.Fatalf("offer %d = %v, want %v", i, q.Offers[i], o)
+		}
+	}
+	if m := q.ProviderModel("openai", "gpt-5.6-luna"); len(m.Offers) != 3 {
+		t.Fatalf("model offers = %d, want 3", len(m.Offers))
+	}
+}

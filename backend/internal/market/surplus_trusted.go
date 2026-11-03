@@ -61,6 +61,13 @@ type TrustedQuote struct {
 	// percent (0..100). Offers without a list price count for nothing; zero
 	// when none has one.
 	BestDiscountPct int
+	// Offers is every eligible ask, cheapest first, for display only.
+	Offers []OfferPrice
+}
+
+// OfferPrice is one raw order-book ask in USD/M, before markup.
+type OfferPrice struct {
+	In, Out float64
 }
 
 // Model converts the quote into a snapshot model keyed surplus-trusted:<name>.
@@ -91,6 +98,7 @@ func (q TrustedQuote) model(slug string) Model {
 		Providers:       q.Providers,
 		ProviderOrder:   q.ProviderOrder,
 		BestDiscountPct: q.BestDiscountPct,
+		Offers:          q.Offers,
 	}
 }
 
@@ -216,6 +224,10 @@ func ParseSurplusTrustedBookFor(r io.Reader, depth, floorPct int, blocked []stri
 		}
 	}
 	q := TrustedQuote{Found: true, BestIn: asks[0].in, BestOut: asks[0].out, Eligible: len(asks), CapIn: level.in, CapOut: level.out}
+	q.Offers = make([]OfferPrice, len(asks))
+	for i, a := range asks {
+		q.Offers[i] = OfferPrice{In: a.in, Out: a.out}
+	}
 	for p := range providers {
 		q.Providers = append(q.Providers, p)
 	}

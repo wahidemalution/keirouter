@@ -436,3 +436,49 @@ func TestBuildModelSettingsUsesSurplusProviderLabels(t *testing.T) {
 	require.NotEqual(t, "", providers[1].Name, "a plain step keeps its keirouter name")
 	require.NotEqual(t, "Alibaba DashScope - China", providers[1].Name)
 }
+
+func TestBuildModelSettingsBestPriceOffersDiscountLatency(t *testing.T) {
+	official := 1.0
+	officialOut := 4.0
+	markup := 10.0
+	f := newModelSettingsFixture(t, store.Chain{
+		ID: "ms8", Name: "offers-model", Strategy: "priority", MarkupPercent: &markup,
+		OfficialInputPerM: &official, OfficialOutputPerM: &officialOut,
+		Steps: []store.ChainStep{
+			{ID: "ms8a", Position: 0, Provider: "custom-openai-surplus-openrouter", Model: "om", MarketSlug: "surplus-trusted@openrouter:om"},
+		},
+	})
+	perf := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/analytics/performance/om" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"computed_at":1,"providers":[{"provider":"OpenRouter","requests":5,"p50_latency_ms":2300}]}`))
+	}))
+	defer perf.Close()
+	f.srv.surplusURL = perf.URL + "/api/markets"
+
+	q := market.TrustedQuote{Found: true, BestIn: 0.2, BestOut: 0.8, CapIn: 0.5, CapOut: 2, Providers: []string{"openrouter"},
+		Offers: []market.OfferPrice{{In: 0.2, Out: 0.8}, {In: 0.5, Out: 2}}}
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{q.ProviderModel("openrouter", "om")})
+	f.srv.marketCache = cache
+
+	ctx := context.Background()
+	chains, err := f.srv.chains.ListByTenant(ctx, store.DefaultTenantID)
+	require.NoError(t, err)
+	key, err := f.srv.identity.Get(ctx, f.keyID)
+	require.NoError(t, err)
+	resp, err := f.srv.buildModelSettings(ctx, key, chains)
+	require.NoError(t, err)
+	p := resp.Models[0].Providers[0]
+	require.True(t, p.Available)
+	require.InDelta(t, 0.22, *p.InputPerM, 1e-9, "best price is the cheapest offer with markup")
+	require.InDelta(t, 0.88, *p.OutputPerM, 1e-9)
+	require.Equal(t, 78, *p.DiscountPct, "1.10 against 5.00 official")
+	require.Len(t, p.Offers, 2)
+	require.InDelta(t, 0.55, p.Offers[1].InputPerM, 1e-9)
+	require.Equal(t, 45, *p.Offers[1].DiscountPct, "2.75 against 5.00 official")
+	require.NotNil(t, p.LatencyP50MS)
+	require.Equal(t, 2300.0, *p.LatencyP50MS)
+}

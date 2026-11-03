@@ -492,7 +492,7 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
       }
     >
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-[13px]">
+        <table className="w-full min-w-[860px] text-[13px]">
           <thead className={THEAD}>
             <tr>
               <th scope="col" className={`${TH} text-left`}>Model</th>
@@ -506,15 +506,15 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
                   <ArrowUpRight className="h-3 w-3 text-[var(--color-chart-2)]" aria-hidden="true" /> Out
                 </span>
               </th>
+              <th scope="col" className={`${TH} text-left`}>Provider</th>
               <th scope="col" className={`${TH} text-right`}>Cost</th>
-              <th scope="col" className={`${TH} text-center`}>Optimizations</th>
+              <th scope="col" className={`${TH} text-right`}>Discount</th>
               <th scope="col" className={`${TH} text-right`}>Latency</th>
               <th scope="col" className={`${TH} text-right`}>Date</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
             {paged.map((r) => {
-              const opts = r.optimizations ?? [];
               return (
                 <tr key={r.id} className="transition-colors hover:bg-hover">
                   <td className={TD}>
@@ -525,16 +525,21 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
                   </td>
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.prompt_tokens)}</td>
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.completion_tokens)}</td>
+                  <td className={`${TD} max-w-48 truncate text-fg`} title={r.provider_name || r.provider}>
+                    {r.provider_name || r.provider}
+                  </td>
                   <td className={`${TD} text-right tabular-nums text-fg`}>{formatCostUSD(r.cost_usd)}</td>
-                  <td className={`${TD} text-center`}>
-                    {opts.length > 0 ? (
-                      <div className="flex flex-wrap items-center justify-center gap-1">
-                        {opts.map((opt) => (
-                          <OptBadge key={opt} name={opt} detail={optDetail(r, opt)} />
-                        ))}
-                      </div>
+                  <td className={`${TD} text-right tabular-nums`}>
+                    {r.cost_usd === 0 && r.prompt_tokens + r.completion_tokens > 0 ? (
+                      <span className="font-medium text-ok" title="Cost below $0.000001, nothing billed">
+                        Free<span className="sr-only">: cost below $0.000001, nothing billed</span>
+                      </span>
+                    ) : r.discount_pct == null ? (
+                      <span className="text-fg-muted">n/a</span>
+                    ) : r.discount_pct > 0 ? (
+                      <span className="font-medium text-ok">{r.discount_pct}% off</span>
                     ) : (
-                      <span className="text-fg-faint">—</span>
+                      <span className="text-fg-muted">None</span>
                     )}
                   </td>
                   <td className={`${TD} text-right tabular-nums text-fg-muted`}>
@@ -554,31 +559,6 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
       </div>
     </PanelCard>
   );
-}
-
-export function OptBadge({ name, detail }: { name: string; detail?: string }) {
-  return (
-    <span title={detail || name}>
-      <Badge tone="accent">{name}</Badge>
-    </span>
-  );
-}
-
-export function optDetail(r: PortalRecentRequest, name: string): string {
-  switch (name) {
-    case "RTK":
-      return r.slim_rules ? `RTK rules: ${r.slim_rules}${r.slim_tokens_saved ? ` (${formatTokens(r.slim_tokens_saved)} tokens saved)` : ""}` : "RTK compression";
-    case "Caveman":
-      return "Caveman output compression";
-    case "Terse":
-      return "Terse output compression";
-    case "Headroom":
-      return r.headroom_tokens_saved ? `Headroom saved ${formatTokens(r.headroom_tokens_saved)} tokens` : "Headroom compression";
-    case "Ponytail":
-      return "Ponytail injection";
-    default:
-      return name;
-  }
 }
 
 // ─── Token composition donut + activity highlights ────────────────────────

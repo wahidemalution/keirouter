@@ -1,13 +1,14 @@
-import { useId, useRef, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Lock } from "lucide-react";
 import type { PortalModelProvider, PortalModelSettingsRow } from "../../lib/api";
+import { formatCostUSD } from "../../lib/format";
+import { discountText, latencyText, offerLevels, type OfferLevel } from "../../lib/providerOffers";
 import { Badge, Toggle } from "../ui";
 import { useConfirm } from "../ui/confirm-dialog";
 
 /** How often model settings pages refetch prices and offers while visible. */
 export const MODEL_SETTINGS_POLL_MS = 15_000;
-import { formatCostUSD } from "../../lib/format";
 
 // Provider and final-fallback controls shared by the portal's Model Settings
 // page and the admin key Routing tab. Each page names its own query key and
@@ -237,31 +238,103 @@ function ProviderItem({
   const toggleId = useId();
   const nameId = `${toggleId}-name`;
   const infoId = `${toggleId}-info`;
+  const offersId = `${toggleId}-offers`;
+  const [showOffers, setShowOffers] = useState(false);
   const price = p.available ? priceText(p.input_per_m, p.output_per_m) : null;
+  const discount = p.available ? discountText(p.discount_pct) : null;
+  const latency = latencyText(p.latency_p50_ms);
+  const levels = p.available ? offerLevels(p) : [];
+  const offerCount = levels.reduce((n, l) => n + l.count, 0);
+  const open = showOffers && levels.length > 0;
   return (
-    <li className="flex items-center justify-between gap-3 py-2">
-      <div className="min-w-0 space-y-1">
-        <p id={nameId} className="break-words text-[13px] font-medium text-fg">
-          {p.name}
-          <span className="sr-only"> for {model}</span>
-        </p>
-        <div id={infoId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {providerStatus(p, lockedLabel)}
-          {price && <span className="text-[12px] tabular-nums text-fg-muted">{price}</span>}
+    <li className="py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <p id={nameId} className="break-words text-[13px] font-medium text-fg">
+            {p.name}
+            <span className="sr-only"> for {model}</span>
+          </p>
+          <div id={infoId} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] tabular-nums text-fg-muted">
+            {providerStatus(p, lockedLabel)}
+            {price && (
+              <span>
+                {"Best price "}
+                <span className="text-fg">{price}</span>
+              </span>
+            )}
+            {discount && (
+              <span className={p.discount_pct ? "font-medium text-ok" : undefined}>{discount}</span>
+            )}
+            {latency && <span>Median latency {latency}</span>}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {levels.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={offersId}
+              onClick={() => setShowOffers((v) => !v)}
+              className={`inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-[12.5px] font-medium text-fg-muted transition-colors hover:bg-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 ${TOUCH}`}
+            >
+              {offerCount === 1 ? "1 price" : `${offerCount} prices`}
+              <span className="sr-only"> on {p.name} for {model}</span>
+              <ChevronDown
+                className={`h-4 w-4 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+                aria-hidden="true"
+              />
+            </button>
+          )}
+          <ToggleTarget htmlFor={toggleId}>
+            <Toggle
+              id={toggleId}
+              checked={p.enabled}
+              onChange={(next) => void settings.toggleProvider(p, next)}
+              disabled={p.locked}
+              busy={settings.busy && !p.locked}
+              aria-labelledby={nameId}
+              aria-describedby={infoId}
+            />
+          </ToggleTarget>
         </div>
       </div>
-      <ToggleTarget htmlFor={toggleId}>
-        <Toggle
-          id={toggleId}
-          checked={p.enabled}
-          onChange={(next) => void settings.toggleProvider(p, next)}
-          disabled={p.locked}
-          busy={settings.busy && !p.locked}
-          aria-labelledby={nameId}
-          aria-describedby={infoId}
-        />
-      </ToggleTarget>
+      {open && <OfferList levels={levels} id={offersId} />}
     </li>
+  );
+}
+
+// OfferList shows every offer on one provider, cheapest first, so a customer
+// can see the price range behind the best price. Long lists scroll.
+function OfferList({ levels, id }: { levels: OfferLevel[]; id: string }) {
+  return (
+    <div id={id} className="mt-2 rounded-lg border border-line bg-surface px-3 py-2 text-[12px]">
+      <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded pr-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500" tabIndex={levels.length > 8 ? 0 : undefined} aria-label="Prices, cheapest first">
+        {levels.map((l, i) => (
+          <li
+            key={`${l.input}-${l.output}`}
+            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 py-1.5 tabular-nums text-fg"
+          >
+            <span>
+              {priceText(l.input, l.output)}
+              {l.count > 1 && <span className="text-fg-muted"> · {l.count} offers</span>}
+            </span>
+            <span className="flex items-center gap-2">
+              {l.discountPct != null && (
+                <span className={l.discountPct > 0 ? "font-medium text-ok" : "text-fg-muted"}>
+                  {l.discountPct > 0 ? `${l.discountPct}% off` : "No discount"}
+                </span>
+              )}
+              {i === 0 && <Badge tone="success">Cheapest</Badge>}
+              {i > 0 && i === levels.length - 1 && <Badge>Highest</Badge>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 border-t border-line pt-1.5 text-fg-muted">
+        Routing tries the cheapest offer first, and a request is billed at the price of the offer that serves it.
+        Prices include markup; discounts compare with the official price.
+      </p>
+    </div>
   );
 }
 

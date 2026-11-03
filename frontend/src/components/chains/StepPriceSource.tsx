@@ -31,9 +31,12 @@ export function StepPriceSource({
   stepNumber,
   inheritedMarkup,
   inheritedLabel,
+  suggestedSlug = "",
   onChange,
 }: {
   step: DraftChainStep;
+  /** The slug this step's provider routes by, offered when the field differs. */
+  suggestedSlug?: string;
   stepNumber: number;
   inheritedMarkup: number | null;
   inheritedLabel: string;
@@ -78,9 +81,20 @@ export function StepPriceSource({
       </fieldset>
 
       {step.priceSource === "market" ? (
-        <Field label="Market slug" hint={<>Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:. Per provider: <span className="font-mono text-fg">surplus-trusted@&lt;provider&gt;:&lt;model&gt;</span>, for example <span className="font-mono text-fg">surplus-trusted@openrouter:deepseek-v4.1-flash</span>.</>}>
-          <Input value={step.marketSlug} onChange={(event) => onChange({ marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
-        </Field>
+        <div>
+          <Field label="Market slug" hint={<>Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:. Per provider: <span className="font-mono text-fg">surplus-trusted@&lt;provider&gt;:&lt;model&gt;</span>, for example <span className="font-mono text-fg">surplus-trusted@openrouter:deepseek-v4.1-flash</span>.</>}>
+            <Input value={step.marketSlug} onChange={(event) => onChange({ marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
+          </Field>
+          {suggestedSlug && step.marketSlug.trim() !== suggestedSlug && (
+            <button
+              type="button"
+              onClick={() => onChange({ marketSlug: suggestedSlug })}
+              className="mt-1.5 inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-lg px-2 text-left text-[12.5px] text-link hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 sm:min-h-8"
+            >
+              Use <span className="truncate font-mono">{suggestedSlug}</span>
+            </button>
+          )}
+        </div>
       ) : (
         <div className="space-y-2">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

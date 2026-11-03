@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ArrowLeft, Check, ChevronDown, Plus, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fuzzyFilter } from "../../lib/fuzzyMatch";
 import type { Provider } from "../../lib/api";
 import { ModelCapabilityIcons } from "../ModelCapabilityIcons";
 import { useModelCatalog } from "../ModelSelect";
@@ -34,9 +35,11 @@ export function ChainModelPicker({ value, providers, onChange, autoFocus = false
   const availableProviderIDs = useMemo(() => new Set(providers.filter(isLLMProvider).map((provider) => provider.id)), [providers]);
   const selected = catalog.models.find((model) => model.providerId === value.provider && model.id === value.model);
   const currentProvider = providers.find((provider) => provider.id === value.provider);
+  // Words match in any order and tolerate small typos, so "kimi dashcope"
+  // still finds kimi-k3 on Surplus DashScope CN.
   const filtered = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    return catalog.models.filter((model) => availableProviderIDs.has(model.providerId) && (!term || `${model.name} ${model.id} ${model.providerName} ${model.providerId}`.toLowerCase().includes(term))).slice(0, 60);
+    const usable = catalog.models.filter((model) => availableProviderIDs.has(model.providerId));
+    return fuzzyFilter(usable, query, (model) => `${model.name} ${model.id} ${model.providerName} ${model.providerId}`).slice(0, 80);
   }, [availableProviderIDs, catalog.models, query]);
 
   const close = (returnFocus = true) => {
@@ -156,7 +159,7 @@ export function ChainModelPicker({ value, providers, onChange, autoFocus = false
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={onSearchKeyDown}
-                placeholder="Search models and providers"
+                placeholder="Search, e.g. kimi openrouter"
                 aria-label="Search models and providers"
                 aria-controls={custom ? undefined : `${uid}-list`}
                 className="w-full bg-transparent text-[13px] text-fg outline-none placeholder:text-fg-faint"

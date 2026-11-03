@@ -98,5 +98,6 @@ func discountPercent(inputPerM, outputPerM float64, official officialPrice) int 
 	if offered <= 0 || list <= 0 || offered >= list {
 		return 0
 	}
-	return int(math.Floor((1 - offered/list) * 100))
+	// The epsilon keeps float noise from flooring an exact 45% to 44%.
+	return int(math.Floor((1-offered/list)*100 + 1e-9))
 }

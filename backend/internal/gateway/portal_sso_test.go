@@ -41,9 +41,14 @@ func newPortalTestServer(t *testing.T) *Server {
 	sealer, err := crypto.NewSealer(mk)
 	require.NoError(t, err)
 
+	// Surplus reads go to a stub that has no data, never the network.
+	surplus := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(surplus.Close)
+
 	return &Server{
-		db:       db,
-		identity: identity.New(db.APIKeys()),
+		surplusURL: surplus.URL + "/api/markets",
+		db:         db,
+		identity:   identity.New(db.APIKeys()),
 		auth:     authSvc,
 		budgets:  db.Budgets(),
 		usage:    db.Usage(),
