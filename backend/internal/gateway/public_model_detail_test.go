@@ -220,3 +220,58 @@ func TestDetailJSONHasNoLeaks(t *testing.T) {
 		require.NotContains(t, body, bad)
 	}
 }
+
+// Each provider row carries the provider's cheapest priced offer, priced and
+// discounted like the best price. Rows are cheapest first, and a provider
+// selling without traffic in the last 24h still shows its price.
+func TestDetailRowsCarryProviderPrice(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	offers, err := market.EligibleTrustedOffers(strings.NewReader(detailBook), 0, nil)
+	require.NoError(t, err)
+	// A second, dearer alpha offer must not replace alpha's cheapest.
+	offers = append(offers, market.TrustedOffer{ProviderID: "alpha", Provider: "Alpha", In: 0.9, Out: 3.6})
+	official := officialPrice{InputPerM: 2, OutputPerM: 8}
+
+	d := buildModelDetail(detailInputs{
+		Chain:  detailChain(25, 2, 8),
+		Offers: offers, OffersOK: true, BookAt: time.Now(),
+		Snapshot: market.Model{Slug: "surplus-trusted:m"},
+		Official: &official,
+		Routes: []market.RoutePerf{
+			{Provider: "beta", Requests: 90, P50LatencyMS: f(300)},
+			{Provider: "alpha", Requests: 10, P50LatencyMS: f(900)},
+		},
+		RoutesOK: true, PerfAt: time.Now(),
+	})
+	require.NotNil(t, d.Best)
+	require.NotNil(t, d.Performance)
+	rows := d.Performance.Routes
+	require.Len(t, rows, 3)
+
+	require.Equal(t, "Alpha", rows[0].Name, "cheapest first, not busiest")
+	require.Equal(t, d.Best.InputPerM, *rows[0].InputPerM)
+	require.Equal(t, d.Best.OutputPerM, *rows[0].OutputPerM)
+	require.Equal(t, *d.Best.DiscountPct, *rows[0].DiscountPct)
+	require.Equal(t, 900.0, *rows[0].P50LatencyMS)
+
+	require.Equal(t, "Beta", rows[1].Name)
+	require.Greater(t, *rows[1].InputPerM, *rows[0].InputPerM)
+	require.Less(t, *rows[1].DiscountPct, *rows[0].DiscountPct)
+	require.Equal(t, 300.0, *rows[1].P50LatencyMS)
+
+	require.Equal(t, "Gamma", rows[2].Name)
+	require.NotNil(t, rows[2].InputPerM)
+	require.Nil(t, rows[2].P50LatencyMS, "no traffic, no performance")
+	require.Nil(t, rows[2].SuccessPct)
+
+	// With the performance feed down, the prices still show.
+	noPerf := buildModelDetail(detailInputs{
+		Chain:  detailChain(25, 2, 8),
+		Offers: offers, OffersOK: true, BookAt: time.Now(),
+		Snapshot: market.Model{Slug: "surplus-trusted:m"},
+		Official: &official,
+	})
+	require.NotNil(t, noPerf.Performance)
+	require.Len(t, noPerf.Performance.Routes, 3)
+	require.Nil(t, noPerf.Performance.Routes[0].P50LatencyMS)
+}

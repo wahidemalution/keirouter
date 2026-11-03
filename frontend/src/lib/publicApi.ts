@@ -127,13 +127,18 @@ export interface PublicHosting {
 
 export const fetchPublicHosting = () => getJSON<PublicHosting>("/v1/public/hosting");
 
+/** One provider selling the model: its cheapest offer (what a customer pays)
+ * and its last-24h performance. Either half is null when that source has
+ * nothing for the provider. */
 export interface PublicModelDetailRoute {
   name: string;
+  input_per_m: number | null;
+  output_per_m: number | null;
+  discount_pct: number | null;
   p50_latency_ms: number | null;
   p95_latency_ms: number | null;
   tokens_per_sec: number | null;
   success_pct: number | null;
-  share_pct: number;
 }
 
 /** Market detail for one live-priced model. Prices are what a customer pays,

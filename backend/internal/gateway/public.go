@@ -195,6 +195,11 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 		} else if inputPerM <= 0 && outputPerM <= 0 && cachedPerM <= 0 && cacheWritePerM <= 0 {
 			price, _ := connectors.ModelPriceByProviderModel(first.Provider, first.Model)
 			inputPerM, outputPerM, cachedPerM, cacheWritePerM = price.InputPerM, price.OutputPerM, price.CachedInputPerM, price.CacheWritePerM
+		} else if chainMarketPriced(c) && cachedPerM <= 0 && cacheWritePerM <= 0 {
+			// Step-level market chains never get cache rates stored on the
+			// chain row. Billing prices cache from the input rate with the
+			// market multipliers, so show the same rates instead of $0.
+			cachedPerM, cacheWritePerM = *price(inputPerM * market.CacheReadMult), *price(inputPerM * market.CacheWriteMult)
 		}
 		provider, providerID := "combo", "combo"
 		if c.DisplayProvider != "" {
@@ -218,7 +223,18 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 				// not what most requests get, so only the billed average may
 				// carry one.
 				basis = "live"
-				if p, ok := live.byName[strings.ToLower(c.Name)]; ok && p.MaxInputPerM != nil && p.MaxOutputPerM != nil {
+				p, ok := live.byName[strings.ToLower(c.Name)]
+				if ok && p.Available && p.InputPerM != nil && p.OutputPerM != nil {
+					// The cheapest live offer across the chain's Surplus
+					// providers, markup and safety margin included: the same
+					// price the popup's best offer shows. The rate stored on
+					// the chain row is an operator figure, not a market price.
+					inputPerM, outputPerM = *p.InputPerM, *p.OutputPerM
+					if p.CachedPerM != nil && p.CacheWritePerM != nil {
+						cachedPerM, cacheWritePerM = *p.CachedPerM, *p.CacheWritePerM
+					}
+				}
+				if ok && p.MaxInputPerM != nil && p.MaxOutputPerM != nil {
 					maxIn, maxOut = atLeast(*p.MaxInputPerM, inputPerM), atLeast(*p.MaxOutputPerM, outputPerM)
 				}
 				if official != nil {

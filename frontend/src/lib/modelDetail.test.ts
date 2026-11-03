@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agoLabel, detailState, fmtLatency, fmtPct, fmtTps } from "./modelDetail.ts";
+import { agoLabel, detailState, fmtLatency, fmtPct, fmtPricePair, fmtTps } from "./modelDetail.ts";
 import type { PublicModelDetail } from "./publicApi.ts";
 
 const base: PublicModelDetail = {
@@ -15,7 +15,7 @@ const base: PublicModelDetail = {
   performance: {
     as_of: "2026-11-02T07:55:00Z",
     routes: [
-      { name: "OpenRouter", p50_latency_ms: 1670, p95_latency_ms: 18420, tokens_per_sec: 134, success_pct: 99.5, share_pct: 61 },
+      { name: "OpenRouter", p50_latency_ms: 1670, p95_latency_ms: 18420, tokens_per_sec: 134, success_pct: 99.5, input_per_m: 0.0003, output_per_m: 0.015, discount_pct: 97 },
     ],
   },
 };
@@ -68,4 +68,10 @@ test("detailState: ok with data, and when only performance is present", () => {
 
 test("detailState: an empty book is no-offers even without performance", () => {
   assert.equal(detailState({ ...base, best: null, median_discount_pct: null, offer_count: 0, performance: null }), "no-offers");
+});
+
+test("fmtPricePair shows input and output per 1M token", () => {
+  assert.equal(fmtPricePair(0.0003, 0.015), "$0,0003 / $0,015");
+  assert.equal(fmtPricePair(null, 0.015), "–");
+  assert.equal(fmtPricePair(0.0003, null), "–");
 });

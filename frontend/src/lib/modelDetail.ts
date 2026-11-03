@@ -2,12 +2,19 @@
 // under node --test without a DOM.
 
 import type { PublicModelDetail } from "./publicApi.ts";
+import { fmtRate } from "./format.ts";
 
 const DASH = "–";
 
 export function fmtPct(v: number | null): string {
   if (v == null) return DASH;
   return `${v.toLocaleString("id-ID", { maximumFractionDigits: 1 })}%`;
+}
+
+/** Input and output price per 1M token, e.g. "$0,0003 / $0,015". */
+export function fmtPricePair(input: number | null, output: number | null): string {
+  if (input == null || output == null) return DASH;
+  return `${fmtRate(input)} / ${fmtRate(output)}`;
 }
 
 export function fmtLatency(ms: number | null): string {

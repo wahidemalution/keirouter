@@ -53,8 +53,14 @@ type detailPerf struct {
 	Routes []detailRoute `json:"routes"`
 }
 
+// detailRoute is one provider row: its cheapest priced offer (markup and
+// safety margin included) and its last-24h performance. Either half is nil
+// when that source has nothing for the provider.
 type detailRoute struct {
 	Name         string   `json:"name"`
+	InputPerM    *float64 `json:"input_per_m"`
+	OutputPerM   *float64 `json:"output_per_m"`
+	DiscountPct  *int     `json:"discount_pct"`
 	P50LatencyMS *float64 `json:"p50_latency_ms"`
 	P95LatencyMS *float64 `json:"p95_latency_ms"`
 	TokensPerSec *float64 `json:"tokens_per_sec"`
@@ -87,44 +93,102 @@ func buildModelDetail(in detailInputs) modelDetail {
 	if in.Official != nil {
 		d.OfficialInputPerM, d.OfficialOutputPerM = price(in.Official.InputPerM), price(in.Official.OutputPerM)
 	}
+	var byProvider map[string]detailBest
 	if in.OffersOK {
 		asOf := in.BookAt.UTC().Format(time.RFC3339)
 		d.AsOf = &asOf
-		d.Best, d.MedianDiscountPct, d.OfferCount = priceOffers(in)
+		d.Best, d.MedianDiscountPct, d.OfferCount, byProvider = priceOffers(in)
 	}
-	if in.RoutesOK {
-		keep := make(map[string]string, len(in.Offers))
-		for _, o := range in.Offers {
-			if _, seen := keep[o.ProviderID]; seen {
-				continue
-			}
-			name := o.Provider
-			if name == "" {
-				name = o.ProviderID
-			}
-			// Surplus labels separate region with an em dash; the UI uses a middle dot.
-			name = strings.ReplaceAll(strings.ReplaceAll(name, " \u2014 ", " \u00b7 "), "\u2014", "\u00b7")
-			keep[o.ProviderID] = name
+	if !in.OffersOK && !in.RoutesOK {
+		return d
+	}
+
+	// Display names for eligible providers, in book order.
+	keep := make(map[string]string, len(in.Offers))
+	var order []string
+	for _, o := range in.Offers {
+		if _, seen := keep[o.ProviderID]; seen {
+			continue
 		}
-		routes := []detailRoute{}
+		name := o.Provider
+		if name == "" {
+			name = o.ProviderID
+		}
+		// Surplus labels separate region with an em dash; the UI uses a middle dot.
+		name = strings.ReplaceAll(strings.ReplaceAll(name, " \u2014 ", " \u00b7 "), "\u2014", "\u00b7")
+		keep[o.ProviderID] = name
+		order = append(order, o.ProviderID)
+	}
+
+	routes := []detailRoute{}
+	shown := map[string]bool{}
+	if in.RoutesOK {
 		for _, r := range market.ShareRoutes(in.Routes, keep) {
-			routes = append(routes, detailRoute{
+			row := detailRoute{
 				Name: r.Name, P50LatencyMS: r.P50LatencyMS, P95LatencyMS: r.P95LatencyMS,
 				TokensPerSec: r.TokensPerSec, SuccessPct: r.UptimePct, SharePct: r.SharePct,
-			})
+			}
+			withPrice(&row, byProvider, r.Provider)
+			routes = append(routes, row)
+			shown[r.Provider] = true
 		}
-		d.Performance = &detailPerf{AsOf: in.PerfAt.UTC().Format(time.RFC3339), Routes: routes}
 	}
+	// Providers selling the model without traffic in the last 24h still show
+	// their price; their performance cells stay empty.
+	for _, id := range order {
+		if shown[id] {
+			continue
+		}
+		if _, priced := byProvider[id]; !priced {
+			continue
+		}
+		row := detailRoute{Name: keep[id]}
+		withPrice(&row, byProvider, id)
+		routes = append(routes, row)
+	}
+	// Cheapest first; rows without a price go last. The stable sort keeps
+	// the busier route first among equal prices.
+	slices.SortStableFunc(routes, func(a, b detailRoute) int {
+		switch {
+		case a.InputPerM == nil && b.InputPerM == nil:
+			return 0
+		case a.InputPerM == nil:
+			return 1
+		case b.InputPerM == nil:
+			return -1
+		case cheaper(*a.InputPerM, *a.OutputPerM, *b.InputPerM, *b.OutputPerM):
+			return -1
+		case cheaper(*b.InputPerM, *b.OutputPerM, *a.InputPerM, *a.OutputPerM):
+			return 1
+		}
+		return 0
+	})
+
+	perfAt := in.PerfAt
+	if !in.RoutesOK {
+		perfAt = in.BookAt
+	}
+	d.Performance = &detailPerf{AsOf: perfAt.UTC().Format(time.RFC3339), Routes: routes}
 	return d
 }
 
-// priceOffers returns the cheapest marked-up offer, the median discount and
-// the number of offers that priced. Offers the rate function rejects are
-// skipped.
-func priceOffers(in detailInputs) (*detailBest, *int, *int) {
+// withPrice copies provider id's cheapest priced offer onto row.
+func withPrice(row *detailRoute, byProvider map[string]detailBest, id string) {
+	p, ok := byProvider[id]
+	if !ok {
+		return
+	}
+	row.InputPerM, row.OutputPerM, row.DiscountPct = &p.InputPerM, &p.OutputPerM, p.DiscountPct
+}
+
+// priceOffers returns the cheapest marked-up offer, the median discount, the
+// number of offers that priced, and each provider's cheapest priced offer.
+// Offers the rate function rejects are skipped.
+func priceOffers(in detailInputs) (*detailBest, *int, *int, map[string]detailBest) {
 	markup := market.EffectiveMarkup(in.Chain.MarkupPercent, in.Settings.MarkupPercent)
 	var best *detailBest
 	var discounts []int
+	byProvider := map[string]detailBest{}
 	count := 0
 	for _, o := range in.Offers {
 		m := market.Model{Slug: "o", MinAskIn: o.In, MinAskOut: o.Out, FailoverIn: in.Snapshot.FailoverIn, FailoverOut: in.Snapshot.FailoverOut}
@@ -136,22 +200,24 @@ func priceOffers(in detailInputs) (*detailBest, *int, *int) {
 		count++
 		// Rounded like the card's price so the discounts agree.
 		pin, pout := *price(rate.InputPerM), *price(rate.OutputPerM)
+		offer := detailBest{InputPerM: pin, OutputPerM: pout}
 		if in.Official != nil {
-			discounts = append(discounts, discountPercent(pin, pout, *in.Official))
+			pct := discountPercent(pin, pout, *in.Official)
+			discounts = append(discounts, pct)
+			offer.DiscountPct = &pct
 		}
 		if best == nil || cheaper(pin, pout, best.InputPerM, best.OutputPerM) {
-			best = &detailBest{InputPerM: pin, OutputPerM: pout}
+			best = &detailBest{InputPerM: pin, OutputPerM: pout, DiscountPct: offer.DiscountPct}
 		}
-	}
-	if best != nil && in.Official != nil {
-		pct := discountPercent(best.InputPerM, best.OutputPerM, *in.Official)
-		best.DiscountPct = &pct
+		if cur, seen := byProvider[o.ProviderID]; !seen || cheaper(pin, pout, cur.InputPerM, cur.OutputPerM) {
+			byProvider[o.ProviderID] = offer
+		}
 	}
 	var median *int
 	if v, ok := market.MedianPercent(discounts); ok {
 		median = &v
 	}
-	return best, median, &count
+	return best, median, &count, byProvider
 }
 
 // cheaper orders by blend, then output, then input.

@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { fetchPublicModelDetail, type PublicModelDetail } from "../lib/publicApi";
-import { agoLabel, detailState, fmtLatency, fmtPct, fmtTps } from "../lib/modelDetail";
+import { agoLabel, detailState, fmtLatency, fmtPct, fmtPricePair, fmtTps } from "../lib/modelDetail";
 import { fmtCount, fmtRate } from "../lib/format";
 
 const FOCUS = "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)]";
@@ -131,7 +131,7 @@ export function ModelDetailDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="flex max-h-[90dvh] w-full flex-col rounded-t-2xl border border-[var(--line)] bg-[var(--paper)] text-[var(--ink)] sm:max-w-2xl sm:rounded-xl"
+        className="flex max-h-[90dvh] w-full flex-col rounded-t-2xl border border-[var(--line)] bg-[var(--paper)] text-[var(--ink)] sm:max-w-3xl sm:rounded-xl lg:max-w-[52rem]"
       >
         <div className="flex items-start gap-3 border-b border-[var(--line)] px-4 py-3 sm:px-5">
           <div className="min-w-0 flex-1 pt-1.5">
@@ -202,9 +202,9 @@ function Notice({ children }: { children: string }) {
   );
 }
 
-function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+function Stat({ label, value, note, wide }: { label: string; value: string; note?: string; wide?: boolean }) {
   return (
-    <div className="min-w-0 rounded-lg border border-[var(--line)] px-3 py-2.5">
+    <div className={`min-w-0 rounded-lg border border-[var(--line)] px-3 py-2.5 ${wide ? "col-span-2" : ""}`}>
       <p className="text-[12px] text-[var(--muted)]">{label}</p>
       <p className="mt-0.5 font-mono text-[18px] font-semibold tabular-nums">{value}</p>
       {note && <p className="text-[12px] text-[var(--muted)]">{note}</p>}
@@ -216,6 +216,7 @@ function DetailBody({ data }: { data: PublicModelDetail }) {
   const state = detailState(data);
   const best = data.best;
   const routes = data.performance?.routes ?? [];
+  const showMedian = state === "ok" && best != null;
 
   return (
     <>
@@ -226,62 +227,68 @@ function DetailBody({ data }: { data: PublicModelDetail }) {
       ) : best == null ? (
         <Notice>Data pasar sedang tidak tersedia</Notice>
       ) : (
-        <>
-          <div className="rounded-lg bg-[var(--tag-bg)] px-4 py-3 text-[var(--tag-ink)]">
-            <p className="text-[12px] font-medium">Diskon terbaik dari harga resmi</p>
-            <p className="font-mono text-[40px] font-bold leading-tight tabular-nums">{fmtPct(best.discount_pct)}</p>
-            <p className="font-mono text-[12px] tabular-nums">
-              Input {fmtRate(best.input_per_m)} · Output {fmtRate(best.output_per_m)} per 1M token
-            </p>
-          </div>
-          <div className="mt-3">
-            <Stat
-              label="Diskon median"
-              value={fmtPct(data.median_discount_pct)}
-              note={data.offer_count != null ? `dari ${fmtCount(data.offer_count)} penawaran trusted` : undefined}
-            />
-          </div>
-        </>
+        <div className="rounded-lg bg-[var(--tag-bg)] px-4 py-3 text-[var(--tag-ink)]">
+          <p className="text-[12px] font-medium">Diskon terbaik dari harga resmi</p>
+          <p className="font-mono text-[40px] font-bold leading-tight tabular-nums">{fmtPct(best.discount_pct)}</p>
+          <p className="font-mono text-[12px] tabular-nums">
+            Input {fmtRate(best.input_per_m)} · Output {fmtRate(best.output_per_m)} per 1M token
+          </p>
+        </div>
       )}
-      <div className="mt-3">
-        <Stat label="Total Request 24 Jam terakhir" value={fmtCount(data.requests_24h)} />
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {showMedian && (
+          <Stat
+            label="Diskon median"
+            value={fmtPct(data.median_discount_pct)}
+            note={data.offer_count != null ? `dari ${fmtCount(data.offer_count)} penawaran` : undefined}
+          />
+        )}
+        <Stat label="Request 24 jam terakhir" value={fmtCount(data.requests_24h)} wide={!showMedian} />
       </div>
-      {routes.length > 0 && <RouteTable routes={routes} />}
+      {routes.length > 0 && <ProviderTable routes={routes} />}
     </>
   );
 }
 
-function RouteTable({ routes }: { routes: NonNullable<PublicModelDetail["performance"]>["routes"] }) {
+// The provider column stays pinned while the numbers scroll on narrow screens.
+const PINNED = "sticky left-0 z-[1] bg-[var(--paper)]";
+
+function ProviderTable({ routes }: { routes: NonNullable<PublicModelDetail["performance"]>["routes"] }) {
   const titleId = useId();
+  const noteId = useId();
   return (
     <section className="mt-5">
-      <h3 id={titleId} className="text-[13px] font-semibold">Performa jaringan pasar · 24 jam</h3>
+      <h3 id={titleId} className="text-[13px] font-semibold">Harga & performa per provider</h3>
+      <p id={noteId} className="mt-0.5 text-[12px] text-[var(--muted)]">
+        Harga per 1M token dari penawaran termurah tiap provider. Performa dihitung dari 24 jam terakhir.
+      </p>
       <div
         className={`mt-2 overflow-x-auto rounded-lg border border-[var(--line)] ${FOCUS}`}
         tabIndex={0}
         role="region"
         aria-labelledby={titleId}
+        aria-describedby={noteId}
       >
-        <table className="w-full min-w-[520px] whitespace-nowrap text-left text-[12.5px]">
+        <table className="w-full min-w-[560px] whitespace-nowrap text-left text-[12.5px]">
           <thead className="text-[12px] text-[var(--muted)]">
             <tr>
-              <th scope="col" className="px-3 py-2 font-medium">Rute</th>
+              <th scope="col" className={`px-3 py-2 font-medium ${PINNED}`}>Provider</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">Input / Output</th>
+              <th scope="col" className="px-3 py-2 text-right font-medium">Diskon</th>
               <th scope="col" className="px-3 py-2 text-right font-medium">Latensi p50</th>
               <th scope="col" className="px-3 py-2 text-right font-medium">Latensi p95</th>
               <th scope="col" className="px-3 py-2 text-right font-medium">Kecepatan</th>
-              <th scope="col" className="px-3 py-2 text-right font-medium">Sukses</th>
-              <th scope="col" className="px-3 py-2 text-right font-medium">Porsi</th>
             </tr>
           </thead>
           <tbody className="font-mono tabular-nums">
             {routes.map((r, i) => (
               <tr key={`${r.name}-${i}`} className="border-t border-[var(--line)]">
-                <th scope="row" className="px-3 py-2 font-sans font-medium">{r.name}</th>
+                <th scope="row" className={`px-3 py-2 font-sans font-medium ${PINNED}`}>{r.name}</th>
+                <td className="px-3 py-2 text-right">{fmtPricePair(r.input_per_m, r.output_per_m)}</td>
+                <td className="px-3 py-2 text-right">{fmtPct(r.discount_pct)}</td>
                 <td className="px-3 py-2 text-right">{fmtLatency(r.p50_latency_ms)}</td>
                 <td className="px-3 py-2 text-right">{fmtLatency(r.p95_latency_ms)}</td>
                 <td className="px-3 py-2 text-right">{fmtTps(r.tokens_per_sec)}</td>
-                <td className="px-3 py-2 text-right">{fmtPct(r.success_pct)}</td>
-                <td className="px-3 py-2 text-right">{fmtPct(r.share_pct)}</td>
               </tr>
             ))}
           </tbody>
