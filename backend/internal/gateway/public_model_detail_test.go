@@ -275,3 +275,80 @@ func TestDetailRowsCarryProviderPrice(t *testing.T) {
 	require.Len(t, noPerf.Performance.Routes, 3)
 	require.Nil(t, noPerf.Performance.Routes[0].P50LatencyMS)
 }
+
+func TestDetailUsesChainProvidersAndNames(t *testing.T) {
+	offers := []market.TrustedOffer{
+		{ProviderID: "deepseek", Provider: "DeepSeek", In: 1, Out: 1},
+		{ProviderID: "venice", Provider: "Venice", In: 0.5, Out: 0.5},
+	}
+	cheap := 0.1
+	extra := []detailRoute{{Name: "ODIN CN", InputPerM: &cheap, OutputPerM: &cheap}}
+	d := buildModelDetail(detailInputs{
+		Chain: detailChain(0, 10, 10), Offers: offers, OffersOK: true, BookAt: time.Now(),
+		Snapshot: market.Model{Slug: "surplus-trusted@deepseek:m", MinAskIn: 1, MinAskOut: 1},
+		Names:    map[string]string{"deepseek": "Jalur DeepSeek"},
+		Pinned:   map[string]bool{"deepseek": true},
+		Extra:    extra,
+	})
+	require.NotNil(t, d.Performance)
+	var names []string
+	for _, r := range d.Performance.Routes {
+		names = append(names, r.Name)
+	}
+	require.Equal(t, []string{"ODIN CN", "Jalur DeepSeek"}, names, "unpinned seller dropped, custom name used, cheapest first")
+	require.InDelta(t, 0.1, d.Best.InputPerM, 1e-9, "a cheaper non-Surplus step is the best price")
+}
+
+func TestDetailStepNames(t *testing.T) {
+	c := store.Chain{Steps: []store.ChainStep{
+		{Provider: "custom-openai-surplus-deepseek", MarketSlug: "surplus-trusted@deepseek:m", DisplayName: "Jalur DeepSeek"},
+		{Provider: "custom-openai-surplus-openrouter", MarketSlug: "surplus-trusted@openrouter:m"},
+		{Provider: "custom-openai-sharellm", Model: "m", StaticInputPerM: 0.04, StaticOutputPerM: 0.2, DisplayName: "ODIN CN"},
+	}}
+	names, pinned := detailStepNames(c)
+	require.Equal(t, map[string]string{"deepseek": "Jalur DeepSeek"}, names)
+	require.Equal(t, map[string]bool{"deepseek": true, "openrouter": true}, pinned)
+
+	c.MarketSlugs = []string{"surplus-trusted:m"}
+	_, pinned = detailStepNames(c)
+	require.Nil(t, pinned, "a plain trusted slug can route to any seller")
+}
+
+func TestDetailKeepsPinnedProviderWithoutOffer(t *testing.T) {
+	offers := []market.TrustedOffer{{ProviderID: "deepseek", Provider: "DeepSeek", In: 1, Out: 1}}
+	lat := 5500.0
+	d := buildModelDetail(detailInputs{
+		Chain: detailChain(0, 10, 10), Offers: offers, OffersOK: true, BookAt: time.Now(),
+		Snapshot: market.Model{Slug: "surplus-trusted@deepseek:m", MinAskIn: 1, MinAskOut: 1},
+		Routes:   []market.RoutePerf{{Provider: "openrouter", Requests: 10, P50LatencyMS: &lat}}, RoutesOK: true, PerfAt: time.Now(),
+		Pinned: map[string]bool{"deepseek": true, "openrouter": true},
+		Names:  map[string]string{"openrouter": "Openrouter"},
+	})
+	require.Len(t, d.Performance.Routes, 2)
+	last := d.Performance.Routes[1]
+	require.Equal(t, "Openrouter", last.Name)
+	require.Nil(t, last.InputPerM, "no eligible offer: no price")
+	require.NotNil(t, last.P50LatencyMS)
+	require.Equal(t, 5500.0, *last.P50LatencyMS)
+}
+
+func TestDetailPinnedProviderUsesSnapshotPrice(t *testing.T) {
+	offers := []market.TrustedOffer{{ProviderID: "deepseek", Provider: "DeepSeek", In: 1, Out: 1}}
+	lat := 5500.0
+	d := buildModelDetail(detailInputs{
+		Chain: detailChain(0, 10, 10), Offers: offers, OffersOK: true, BookAt: time.Now(),
+		Snapshot: market.Model{Slug: "surplus-trusted@deepseek:m", MinAskIn: 1, MinAskOut: 1},
+		Routes:   []market.RoutePerf{{Provider: "openrouter", Requests: 10, P50LatencyMS: &lat}}, RoutesOK: true, PerfAt: time.Now(),
+		Pinned:       map[string]bool{"deepseek": true, "openrouter": true},
+		PinnedPrices: map[string]detailBest{"openrouter": {InputPerM: 0.02, OutputPerM: 0.2}},
+	})
+	var or *detailRoute
+	for i := range d.Performance.Routes {
+		if d.Performance.Routes[i].Name == "openrouter" {
+			or = &d.Performance.Routes[i]
+		}
+	}
+	require.NotNil(t, or)
+	require.NotNil(t, or.InputPerM)
+	require.InDelta(t, 0.02, *or.InputPerM, 1e-9)
+}

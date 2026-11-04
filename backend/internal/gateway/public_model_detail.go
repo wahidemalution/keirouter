@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
@@ -84,6 +85,23 @@ type detailInputs struct {
 	Routes   []market.RoutePerf
 	RoutesOK bool
 	PerfAt   time.Time
+	// Names maps a Surplus provider id (lowercase) to the display name the
+	// chain's step pinning it sets.
+	Names map[string]string
+	// Pinned, when non-nil, limits the Surplus rows to the providers the
+	// chain's steps pin: a chain with no plain trusted slug cannot route to
+	// any other seller.
+	Pinned map[string]bool
+	// Labels are the Surplus labels of the pinned providers, the name of a
+	// pinned provider with no eligible offer right now.
+	Labels map[string]string
+	// PinnedPrices is each pinned provider's price from the routing snapshot,
+	// the price Model Settings shows; a pinned provider absent from the order
+	// book (its offers come and go within seconds) shows it instead.
+	PinnedPrices map[string]detailBest
+	// Extra holds the chain's non-Surplus steps (static price, inferhub),
+	// already priced, one row per provider.
+	Extra []detailRoute
 }
 
 // buildModelDetail prices each eligible offer with the same rate function the
@@ -99,7 +117,7 @@ func buildModelDetail(in detailInputs) modelDetail {
 		d.AsOf = &asOf
 		d.Best, d.MedianDiscountPct, d.OfferCount, byProvider = priceOffers(in)
 	}
-	if !in.OffersOK && !in.RoutesOK {
+	if !in.OffersOK && !in.RoutesOK && len(in.Extra) == 0 {
 		return d
 	}
 
@@ -110,14 +128,49 @@ func buildModelDetail(in detailInputs) modelDetail {
 		if _, seen := keep[o.ProviderID]; seen {
 			continue
 		}
+		id := strings.ToLower(o.ProviderID)
+		if in.Pinned != nil && !in.Pinned[id] {
+			continue
+		}
+		if custom := in.Names[id]; custom != "" {
+			keep[o.ProviderID] = custom
+			order = append(order, o.ProviderID)
+			continue
+		}
 		name := o.Provider
 		if name == "" {
 			name = o.ProviderID
 		}
-		// Surplus labels separate region with an em dash; the UI uses a middle dot.
-		name = strings.ReplaceAll(strings.ReplaceAll(name, " \u2014 ", " \u00b7 "), "\u2014", "\u00b7")
-		keep[o.ProviderID] = name
+		keep[o.ProviderID] = detailLabel(name)
 		order = append(order, o.ProviderID)
+	}
+	// A provider the chain pins stays listed while it has no eligible offer:
+	// its price cells stay empty, its performance still shows.
+	unpriced := map[string]bool{}
+	if in.Pinned != nil {
+		listed := map[string]bool{}
+		for id := range keep {
+			listed[strings.ToLower(id)] = true
+		}
+		var missing []string
+		for id := range in.Pinned {
+			if !listed[id] {
+				missing = append(missing, id)
+			}
+		}
+		slices.Sort(missing)
+		for _, id := range missing {
+			name := in.Names[id]
+			if name == "" {
+				name = detailLabel(in.Labels[id])
+			}
+			if name == "" {
+				name = id
+			}
+			keep[id] = name
+			order = append(order, id)
+			unpriced[id] = true
+		}
 	}
 
 	routes := []detailRoute{}
@@ -129,6 +182,9 @@ func buildModelDetail(in detailInputs) modelDetail {
 				TokensPerSec: r.TokensPerSec, SuccessPct: r.UptimePct, SharePct: r.SharePct,
 			}
 			withPrice(&row, byProvider, r.Provider)
+			if unpriced[r.Provider] {
+				withPrice(&row, in.PinnedPrices, r.Provider)
+			}
 			routes = append(routes, row)
 			shown[r.Provider] = true
 		}
@@ -139,12 +195,24 @@ func buildModelDetail(in detailInputs) modelDetail {
 		if shown[id] {
 			continue
 		}
-		if _, priced := byProvider[id]; !priced {
+		if _, priced := byProvider[id]; !priced && !unpriced[id] {
 			continue
 		}
 		row := detailRoute{Name: keep[id]}
 		withPrice(&row, byProvider, id)
+		if unpriced[id] {
+			withPrice(&row, in.PinnedPrices, id)
+		}
 		routes = append(routes, row)
+	}
+	for _, row := range in.Extra {
+		routes = append(routes, row)
+		if row.InputPerM == nil || row.OutputPerM == nil {
+			continue
+		}
+		if d.Best == nil || cheaper(*row.InputPerM, *row.OutputPerM, d.Best.InputPerM, d.Best.OutputPerM) {
+			d.Best = &detailBest{InputPerM: *row.InputPerM, OutputPerM: *row.OutputPerM, DiscountPct: row.DiscountPct}
+		}
 	}
 	// Cheapest first; rows without a price go last. The stable sort keeps
 	// the busier route first among equal prices.
@@ -167,6 +235,9 @@ func buildModelDetail(in detailInputs) modelDetail {
 	perfAt := in.PerfAt
 	if !in.RoutesOK {
 		perfAt = in.BookAt
+	}
+	if perfAt.IsZero() {
+		perfAt = time.Now()
 	}
 	d.Performance = &detailPerf{AsOf: perfAt.UTC().Format(time.RFC3339), Routes: routes}
 	return d
@@ -491,6 +562,14 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 		in.Routes, in.RoutesOK, in.PerfAt = perf.routes, true, perf.asOf
 	}
 
+	in.Names, in.Pinned = detailStepNames(c)
+	in.Labels = map[string]string{}
+	for id := range in.Pinned {
+		in.Labels[id] = s.marketCache.ProviderLabel(id)
+	}
+	in.PinnedPrices = s.detailPinnedPrices(c, market.EffectiveMarkup(c.MarkupPercent, settings.MarkupPercent), in.Official)
+	in.Extra = s.detailExtraRoutes(ctx, c, market.EffectiveMarkup(c.MarkupPercent, settings.MarkupPercent), in.Official)
+
 	w.Header().Set("Cache-Control", "public, max-age=30")
 	writeJSON(w, http.StatusOK, buildModelDetail(in))
 }
@@ -611,4 +690,98 @@ func (s *Server) publicModelDetailRateLimiter(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// detailLabel shows a Surplus label the way the UI writes regions: Surplus
+// separates them with an em dash, the UI with a middle dot.
+func detailLabel(name string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(name, " \u2014 ", " \u00b7 "), "\u2014", "\u00b7")
+}
+
+// detailStepNames returns the display names the chain's per-provider Surplus
+// steps set, by lowercase provider id, and the set of pinned providers when
+// every Surplus slug of the chain pins one (nil otherwise).
+func detailStepNames(c store.Chain) (map[string]string, map[string]bool) {
+	names := map[string]string{}
+	pinned := map[string]bool{}
+	plain := false
+	for _, slug := range surplusSlugs(c) {
+		if provider, _, ok := market.ParseProviderSlug(slug); ok {
+			pinned[provider] = true
+		} else {
+			plain = true
+		}
+	}
+	for _, st := range c.Steps {
+		provider, _, ok := market.ParseProviderSlug(st.MarketSlug)
+		if !ok || st.DisplayName == "" || names[provider] != "" {
+			continue
+		}
+		names[provider] = portalProviderName(st.DisplayName, st.Provider)
+	}
+	if plain || len(pinned) == 0 {
+		return names, nil
+	}
+	return names, pinned
+}
+
+// detailExtraRoutes prices the chain's steps that sell outside Surplus
+// (static price, inferhub slug), one row per provider, the way Model Settings
+// does: customer price with markup, discount against the official price, and
+// the latency and speed keirouter measured over the last 24h.
+func (s *Server) detailExtraRoutes(ctx context.Context, c store.Chain, markup float64, official *officialPrice) []detailRoute {
+	names := s.providerNames(ctx)
+	seen := map[string]bool{}
+	var out []detailRoute
+	for _, t := range dispatch.TargetsFromChain(c) {
+		if strings.HasPrefix(strings.ToLower(t.MarketSlug), "surplus") || seen[t.Provider] {
+			continue
+		}
+		q := s.stepCustomerQuote(c, t, markup)
+		if !q.available || q.in == nil || q.out == nil {
+			continue
+		}
+		seen[t.Provider] = true
+		perf := s.measuredPerformance(ctx, t.Provider, t.Model)
+		row := detailRoute{
+			Name:         portalProviderName(s.chainStepProviderName(c, names, t), t.Provider),
+			InputPerM:    q.in,
+			OutputPerM:   q.out,
+			P50LatencyMS: perf.P50,
+			P95LatencyMS: perf.P95,
+			TokensPerSec: perf.TokensPerSec,
+		}
+		if official != nil {
+			pct := discountPercent(*q.in, *q.out, *official)
+			row.DiscountPct = &pct
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// detailPinnedPrices prices each per-provider Surplus step from the routing
+// snapshot exactly as Model Settings does, by lowercase provider id.
+func (s *Server) detailPinnedPrices(c store.Chain, markup float64, official *officialPrice) map[string]detailBest {
+	out := map[string]detailBest{}
+	for _, t := range dispatch.TargetsFromChain(c) {
+		provider, _, ok := market.ParseProviderSlug(t.MarketSlug)
+		if !ok {
+			continue
+		}
+		if _, seen := out[provider]; seen {
+			continue
+		}
+		q := s.stepCustomerQuote(c, t, markup)
+		if !q.available || q.in == nil || q.out == nil {
+			continue
+		}
+		p := detailBest{InputPerM: *q.in, OutputPerM: *q.out}
+		if official != nil {
+			pct := discountPercent(p.InputPerM, p.OutputPerM, *official)
+			p.DiscountPct = &pct
+		}
+		out[provider] = p
+	}
+	return out
 }

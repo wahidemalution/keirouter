@@ -50,3 +50,25 @@ func TestBuildModelSettingsMeasuredLatency(t *testing.T) {
 	require.Equal(t, 3000.0, *providers[0].LatencyP50MS)
 	require.Nil(t, providers[1].LatencyP50MS)
 }
+
+func TestPerfFromSamples(t *testing.T) {
+	samples := []store.PerfSample{
+		{UpstreamMS: 1000}, {UpstreamMS: 2000}, {UpstreamMS: 3000}, {UpstreamMS: 4000},
+		// Streamed: 100 tokens over 1s, 2s and 4s after the first token.
+		{UpstreamMS: 2000, TTFTMS: 1000, CompletionTokens: 100},
+		{UpstreamMS: 3000, TTFTMS: 1000, CompletionTokens: 100},
+		{UpstreamMS: 9000, TTFTMS: 5000, CompletionTokens: 100},
+	}
+	p := perfFromSamples(samples)
+	require.Equal(t, 3000.0, *p.P50)
+	require.Equal(t, 4000.0, *p.P95)
+	require.Equal(t, 50.0, *p.TokensPerSec)
+
+	few := perfFromSamples(samples[:4])
+	require.Nil(t, few.P50, "four requests are too few")
+	require.Nil(t, few.TokensPerSec)
+
+	twoStreams := perfFromSamples(append(samples[:4:4], samples[4], samples[5]))
+	require.NotNil(t, twoStreams.P50)
+	require.Nil(t, twoStreams.TokensPerSec, "two streams are too few for a speed")
+}
