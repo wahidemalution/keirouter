@@ -472,6 +472,10 @@ export interface Chain {
   sold_out?: boolean;
   /** Operator took the chain off sale: shown as sold out, requests refused with 503. */
   disabled?: boolean;
+  /** Operator disabled the chain for maintenance: requests refused with 503, left out of the portal and public catalog. */
+  maintenance?: boolean;
+  /** Left out of the portal and public catalog; keys allowed to call it still can. */
+  hidden?: boolean;
   /** Manual official price per 1M tokens; null/undefined = detected automatically. */
   official_input_per_m?: number | null;
   official_output_per_m?: number | null;
@@ -3036,7 +3040,7 @@ export const api = {
   listChains: () => request<{ chains: Chain[] }>("GET", "/chains"),
   createChain: (input: { name: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; steps: ChainStepPayload[] }) =>
     request<{ id: string }>("POST", "/chains", input),
-  updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; steps?: ChainStepPayload[] }) =>
+  updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; maintenance?: boolean; hidden?: boolean; steps?: ChainStepPayload[] }) =>
     request<{ id: string }>("PATCH", `/chains/${id}`, patch),
   deleteChain: (id: string) => request<void>("DELETE", `/chains/${id}`),
 

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,7 +47,7 @@ func (s *Server) handlePortalDiscounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load key")
 		return
 	}
-	chains, err := s.keyChains(r, key, u.PlanID)
+	chains, err := s.portalChains(r, key, u.PlanID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load models")
 		return
@@ -135,7 +136,7 @@ func (s *Server) portalDiscountTarget(w http.ResponseWriter, r *http.Request) (s
 		writeError(w, http.StatusInternalServerError, "failed to load key")
 		return store.PortalUser{}, store.Chain{}, false
 	}
-	chains, err := s.keyChains(r, key, u.PlanID)
+	chains, err := s.portalChains(r, key, u.PlanID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load models")
 		return store.PortalUser{}, store.Chain{}, false
@@ -147,6 +148,53 @@ func (s *Server) portalDiscountTarget(w http.ResponseWriter, r *http.Request) (s
 	}
 	writeError(w, http.StatusNotFound, "model not available to this key: "+model)
 	return store.PortalUser{}, store.Chain{}, false
+}
+
+// portalChains is keyChains without chains under maintenance or hidden: the portal
+// never shows those, even to keys that may still call a hidden one.
+func (s *Server) portalChains(r *http.Request, key store.APIKey, planID string) ([]store.Chain, error) {
+	chains, err := s.keyChains(r, key, planID)
+	if err != nil {
+		return nil, err
+	}
+	out := chains[:0]
+	for _, c := range chains {
+		if c.Listed() {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// withoutUnlistedChains drops model entries that name a chain under
+// maintenance or hidden (bare or with the chain: prefix), so the portal and
+// the landing page do not show them. Wildcards and other entries are kept.
+// On a lookup error the list is returned unchanged.
+func (s *Server) withoutUnlistedChains(ctx context.Context, tenantID string, models []string) []string {
+	if len(models) == 0 {
+		return models
+	}
+	chains, err := s.chains.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return models
+	}
+	unlisted := map[string]bool{}
+	for _, c := range chains {
+		if !c.Listed() {
+			unlisted[strings.ToLower(c.Name)] = true
+		}
+	}
+	if len(unlisted) == 0 {
+		return models
+	}
+	out := make([]string, 0, len(models))
+	for _, m := range models {
+		name := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(m)), "chain:")
+		if !unlisted[name] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // keyChains lists the chains the key may call (its own or its plan's model

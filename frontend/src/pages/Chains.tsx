@@ -1,7 +1,7 @@
 import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { AlertTriangle, Ban, Copy, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
+import { AlertTriangle, Ban, Copy, Eye, EyeOff, MoreHorizontal, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, type Chain, type HealthChainRow, type Provider } from "../lib/api";
 import { dashboard } from "../lib/dashboardRoutes";
@@ -141,11 +141,13 @@ type ChainRowProps = {
   onCopy: () => void;
   onDelete: () => void;
   onToggleSale: () => void;
+  onToggleMaintenance: () => void;
+  onToggleHidden: () => void;
 };
 
 // ChainActionsMenu is the row menu shared by the desktop table row and the
 // mobile card, so both expose exactly the same actions.
-function ChainActionsMenu({ chain, onOpen, onCopy, onDelete, onToggleSale, className }: Pick<ChainRowProps, "chain" | "onOpen" | "onCopy" | "onDelete" | "onToggleSale"> & { className?: string }) {
+function ChainActionsMenu({ chain, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden, className }: Pick<ChainRowProps, "chain" | "onOpen" | "onCopy" | "onDelete" | "onToggleSale" | "onToggleMaintenance" | "onToggleHidden"> & { className?: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -167,6 +169,14 @@ function ChainActionsMenu({ chain, onOpen, onCopy, onDelete, onToggleSale, class
           {chain.disabled ? <RotateCcw aria-hidden="true" /> : <Ban aria-hidden="true" />}
           {chain.disabled ? "Put back on sale" : "Mark sold out"}
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onToggleMaintenance}>
+          {chain.maintenance ? <Power aria-hidden="true" /> : <PowerOff aria-hidden="true" />}
+          {chain.maintenance ? "Enable chain" : "Disable for maintenance"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onToggleHidden}>
+          {chain.hidden ? <Eye aria-hidden="true" /> : <EyeOff aria-hidden="true" />}
+          {chain.hidden ? "Show in portal and catalog" : "Hide from portal and catalog"}
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem tone="danger" onSelect={onDelete}>
           <Trash2 aria-hidden="true" />
@@ -174,6 +184,24 @@ function ChainActionsMenu({ chain, onOpen, onCopy, onDelete, onToggleSale, class
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// VisibilityBadge marks a chain that is disabled for maintenance or hidden.
+// Both keep it out of the portal and catalog; only maintenance refuses calls.
+function VisibilityBadge({ chain }: { chain: Chain }) {
+  if (chain.maintenance) {
+    return (
+      <span className="mt-1 inline-flex" title="Disabled for maintenance. Requests get a temporarily disabled error, and the model is left out of the portal and catalog.">
+        <Badge tone="danger"><PowerOff className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />Disabled</Badge>
+      </span>
+    );
+  }
+  if (!chain.hidden) return null;
+  return (
+    <span className="mt-1 inline-flex" title="Left out of the portal and catalog. Keys allowed to call it still can.">
+      <Badge tone="secondary"><EyeOff className="h-3 w-3 shrink-0" strokeWidth={1.75} aria-hidden="true" />Hidden</Badge>
+    </span>
   );
 }
 
@@ -223,7 +251,7 @@ function ChainPricing({ chain }: { chain: Chain }) {
 
 // ChainCard is the below-md rendering of a chain row: identity + health on
 // the first line, the route on the second, key facts and the menu last.
-function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggleSale }: ChainRowProps) {
+function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden }: ChainRowProps) {
   const hasIssue = health?.status === "degraded" || health?.status === "unhealthy";
   const facts = [
     strategyLabel(chain.strategy),
@@ -243,6 +271,7 @@ function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggl
             {chain.name}
           </Link>
           <span className="block truncate font-mono text-[12px] text-fg-muted" title={`chain:${chain.name}`}>chain:{chain.name}</span>
+          <VisibilityBadge chain={chain} />
         </div>
         <HealthBadge health={health} />
       </div>
@@ -254,13 +283,13 @@ function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggl
       {hasIssue && health?.main_issue && <p className="line-clamp-2 text-[12px] text-fg-muted">{health.main_issue}</p>}
       <div className="flex items-center justify-between gap-3">
         <p className="min-w-0 text-[12px] tabular-nums text-fg-muted">{facts}</p>
-        <ChainActionsMenu chain={chain} onOpen={onOpen} onCopy={onCopy} onDelete={onDelete} onToggleSale={onToggleSale} className="h-9 w-9" />
+        <ChainActionsMenu chain={chain} onOpen={onOpen} onCopy={onCopy} onDelete={onDelete} onToggleSale={onToggleSale} onToggleMaintenance={onToggleMaintenance} onToggleHidden={onToggleHidden} className="h-9 w-9" />
       </div>
     </li>
   );
 }
 
-function ChainRow({ chain, providers, health, onOpen, onCopy, onDelete, onToggleSale }: ChainRowProps) {
+function ChainRow({ chain, providers, health, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden }: ChainRowProps) {
   const hasIssue = health?.status === "degraded" || health?.status === "unhealthy";
   const StrategyIcon = strategyIcon(chain.strategy);
   const stop = (event: MouseEvent) => event.stopPropagation();
@@ -285,6 +314,7 @@ function ChainRow({ chain, providers, health, onOpen, onCopy, onDelete, onToggle
           <span className="truncate">chain:{chain.name}</span>
           <Copy className="h-3.5 w-3.5 shrink-0 text-fg-faint transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-visible:opacity-100" strokeWidth={1.75} aria-hidden="true" />
         </button>
+        <div><VisibilityBadge chain={chain} /></div>
       </td>
       <td className="px-4 py-2.5">
         <Badge tone="secondary">
@@ -302,7 +332,7 @@ function ChainRow({ chain, providers, health, onOpen, onCopy, onDelete, onToggle
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-fg">{health ? health.requests.toLocaleString() : <><span className="text-fg-muted" aria-hidden="true">—</span><span className="sr-only">No data</span></>}</td>
       <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-fg">{health ? `${health.fallback_rate.toFixed(1)}%` : <><span className="text-fg-muted" aria-hidden="true">—</span><span className="sr-only">No data</span></>}</td>
       <td className="px-2 py-2.5" onClick={stop}>
-        <ChainActionsMenu chain={chain} onOpen={onOpen} onCopy={onCopy} onDelete={onDelete} onToggleSale={onToggleSale} />
+        <ChainActionsMenu chain={chain} onOpen={onOpen} onCopy={onCopy} onDelete={onDelete} onToggleSale={onToggleSale} onToggleMaintenance={onToggleMaintenance} onToggleHidden={onToggleHidden} />
       </td>
     </tr>
   );
@@ -335,6 +365,28 @@ export function ChainsPage() {
       toast.success(
         disabled ? "Chain marked sold out" : "Chain back on sale",
         disabled ? "Requests to it now get a sold-out error." : "It accepts requests again.",
+      );
+    },
+    onError: (error: Error) => toast.error("Couldn't update the chain", error.message),
+  });
+  const maintenanceMutation = useMutation({
+    mutationFn: ({ id, maintenance }: { id: string; maintenance: boolean }) => api.updateChain(id, { maintenance }),
+    onSuccess: (_data, { maintenance }) => {
+      queryClient.invalidateQueries({ queryKey: ["chains"] });
+      toast.success(
+        maintenance ? "Chain disabled" : "Chain enabled",
+        maintenance ? "Requests to it now get a temporarily disabled error." : "It accepts requests again.",
+      );
+    },
+    onError: (error: Error) => toast.error("Couldn't update the chain", error.message),
+  });
+  const hiddenMutation = useMutation({
+    mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) => api.updateChain(id, { hidden }),
+    onSuccess: (_data, { hidden }) => {
+      queryClient.invalidateQueries({ queryKey: ["chains"] });
+      toast.success(
+        hidden ? "Chain hidden" : "Chain shown",
+        hidden ? "The portal and catalog no longer show it. Allowed keys can still call it." : "It shows in the portal and catalog again.",
       );
     },
     onError: (error: Error) => toast.error("Couldn't update the chain", error.message),
@@ -394,6 +446,22 @@ export function ChainsPage() {
     });
     if (ok) saleMutation.mutate({ id: chain.id, disabled: true });
   };
+
+  const toggleMaintenance = async (chain: Chain) => {
+    if (chain.maintenance) {
+      maintenanceMutation.mutate({ id: chain.id, maintenance: false });
+      return;
+    }
+    const ok = await confirmAction({
+      title: `Disable ${chain.name} for maintenance?`,
+      description: <>Calls to <span className="font-mono text-fg">chain:{chain.name}</span> are refused right away with a temporarily disabled error, and the model is left out of the portal, landing page and catalog. You can enable it again from this menu.</>,
+      confirmLabel: "Disable chain",
+      tone: "danger",
+    });
+    if (ok) maintenanceMutation.mutate({ id: chain.id, maintenance: true });
+  };
+
+  const toggleHidden = (chain: Chain) => hiddenMutation.mutate({ id: chain.id, hidden: !chain.hidden });
 
   const clearFilters = () => {
     setQuery("");
@@ -506,6 +574,8 @@ export function ChainsPage() {
                       onCopy={() => copyTarget(chain)}
                       onDelete={() => deleteChain(chain)}
                           onToggleSale={() => toggleSale(chain)}
+                          onToggleMaintenance={() => toggleMaintenance(chain)}
+                          onToggleHidden={() => toggleHidden(chain)}
                     />
                   ))}
                 </ul>
@@ -535,6 +605,8 @@ export function ChainsPage() {
                           onCopy={() => copyTarget(chain)}
                           onDelete={() => deleteChain(chain)}
                           onToggleSale={() => toggleSale(chain)}
+                          onToggleMaintenance={() => toggleMaintenance(chain)}
+                          onToggleHidden={() => toggleHidden(chain)}
                         />
                       ))}
                     </tbody>

@@ -2004,8 +2004,10 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 			"official_auto":         nil,
 			// No live quote for any bound slug: the stored rates are stale and
 			// requests are refused until the market offers it again.
-			"sold_out": s.chainSoldOut(c),
-			"disabled": c.Disabled,
+			"sold_out":    s.chainSoldOut(c),
+			"disabled":    c.Disabled,
+			"maintenance": c.Maintenance,
+			"hidden":      c.Hidden,
 		}
 		if ref, ok := s.autoOfficialPrice(c); ok {
 			entry["official_auto"] = map[string]any{"input_per_m": ref.InputPerM, "output_per_m": ref.OutputPerM, "source": ref.Source, "provider": ref.Provider}
@@ -2047,6 +2049,9 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		MarkupPercent       *float64         `json:"markup_percent"`
 		OfficialInputPerM   *float64         `json:"official_input_per_m"`
 		OfficialOutputPerM  *float64         `json:"official_output_per_m"`
+		Disabled            bool             `json:"disabled"`
+		Maintenance         bool             `json:"maintenance"`
+		Hidden              bool             `json:"hidden"`
 		Steps               []chainStepInput `json:"steps"`
 	}
 	if !decodeJSON(w, r, &body) {
@@ -2111,6 +2116,9 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		MarkupPercent:       body.MarkupPercent,
 		OfficialInputPerM:   body.OfficialInputPerM,
 		OfficialOutputPerM:  body.OfficialOutputPerM,
+		Disabled:            body.Disabled,
+		Maintenance:         body.Maintenance,
+		Hidden:              body.Hidden,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
@@ -2172,6 +2180,8 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		MarketSlugs         *[]string `json:"market_slugs"`
 		ReorderByMarket     *bool     `json:"reorder_by_market"`
 		Disabled            *bool     `json:"disabled"`
+		Maintenance         *bool     `json:"maintenance"`
+		Hidden              *bool     `json:"hidden"`
 		// markup_percent: absent = unchanged, null = follow global, number = override.
 		MarkupPercent json.RawMessage `json:"markup_percent"`
 		// official_*_per_m: absent = unchanged, null = automatic, number = manual.
@@ -2221,6 +2231,12 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Disabled != nil {
 		existing.Disabled = *body.Disabled
+	}
+	if body.Maintenance != nil {
+		existing.Maintenance = *body.Maintenance
+	}
+	if body.Hidden != nil {
+		existing.Hidden = *body.Hidden
 	}
 	if len(body.MarkupPercent) > 0 {
 		if string(body.MarkupPercent) == "null" {

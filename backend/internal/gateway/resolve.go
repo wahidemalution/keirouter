@@ -154,6 +154,9 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 	}
 	for _, c := range list {
 		if c.Name == name {
+			if c.Maintenance {
+				return resolveResult{}, errChainMaintenance(name)
+			}
 			if c.Disabled {
 				return resolveResult{}, errChainDisabled(name)
 			}
@@ -589,6 +592,13 @@ func errSoldOut(name string) error {
 func errChainDisabled(name string) error {
 	return badModelError{
 		msg:    "model " + name + " is sold out, try again later",
+		status: http.StatusServiceUnavailable,
+	}
+}
+
+func errChainMaintenance(name string) error {
+	return badModelError{
+		msg:    "model " + name + " is temporarily disabled for maintenance, try again later",
 		status: http.StatusServiceUnavailable,
 	}
 }

@@ -406,7 +406,7 @@ func (s *Server) publicModelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idx := slices.IndexFunc(chains, func(c store.Chain) bool { return strings.EqualFold(c.Name, model) })
-	if idx < 0 || chains[idx].Disabled || len(chains[idx].Steps) == 0 {
+	if idx < 0 || chains[idx].Disabled || !chains[idx].Listed() || len(chains[idx].Steps) == 0 {
 		writeError(w, http.StatusNotFound, "model not found")
 		return
 	}

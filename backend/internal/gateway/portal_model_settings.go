@@ -25,7 +25,7 @@ func (s *Server) handlePortalModelSettings(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	chains, err := s.keyChains(r, key, u.PlanID)
+	chains, err := s.portalChains(r, key, u.PlanID)
 	if err != nil {
 		s.log.Error("portal model settings: list models failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load models")
@@ -160,7 +160,7 @@ func (s *Server) portalModelTarget(w http.ResponseWriter, r *http.Request) (stor
 	if !ok {
 		return store.APIKey{}, store.Chain{}, false
 	}
-	chains, err := s.keyChains(r, key, u.PlanID)
+	chains, err := s.portalChains(r, key, u.PlanID)
 	if err != nil {
 		s.log.Error("portal model settings: list models failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load models")

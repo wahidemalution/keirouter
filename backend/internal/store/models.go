@@ -248,11 +248,22 @@ type Chain struct {
 	OfficialOutputPerM *float64
 	// Disabled takes the chain off sale: the catalog shows it as sold out and
 	// requests are refused. Off by default.
-	Disabled  bool
+	Disabled bool
+	// Maintenance takes the chain down: requests are refused with a
+	// temporarily disabled error and the chain is left out of the portal, the
+	// public catalog and public pricing.
+	Maintenance bool
+	// Hidden leaves the chain out of the portal, the public catalog and public
+	// pricing, but keys allowed to call it still can.
+	Hidden    bool
 	Steps     []ChainStep
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// Listed reports whether the chain may appear in the portal and on public
+// pages: neither under maintenance nor hidden. A sold-out chain stays listed.
+func (c Chain) Listed() bool { return !c.Maintenance && !c.Hidden }
 
 // ChainStep is one candidate target within a chain.
 type ChainStep struct {

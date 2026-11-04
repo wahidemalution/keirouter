@@ -67,6 +67,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	chains, err := s.chains.ListByTenant(r.Context(), tenantID)
 	if err == nil {
 		for _, c := range chains {
+			if c.Maintenance {
+				continue
+			}
 			data = appendModelEntry(data, seen, modelEntry{
 				ID: c.Name, Object: "model", Kind: string(core.ServiceLLM), Name: c.Name,
 			})

@@ -733,7 +733,7 @@ func (s *Server) publicBansos(w http.ResponseWriter, r *http.Request) {
 		"active":               cfg.Active,
 		"mode":                 cfg.Mode,
 		"masked_display":       cfg.MaskedDisplay,
-		"allowed_models":       models,
+		"allowed_models":       s.withoutUnlistedChains(r.Context(), adminTenant, models),
 		"rpm":                  cfg.RPM,
 		"tpm":                  cfg.TPM,
 		"credit_remaining_usd": remaining,

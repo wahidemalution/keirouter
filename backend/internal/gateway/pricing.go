@@ -63,6 +63,8 @@ type pricingCache struct {
 	byName  map[string]keyPrice
 	// idToName maps each priced chain's ID to its lower-cased name.
 	idToName map[string]string
+	// unlisted holds the IDs of chains under maintenance or hidden.
+	unlisted map[string]bool
 	asOf     time.Time
 }
 
@@ -147,6 +149,7 @@ func writePriceList(w http.ResponseWriter, allowed map[string]keyPrice, wanted [
 type priceList struct {
 	byName   map[string]keyPrice // lower-cased chain name -> price
 	idToName map[string]string   // chain ID -> lower-cased chain name
+	unlisted map[string]bool     // chain ID -> under maintenance or hidden
 	asOf     time.Time
 }
 
@@ -157,7 +160,7 @@ func (s *Server) surplusPrices(ctx context.Context) (priceList, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byName != nil && time.Since(c.builtAt) < pricingCacheTTL {
-		return priceList{byName: c.byName, idToName: c.idToName, asOf: c.asOf}, nil
+		return priceList{byName: c.byName, idToName: c.idToName, unlisted: c.unlisted, asOf: c.asOf}, nil
 	}
 	chains, err := s.chains.ListByTenant(ctx, adminTenant)
 	if err != nil {
@@ -173,6 +176,7 @@ func (s *Server) surplusPrices(ctx context.Context) (priceList, error) {
 	}
 	byName := make(map[string]keyPrice, len(chains))
 	idToName := make(map[string]string, len(chains))
+	unlisted := map[string]bool{}
 	for _, ch := range chains {
 		slugs := surplusSlugs(ch)
 		if len(ch.Steps) == 0 || len(slugs) == 0 {
@@ -183,13 +187,16 @@ func (s *Server) surplusPrices(ctx context.Context) (priceList, error) {
 		s.applyRealized(&p, ch, billed[ch.ID])
 		byName[name] = p
 		idToName[ch.ID] = name
+		if !ch.Listed() {
+			unlisted[ch.ID] = true
+		}
 	}
 	var asOf time.Time
 	if s.marketCache != nil {
 		asOf = s.marketCache.FetchedAt()
 	}
-	c.byName, c.idToName, c.asOf, c.builtAt = byName, idToName, asOf, time.Now()
-	return priceList{byName: byName, idToName: idToName, asOf: asOf}, nil
+	c.byName, c.idToName, c.unlisted, c.asOf, c.builtAt = byName, idToName, unlisted, asOf, time.Now()
+	return priceList{byName: byName, idToName: idToName, unlisted: unlisted, asOf: asOf}, nil
 }
 
 // surplusSlugs lists the chain's Surplus market slugs (chain-level and per
@@ -219,7 +226,7 @@ func surplusSlugs(c store.Chain) []string {
 // snapshot, the way the market sync would, markup included.
 func (s *Server) surplusChainPrice(c store.Chain, slugs []string, settings market.Settings) keyPrice {
 	p := keyPrice{Model: c.Name}
-	if c.Disabled || s.marketCache == nil {
+	if c.Disabled || c.Maintenance || s.marketCache == nil {
 		return p
 	}
 	models := s.marketCache.Models(slugs)
