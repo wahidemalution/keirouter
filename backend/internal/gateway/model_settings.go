@@ -211,8 +211,11 @@ func (s *Server) stepCustomerQuote(c store.Chain, t dispatch.Target, markup floa
 		q.in, q.out = pricePtr(p.InputPerM), pricePtr(p.OutputPerM)
 	}
 	// An upstream-cost step bills what the serving offer costs; its best
-	// price is the cheapest offer.
-	if !market.IsUpstreamCostSlug(p.MarketSlug) || s.marketCache == nil {
+	// price is the cheapest offer. An inferhub step bills the reported cost
+	// too: its stamped rate is only the maxAsk bid cap, so the best price is
+	// the minAsk instead.
+	inferhub := p.BillUpstreamCost && !market.IsUpstreamCostSlug(p.MarketSlug)
+	if (!inferhub && !market.IsUpstreamCostSlug(p.MarketSlug)) || s.marketCache == nil {
 		return q
 	}
 	m, ok := s.marketCache.Lookup(p.MarketSlug)
@@ -221,6 +224,9 @@ func (s *Server) stepCustomerQuote(c store.Chain, t dispatch.Target, markup floa
 	}
 	mult := 1 + markup/100
 	q.in, q.out = pricePtr(m.MinAskIn*mult), pricePtr(m.MinAskOut*mult)
+	if inferhub {
+		return q
+	}
 	for _, o := range m.Offers {
 		q.offers = append(q.offers, market.OfferPrice{In: o.In * mult, Out: o.Out * mult})
 	}

@@ -482,3 +482,30 @@ func TestBuildModelSettingsBestPriceOffersDiscountLatency(t *testing.T) {
 	require.NotNil(t, p.LatencyP50MS)
 	require.Equal(t, 2300.0, *p.LatencyP50MS)
 }
+
+// An inferhub step bills inferhub's reported cost; its stamped rate is the
+// maxAsk bid cap, so the page must show the minAsk as the best price.
+func TestBuildModelSettingsInferhubBestPriceIsMinAsk(t *testing.T) {
+	markup := 50.0
+	f := newModelSettingsFixture(t, store.Chain{
+		ID: "ms9", Name: "inferhub-model", Strategy: "priority", MarkupPercent: &markup,
+		Steps: []store.ChainStep{
+			{ID: "ms9a", Position: 0, Provider: "custom-openai-inferhub", Model: "cbcn/dsf", MarketSlug: "cbcn/dsf"},
+		},
+	})
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{{Slug: "cbcn/dsf", MinAskIn: 0.006, MinAskOut: 0.024, MaxAskIn: 0.075, MaxAskOut: 0.3}})
+	f.srv.marketCache = cache
+
+	ctx := context.Background()
+	chains, err := f.srv.chains.ListByTenant(ctx, store.DefaultTenantID)
+	require.NoError(t, err)
+	key, err := f.srv.identity.Get(ctx, f.keyID)
+	require.NoError(t, err)
+	resp, err := f.srv.buildModelSettings(ctx, key, chains)
+	require.NoError(t, err)
+	p := resp.Models[0].Providers[0]
+	require.True(t, p.Available)
+	require.InDelta(t, 0.009, *p.InputPerM, 1e-9, "minAsk with markup, not the maxAsk bid cap")
+	require.InDelta(t, 0.036, *p.OutputPerM, 1e-9)
+}
