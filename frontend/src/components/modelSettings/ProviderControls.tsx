@@ -332,7 +332,7 @@ function OfferList({ levels, id }: { levels: OfferLevel[]; id: string }) {
       </ul>
       <p className="mt-1.5 border-t border-line pt-1.5 text-fg-muted">
         Routing tries the cheapest offer first, and a request is billed at the price of the offer that serves it.
-        Prices include markup; discounts compare with the official price.
+        Discounts compare with the official price.
       </p>
     </div>
   );
