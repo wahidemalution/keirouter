@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -22,7 +23,11 @@ type chainStepInput struct {
 	StaticCacheReadPerM  *float64 `json:"static_cache_read_per_m"`
 	StaticCacheWritePerM *float64 `json:"static_cache_write_per_m"`
 	MarkupPercent        *float64 `json:"markup_percent"`
+	DisplayName          string   `json:"display_name"`
 }
+
+// maxStepDisplayName bounds the portal provider name of a step, in runes.
+const maxStepDisplayName = 60
 
 // toStore validates the step and converts it for storage. pos is the 0-based
 // step index; the returned string is the 400 message, "" when valid.
@@ -33,7 +38,10 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		Provider: in.Provider, Model: in.Model, MarketSlug: strings.TrimSpace(in.MarketSlug),
 		StaticInputPerM: in.StaticInputPerM, StaticOutputPerM: in.StaticOutputPerM,
 		StaticCacheReadPerM: in.StaticCacheReadPerM, StaticCacheWritePerM: in.StaticCacheWritePerM,
-		MarkupPercent: in.MarkupPercent, CreatedAt: now,
+		MarkupPercent: in.MarkupPercent, DisplayName: strings.TrimSpace(in.DisplayName), CreatedAt: now,
+	}
+	if utf8.RuneCountInString(st.DisplayName) > maxStepDisplayName {
+		return st, prefix + fmt.Sprintf("display_name must be at most %d characters", maxStepDisplayName)
 	}
 	if err := market.ValidateStepSlug(st.MarketSlug, false); err != nil {
 		return st, prefix + err.Error()
@@ -78,6 +86,7 @@ func chainStepJSON(st store.ChainStep) map[string]any {
 	return map[string]any{
 		"provider": st.Provider, "model": st.Model, "position": st.Position,
 		"market_slug":              st.MarketSlug,
+		"display_name":             st.DisplayName,
 		"static_input_per_m":       st.StaticInputPerM,
 		"static_output_per_m":      st.StaticOutputPerM,
 		"static_cache_read_per_m":  st.StaticCacheReadPerM,

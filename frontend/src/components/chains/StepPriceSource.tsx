@@ -138,6 +138,19 @@ export function StepPriceSource({
           </div>
         </div>
       )}
+
+      <Field
+        label="Provider name in portal"
+        optional
+        hint="Shown to customers in Model Settings and Usage. Leave empty to use the provider's own name."
+      >
+        <Input
+          value={step.displayName}
+          onChange={(event) => onChange({ displayName: event.target.value })}
+          maxLength={60}
+          placeholder="e.g. Fast Lane"
+        />
+      </Field>
     </div>
   );
 }

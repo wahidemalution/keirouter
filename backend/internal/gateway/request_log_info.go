@@ -31,10 +31,14 @@ func (s *Server) newRequestLogInfo(ctx context.Context, tenantID string) request
 	return info
 }
 
-// providerName is the Surplus label of the provider a chain step pinned with
+// providerName is the display name the chain's step on the provider sets,
+// else the Surplus label of the provider a chain step pinned with
 // surplus-trusted@<provider>, else the keirouter provider's name.
 func (i requestLogInfo) providerName(rec store.RecentRecord) string {
 	if c, ok := i.chains[rec.ChainID]; ok {
+		if name := stepDisplayName(c, rec.Provider); name != "" {
+			return name
+		}
 		for _, st := range c.Steps {
 			if st.Provider != rec.Provider {
 				continue

@@ -147,7 +147,7 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 			index[t.Provider] = len(row.Providers)
 			row.Providers = append(row.Providers, modelSettingsProvider{
 				ID:      t.Provider,
-				Name:    s.stepProviderName(names, t),
+				Name:    s.chainStepProviderName(c, names, t),
 				Enabled: key.ProviderEnabled(c.Name, t.Provider),
 				Locked:  !key.ProviderAllowed(t.Provider),
 				Offers:  []modelSettingsOffer{},
@@ -341,6 +341,27 @@ func (s *Server) stepProviderName(names map[string]string, t dispatch.Target) st
 		return label
 	}
 	return providerDisplayName(names, t.Provider)
+}
+
+// chainStepProviderName is stepProviderName with the operator's own name
+// for the provider first: the display name of the chain's first step on
+// t.Provider that sets one.
+func (s *Server) chainStepProviderName(c store.Chain, names map[string]string, t dispatch.Target) string {
+	if name := stepDisplayName(c, t.Provider); name != "" {
+		return name
+	}
+	return s.stepProviderName(names, t)
+}
+
+// stepDisplayName is the display name the first step of c on provider sets,
+// "" when none does.
+func stepDisplayName(c store.Chain, provider string) string {
+	for _, st := range c.Steps {
+		if st.Provider == provider && st.DisplayName != "" {
+			return st.DisplayName
+		}
+	}
+	return ""
 }
 
 // providerDisplayName resolves id through names, then the catalog.

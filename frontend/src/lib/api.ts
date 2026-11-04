@@ -437,6 +437,7 @@ export interface ChainStep {
   static_cache_read_per_m?: number | null;
   static_cache_write_per_m?: number | null;
   markup_percent?: number | null;
+  display_name?: string;
 }
 
 // ChainStepPayload is one step in a chain create/update body: a market slug
@@ -450,6 +451,7 @@ export type ChainStepPayload = {
   static_cache_read_per_m?: number | null;
   static_cache_write_per_m?: number | null;
   markup_percent?: number | null;
+  display_name?: string;
 };
 
 export interface Chain {

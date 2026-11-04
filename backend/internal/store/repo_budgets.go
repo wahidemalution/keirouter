@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -303,13 +304,13 @@ func (r *ChainRepo) Create(ctx context.Context, c Chain) error {
 }
 
 const insertChainStepSQL = `INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug,
-	static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, display_name, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 func chainStepArgs(chainID string, s ChainStep, created time.Time) []any {
 	return []any{s.ID, chainID, s.Position, s.Provider, s.Model, s.MarketSlug,
 		s.StaticInputPerM, s.StaticOutputPerM, nullableFloat(s.StaticCacheReadPerM), nullableFloat(s.StaticCacheWritePerM),
-		nullableFloat(s.MarkupPercent), formatTime(created)}
+		nullableFloat(s.MarkupPercent), strings.TrimSpace(s.DisplayName), formatTime(created)}
 }
 
 // Get returns a chain with its ordered steps.
@@ -462,7 +463,7 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 
 func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, error) {
 	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, market_slug,
-		static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, created_at
+		static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, display_name, created_at
 		FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
 	rows, err := r.db.sql.QueryContext(ctx, q, chainID)
 	if err != nil {
@@ -478,7 +479,7 @@ func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, err
 			cacheRead, cacheWrite, mk sql.NullFloat64
 		)
 		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &s.MarketSlug,
-			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &created); err != nil {
+			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &s.DisplayName, &created); err != nil {
 			return nil, err
 		}
 		s.StaticCacheReadPerM = floatPtr(cacheRead)

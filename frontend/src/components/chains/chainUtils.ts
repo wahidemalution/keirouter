@@ -29,6 +29,8 @@ export interface DraftChainStep {
   staticCacheReadPerM: string;
   staticCacheWritePerM: string;
   stepMarkup: string;
+  // displayName is the provider name the portal shows; "" keeps the default.
+  displayName: string;
 }
 
 // deriveCacheRates recomputes cache write/read from the input rate, but keeps a
@@ -111,6 +113,7 @@ export const makeDraftStep = (step?: Partial<ChainStep> & { provider: string; mo
   staticCacheReadPerM: numText(step?.static_cache_read_per_m),
   staticCacheWritePerM: numText(step?.static_cache_write_per_m),
   stepMarkup: numText(step?.markup_percent),
+  displayName: step?.display_name ?? "",
 });
 
 export type StaticStepPreview =
@@ -166,7 +169,7 @@ export const stepKey = (step: Pick<DraftChainStep, "provider" | "model" | "marke
 // value left over from the other source is never sent (the API rejects a
 // step with both a slug and a static price).
 export const stepPayload = (step: DraftChainStep): ChainStepPayload => {
-  const base = { provider: step.provider, model: step.model };
+  const base = { provider: step.provider, model: step.model, display_name: step.displayName.trim() };
   if (step.priceSource === "market") return { ...base, market_slug: step.marketSlug ?? "" };
   return {
     ...base,

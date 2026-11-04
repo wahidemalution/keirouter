@@ -109,7 +109,7 @@ test("stepPayload for a market step drops leftover static fields", () => {
 test("stepPayload for a static step clears a leftover slug", () => {
   const out = stepPayload({ ...staticDraft({ stepMarkup: "10" }), marketSlug: "y" });
   assert.deepEqual(out, {
-    provider: "openai", model: "gpt-4o", market_slug: "",
+    provider: "openai", model: "gpt-4o", display_name: "", market_slug: "",
     static_input_per_m: 0.5, static_output_per_m: 2,
     static_cache_read_per_m: null, static_cache_write_per_m: null, markup_percent: 10,
   });
@@ -154,4 +154,10 @@ test("autoMarketSlug pins Surplus providers by alias", () => {
   assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, "kimi-k3"), "surplus-trusted@openrouter:kimi-k3");
   assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, ""), "");
   assert.equal(autoMarketSlug(undefined, "kimi-k3"), "");
+});
+
+test("stepPayload sends the trimmed portal provider name", () => {
+  const out = stepPayload({ ...makeDraftStep({ provider: "openai", model: "gpt-4o", display_name: "Fast Lane" }), displayName: "  Fast Lane  " });
+  assert.equal(out.display_name, "Fast Lane");
+  assert.equal(makeDraftStep({ provider: "a", model: "b", display_name: "X" }).displayName, "X");
 });

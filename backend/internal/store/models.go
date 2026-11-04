@@ -284,7 +284,10 @@ type ChainStep struct {
 	// MarkupPercent overrides the chain markup for a static step. Nil follows
 	// the chain (then global) markup; 0 is an explicit no-markup override.
 	MarkupPercent *float64
-	CreatedAt     time.Time
+	// DisplayName is the provider name the portal shows for this step. Empty
+	// keeps the default: the Surplus label, then the provider's own name.
+	DisplayName string
+	CreatedAt   time.Time
 }
 
 // HasStaticPrice reports whether the step is billed at its own fixed price.
