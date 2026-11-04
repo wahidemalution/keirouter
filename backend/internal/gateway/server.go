@@ -78,6 +78,7 @@ type Server struct {
 	budgets          *store.BudgetRepo
 	budgetEngine     *budget.Engine
 	usage            *store.UsageRepo
+	localLatency     localLatencyCache
 	resources        *store.ResourceRepo
 	settings         *store.SettingsRepo
 	currencySvc      *currency.Service

@@ -104,7 +104,9 @@ func (s *Server) buildModelSettings(ctx context.Context, key store.APIKey, chain
 
 	rows := make([]modelSettingsRow, 0, len(chains))
 	for _, c := range chains {
-		rows = append(rows, s.modelSettingsRow(key, c, market.EffectiveMarkup(c.MarkupPercent, globalMarkup), names, latency))
+		row := s.modelSettingsRow(key, c, market.EffectiveMarkup(c.MarkupPercent, globalMarkup), names, latency)
+		s.fillMeasuredLatency(ctx, c, &row)
+		rows = append(rows, row)
 	}
 	return modelSettingsResponse{DefaultPct: key.MinDiscountPct, MaxPct: maxDiscountFloorPct, Models: rows}, nil
 }
