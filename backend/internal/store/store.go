@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver registered as "pgx"
@@ -39,6 +40,9 @@ type DB struct {
 	sql        *sql.DB
 	dialect    Dialect
 	sqlitePath string
+	// spendRollup is set once EnsureSpendRollup has installed and verified
+	// usage_spend_daily; spend queries read it only then.
+	spendRollup atomic.Bool
 }
 
 // Open connects using the given database configuration and verifies the

@@ -62,21 +62,31 @@ type Engine struct {
 	counter       Counter
 	counterTTL    time.Duration
 	counterPrefix string
-	deltas        chan Delta
+	deltas        chan deltaItem
 	deltaDropped  atomic.Int64
 	counterErrors atomic.Int64
 	// counterOpenUntil (unix nanos) routes reads to the usage table for a
 	// few seconds after a counter failure, so an unreachable redis costs one
 	// timeout per cooldown instead of one per request.
 	counterOpenUntil atomic.Int64
-	stopCounter      context.CancelFunc
-	counterDone      chan struct{}
-	log              *slog.Logger
+	// counterStaleUntil (unix nanos) routes reads to the usage table after an
+	// increment was lost, until the counters that may lack it re-seed.
+	counterStaleUntil atomic.Int64
+	stopCounter       context.CancelFunc
+	counterDone       chan struct{}
+	log               *slog.Logger
 
 	// reservations tracks estimated spend for in-flight requests, keyed by
 	// scope ID. Prevents concurrent requests from overshooting hard limits.
 	mu           sync.RWMutex
 	reservations map[string]*reservation // key: scopeID
+
+	// pending holds spend of metered rows not yet in the usage table (or,
+	// with shared counters, not yet in the counter), keyed like reservations.
+	// Without it a request finishing within the usage writer's flush interval
+	// is invisible to the next budget check.
+	pendMu  sync.Mutex
+	pending map[string]*pendingSpend
 
 	// budgetCache caches ListByScope results to avoid a DB round-trip on every
 	// request. Keyed by "scope_kind:scope_id". Invalidated on budget mutations.
@@ -245,11 +255,16 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 		spent := r.CostMicros
 		tokens := r.Tokens
 
-		// Include in-flight reservations in the spend calculation to
-		// prevent the TOCTOU race where concurrent requests all pass the
-		// budget check before any usage is recorded.
-		reserved := e.getReserved(b.ScopeKind, b.ScopeID)
-		spent += reserved
+		// Add rows metered but not yet visible in spend, then in-flight
+		// reservations, so concurrent and back-to-back requests cannot all
+		// pass the check before their usage is recorded.
+		nanos := r.CostNanos
+		if nanos == 0 && r.CostMicros != 0 {
+			nanos = r.CostMicros * 1000
+		}
+		pendNanos, pendTokens := e.getPending(b.ScopeKind, b.ScopeID)
+		spent = (nanos+pendNanos+500)/1000 + e.getReserved(b.ScopeKind, b.ScopeID)
+		tokens += pendTokens
 
 		dec.BudgetUsage = append(dec.BudgetUsage, BudgetUsage{
 			Budget:     b,
@@ -359,8 +374,9 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 }
 
 // Confirm replaces the reservation with the actual recorded cost. Call this
-// after meter.Record succeeds. The real usage is now in the database, so the
-// reservation is no longer needed.
+// after meter.Record succeeds. The row's spend is then counted as pending
+// until it is written (see UsagePending), so the reservation is no longer
+// needed.
 func (e *Engine) Confirm(scope Scope, actualMicros int64) {
 	e.releaseAll(scope)
 }

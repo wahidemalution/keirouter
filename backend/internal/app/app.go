@@ -124,6 +124,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err := db.Tenants().EnsureDefault(ctx); err != nil {
 		return nil, fmt.Errorf("app: ensure default tenant: %w", err)
 	}
+	ensureSpendRollup(ctx, db, cfg.Database.SpendRollup, log)
 
 	// Clear stale cooldowns left over from a previous session so accounts
 	// are immediately usable after a restart.
@@ -198,6 +199,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		mtr.AddRecordObserver(auditRec.ObserveUsage)
 	}
 	bud := budget.New(db.Budgets(), db.Usage())
+	// Spend of metered rows counts toward budgets before the async writer
+	// flushes them; see budget.Engine.UsagePending.
+	mtr.AddUsageTracker(bud)
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
 	// Refresh expiring OAuth access tokens just-in-time before each upstream
 	// call, persisting the rotated tokens.
@@ -615,7 +619,6 @@ func buildLimiter(ctx context.Context, cfg config.Config, bud *budget.Engine, mt
 		Logger:   log,
 	})
 	bud.EnableSharedCounter(budget.NewRedisCounter(client, cfg.Limits.RedisTimeout, log), cfg.Limits.BudgetCounterTTL, log)
-	mtr.AddRecordObserver(bud.ObserveUsage)
 	log.Info("limits: shared redis backend (rate limits, concurrency, budgets)",
 		"addr", ropts.Addr, "fail_mode", cfg.Limits.FailMode)
 	return rl, func() {
@@ -786,6 +789,11 @@ func (a *App) Run(ctx context.Context) error {
 				a.backupJob.Run(ctx)
 			}()
 		}
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.runSpendRollupCheck(ctx)
+		}()
 	}
 
 	errCh := make(chan error, 1)

@@ -165,7 +165,7 @@ func TestPostgresCompatibility(t *testing.T) {
 			{Kind: ScopeTenant, ScopeID: prefix + "-empty", Since: since},
 		})
 		require.NoError(t, err)
-		require.Equal(t, []SpendResult{{CostMicros: wantMicros, Tokens: 17}, {}}, batch)
+		require.Equal(t, []SpendResult{{CostMicros: wantMicros, CostNanos: 1_235_567, Tokens: 17}, {}}, batch)
 
 		sum, err := db.Usage().Summarize(ctx, prefix, since)
 		require.NoError(t, err)
