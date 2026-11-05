@@ -150,7 +150,7 @@ func TestKeyRoutingFallbackToggle(t *testing.T) {
 	last := res.Targets[len(res.Targets)-1]
 	require.True(t, last.ChainFallback)
 	require.Equal(t, "fb", last.Provider)
-	require.Equal(t, 5.0, last.InputPerM, "fallback billed at chain price")
+	require.Zero(t, last.InputPerM, "the chain price never bills the fallback")
 	require.Equal(t, 1, res.PlanOpts.PinnedTail)
 }
 

@@ -223,6 +223,17 @@ type Chain struct {
 	Strategy         string
 	FallbackProvider string
 	FallbackModel    string
+	// FallbackInputPerM/FallbackOutputPerM are the fallback model's provider
+	// price (USD per 1M). Both zero means the models.dev price of the fallback
+	// model; with neither, the fallback does not run. Empty cache rates derive
+	// from the input price like a static step.
+	FallbackInputPerM      float64
+	FallbackOutputPerM     float64
+	FallbackCacheReadPerM  *float64
+	FallbackCacheWritePerM *float64
+	// FallbackMarkupPercent is added on top of the fallback price. Nil means no
+	// markup: the global and chain markups never apply to the fallback.
+	FallbackMarkupPercent *float64
 	// DisplayProvider is the operator-chosen category shown in the public model
 	// catalog. Empty means the legacy "combo" sentinel.
 	DisplayProvider string

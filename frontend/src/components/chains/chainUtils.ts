@@ -1,5 +1,5 @@
 import { ListOrdered, Repeat2, type LucideIcon } from "lucide-react";
-import type { Chain, ChainStep, ChainStepPayload, Provider } from "../../lib/api";
+import type { Chain, ChainFallbackPrice, ChainFallbackPricePayload, ChainStep, ChainStepPayload, Provider } from "../../lib/api";
 // Explicit extension: the node:test runner (npm test) resolves ESM literally.
 import { ICONS } from "../../lib/icons.ts";
 
@@ -202,3 +202,63 @@ export const autoMarketSlug = (provider: Pick<Provider, "alias" | "base_url"> | 
   const surplus = surplusProviderOf(provider);
   return surplus && model.trim() ? `surplus-trusted@${surplus}:${model.trim()}` : "";
 };
+
+// FallbackPriceDraft is the editor state of a chain's final fallback price.
+export type FallbackPriceDraft = { inputPerM: string; outputPerM: string; cacheReadPerM: string; cacheWritePerM: string; markup: string };
+
+export const EMPTY_FALLBACK_PRICE: FallbackPriceDraft = { inputPerM: "", outputPerM: "", cacheReadPerM: "", cacheWritePerM: "", markup: "" };
+
+const draftNumber = (v: number | null | undefined) => (v === null || v === undefined || v === 0 ? "" : String(v));
+
+export const fallbackPriceDraft = (price: ChainFallbackPrice | null | undefined): FallbackPriceDraft =>
+  price
+    ? {
+        inputPerM: draftNumber(price.input_per_m),
+        outputPerM: draftNumber(price.output_per_m),
+        cacheReadPerM: draftNumber(price.cache_read_per_m),
+        cacheWritePerM: draftNumber(price.cache_write_per_m),
+        markup: price.markup_percent === null || price.markup_percent === undefined ? "" : String(price.markup_percent),
+      }
+    : EMPTY_FALLBACK_PRICE;
+
+export type FallbackPricePreview =
+  | { ok: true; source: "manual" | "models.dev"; markup: number; inputPerM: number; outputPerM: number; cacheReadPerM: number; cacheWritePerM: number }
+  | { ok: true; source: "none" }
+  | { ok: false; error: string };
+
+// fallbackPricePreview mirrors the gateway's priceChainFallback: the stored
+// price, else the models.dev price, plus only the fallback's own markup. An
+// empty cache read rate bills the full input price.
+export const fallbackPricePreview = (draft: FallbackPriceDraft, auto: { input_per_m: number; output_per_m: number } | null): FallbackPricePreview => {
+  const input = parseOptional(draft.inputPerM);
+  const output = parseOptional(draft.outputPerM);
+  const cacheRead = parseOptional(draft.cacheReadPerM);
+  const cacheWrite = parseOptional(draft.cacheWritePerM);
+  const markup = parseOptional(draft.markup) ?? 0;
+  if ([input ?? 0, output ?? 0, cacheRead ?? 0, cacheWrite ?? 0].some((v) => !Number.isFinite(v) || v < 0)) return { ok: false, error: "Prices must be 0 or more." };
+  if (!(Number.isFinite(markup) && markup >= 0 && markup <= 1000)) return { ok: false, error: "Markup must be between 0 and 1000." };
+  if (cacheRead === 0 || cacheWrite === 0) return { ok: false, error: "Cache prices must be above 0, or leave them empty." };
+  const manual = (input ?? 0) > 0 || (output ?? 0) > 0;
+  if (manual && !((input ?? 0) > 0 && (output ?? 0) > 0)) return { ok: false, error: "Enter both an input and output price, or leave both empty." };
+  const base = manual ? { input: input as number, output: output as number } : auto ? { input: auto.input_per_m, output: auto.output_per_m } : null;
+  if (!base) return { ok: true, source: "none" };
+  const mult = 1 + markup / 100;
+  return {
+    ok: true,
+    source: manual ? "manual" : "models.dev",
+    markup,
+    inputPerM: base.input * mult,
+    outputPerM: base.output * mult,
+    cacheReadPerM: (cacheRead ?? base.input) * mult,
+    cacheWritePerM: (cacheWrite ?? base.input * CACHE_WRITE_FACTOR) * mult,
+  };
+};
+
+// fallbackPricePayload is the API body for the fallback price.
+export const fallbackPricePayload = (draft: FallbackPriceDraft): ChainFallbackPricePayload => ({
+  input_per_m: parseOptional(draft.inputPerM) ?? 0,
+  output_per_m: parseOptional(draft.outputPerM) ?? 0,
+  cache_read_per_m: parseOptional(draft.cacheReadPerM) ?? null,
+  cache_write_per_m: parseOptional(draft.cacheWritePerM) ?? null,
+  markup_percent: parseOptional(draft.markup) ?? null,
+});

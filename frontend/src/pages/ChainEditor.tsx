@@ -11,11 +11,12 @@ import { Button, ErrorBanner, Field, IconTile, Input, Modal, ModalFooter, Sectio
 import { ICONS } from "../lib/icons";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { ChainModelPicker } from "../components/chains/ChainModelPicker";
+import { FallbackPriceFields } from "../components/chains/FallbackPriceFields";
 import { FieldMessage } from "../components/chains/FieldMessage";
 import { StepPriceSource } from "../components/chains/StepPriceSource";
 import { SurplusStepsAdder, type NewStep } from "../components/chains/SurplusStepsAdder";
 import { ChainRoutePreview, StepNumber } from "../components/chains/ChainRoutePreview";
-import { type ChainStrategy, type DraftChainStep, autoMarketSlug, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
+import { type ChainStrategy, type DraftChainStep, type FallbackPriceDraft, autoMarketSlug, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
 const parseMarketSlugs = (raw: string): string[] => {
   const seen = new Set<string>();
@@ -177,6 +178,7 @@ export function ChainEditorPage() {
   const [steps, setSteps] = useState<DraftChainStep[]>(() => [makeDraftStep()]);
   const [fallbackEnabled, setFallbackEnabled] = useState(false);
   const [fallback, setFallback] = useState<DraftChainStep>(() => makeDraftStep());
+  const [fallbackPrice, setFallbackPrice] = useState<FallbackPriceDraft>(() => fallbackPriceDraft(null));
   const [displayProvider, setDisplayProvider] = useState("");
   const [capOverrides, setCapOverrides] = useState<Record<CapKey, CapState>>({ reasoning: "auto", vision: "auto", tools: "auto" });
   const [newProviderOpen, setNewProviderOpen] = useState(false);
@@ -210,6 +212,7 @@ export function ChainEditorPage() {
     setOfficialManual(chain?.official_input_per_m != null && chain?.official_output_per_m != null);
     setOfficialInput(chain?.official_input_per_m != null ? String(chain.official_input_per_m) : "");
     setOfficialOutput(chain?.official_output_per_m != null ? String(chain.official_output_per_m) : "");
+    setFallbackPrice(fallbackPriceDraft(chain?.fallback_price));
     setPriceOpen(hasAnyPrice(chainPriceOf(chain)));
   };
 
@@ -278,7 +281,10 @@ export function ChainEditorPage() {
   const offered = hasMarketSlugs ? (existing?.input_per_m ?? 0) + (existing?.output_per_m ?? 0) : chainPrice.inputPerM + chainPrice.outputPerM;
   const officialPreview = officialRef && offered > 0 && offered < officialRef.input + officialRef.output ? Math.floor((1 - offered / (officialRef.input + officialRef.output)) * 100) : 0;
   const officialInvalid = officialManual && (invalidOfficialRate(officialInput) || invalidOfficialRate(officialOutput));
-  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : badStaticStep >= 0 ? `Fix the static price on step ${steps.indexOf(completeSteps[badStaticStep]) + 1}.` : needsPricing ? "Set both input and output price, or clear all price fields." : "";
+  // The models.dev price on the saved chain belongs to the saved fallback model only.
+  const fallbackAutoKnown = Boolean(existing && existing.fallback_provider === fallback.provider && existing.fallback_model === fallback.model);
+  const fallbackPreview = fallbackPricePreview(fallbackPrice, fallbackAutoKnown ? existing?.fallback_price?.auto ?? null : null);
+  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : fallbackEnabled && !fallbackPreview.ok ? `Fix the final fallback price: ${fallbackPreview.error}` : badStaticStep >= 0 ? `Fix the static price on step ${steps.indexOf(completeSteps[badStaticStep]) + 1}.` : needsPricing ? "Set both input and output price, or clear all price fields." : "";
   const valid = !validationMessage;
   const routeChain = useMemo(() => ({ id: existing?.id ?? "draft", name, strategy, steps: completeSteps.map((step, position) => ({ provider: step.provider, model: step.model, position } as ChainStep)), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" } as Chain), [completeSteps, existing?.id, fallback.model, fallback.provider, fallbackEnabled, name, strategy]);
 
@@ -301,7 +307,7 @@ export function ChainEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, markup_percent: markupEnabled ? markupNumber : null, official_input_per_m: officialManual ? officialInputNumber : null, official_output_per_m: officialManual ? officialOutputNumber : null, steps: completeSteps.map(stepPayload), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
+      const payload = { name: name.trim(), strategy, input_per_m: chainPrice.inputPerM, output_per_m: chainPrice.outputPerM, cache_write_per_m: chainPrice.cacheWritePerM, cache_read_per_m: chainPrice.cacheReadPerM, market_slugs: parseMarketSlugs(marketSlugs), reorder_by_market: reorderByMarket, markup_percent: markupEnabled ? markupNumber : null, official_input_per_m: officialManual ? officialInputNumber : null, official_output_per_m: officialManual ? officialOutputNumber : null, steps: completeSteps.map(stepPayload), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "", ...(fallbackEnabled ? { fallback_price: fallbackPricePayload(fallbackPrice) } : {}), display_provider: displayProvider, capability_overrides: serializeCapOverrides(capOverrides) };
       return isEdit ? api.updateChain(id!, payload) : api.createChain(payload);
     },
     onSuccess: () => {
@@ -726,6 +732,12 @@ export function ChainEditorPage() {
                     describedBy={fallbackError ? "chain-fallback-error" : undefined}
                   />
                   {fallbackError && <FieldMessage id="chain-fallback-error" tone={dirty ? "bad" : "muted"}>{fallbackError}</FieldMessage>}
+                  <FallbackPriceFields
+                    draft={fallbackPrice}
+                    preview={fallbackPreview}
+                    autoKnown={fallbackAutoKnown}
+                    onChange={(next) => { setFallbackPrice((current) => ({ ...current, ...next })); setDirty(true); }}
+                  />
                 </div>
               )}
             </div>

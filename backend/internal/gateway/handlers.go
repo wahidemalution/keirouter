@@ -1896,6 +1896,9 @@ func recordCostUSD(rec store.RecentRecord) float64 {
 // resolve.
 func resolveRejectCopy(model string, bad badModelError) (title, hint string) {
 	switch {
+	case bad.fallbackUnpriced:
+		return fmt.Sprintf("Rejected · model %q has only a final fallback with no price", model),
+			"No step of this chain can serve the key, and the final fallback has no price set and none on models.dev. Set the fallback price on the chain."
 	case bad.HTTPStatus() == http.StatusServiceUnavailable:
 		return fmt.Sprintf("Rejected · model %q is sold out", model),
 			"The chain is disabled on the Chains page, or no market offer currently clears its price floor."

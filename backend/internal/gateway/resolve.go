@@ -80,6 +80,9 @@ func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (re
 	if err != nil {
 		return res, err
 	}
+	if res, err = s.priceResolvedFallback(res, model); err != nil {
+		return res, err
+	}
 	// The customer's minimum discount (per model, else the key default)
 	// narrows the route to steps that can guarantee it. Models that cannot
 	// guarantee any discount are exempt: they run at their set price, so a
@@ -225,17 +228,7 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			// turned on for this key. Left out, nothing is pinned, so
 			// round-robin rotates every step.
 			if useFallback {
-				targets = append(targets, dispatch.Target{
-					Provider:       c.FallbackProvider,
-					Model:          c.FallbackModel,
-					InputPerM:      c.InputPerM,
-					OutputPerM:     c.OutputPerM,
-					CacheWritePerM: c.CacheWritePerM,
-					CacheReadPerM:  c.CacheReadPerM,
-
-					ChainFallback:       true,
-					FallbackFloorExempt: fallbackExempt,
-				})
+				targets = append(targets, chainFallbackTarget(c, fallbackExempt))
 				opts.PinnedTail = 1
 			}
 			return resolveResult{Targets: targets, PlanOpts: opts, DiscountCapable: chainCanGuaranteeDiscount(c)}, nil
@@ -563,6 +556,9 @@ type badModelError struct {
 	// noProvider marks the 422 for a model with no provider this key may
 	// use, so the console does not blame the discount floor.
 	noProvider bool
+	// fallbackUnpriced marks the 503 for a route left with only a fallback
+	// that has no price, so the console names the missing price.
+	fallbackUnpriced bool
 }
 
 func (e badModelError) Error() string { return e.msg }

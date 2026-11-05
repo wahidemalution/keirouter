@@ -2015,6 +2015,7 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 		if c.FallbackProvider != "" && c.FallbackModel != "" {
 			entry["fallback_provider"] = c.FallbackProvider
 			entry["fallback_model"] = c.FallbackModel
+			entry["fallback_price"] = s.chainFallbackPriceJSON(c)
 		}
 		out = append(out, entry)
 	}
@@ -2053,6 +2054,8 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		Maintenance         bool             `json:"maintenance"`
 		Hidden              bool             `json:"hidden"`
 		Steps               []chainStepInput `json:"steps"`
+		// FallbackPrice is the final fallback's own price; absent = none set.
+		FallbackPrice *chainFallbackPriceInput `json:"fallback_price"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -2130,6 +2133,12 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	if body.FallbackPrice != nil {
+		if msg := body.FallbackPrice.applyTo(&chain); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
 	for i, st := range body.Steps {
 		if _, ok := connectors.SpecByID(st.Provider); !ok {
 			writeError(w, http.StatusBadRequest, "unknown provider in step: "+st.Provider)
@@ -2188,6 +2197,8 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		OfficialInputPerM  json.RawMessage   `json:"official_input_per_m"`
 		OfficialOutputPerM json.RawMessage   `json:"official_output_per_m"`
 		Steps              *[]chainStepInput `json:"steps"`
+		// fallback_price: absent = unchanged, an object replaces the whole price.
+		FallbackPrice *chainFallbackPriceInput `json:"fallback_price"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -2271,6 +2282,12 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	if msg := validateOfficialPrice(existing.OfficialInputPerM, existing.OfficialOutputPerM); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
+	}
+	if body.FallbackPrice != nil {
+		if msg := body.FallbackPrice.applyTo(&existing); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 	if body.InputPerM != nil || body.OutputPerM != nil || body.CacheWritePerM != nil || body.CacheReadPerM != nil {
 		rates := []*float64{body.InputPerM, body.OutputPerM, body.CacheWritePerM, body.CacheReadPerM}

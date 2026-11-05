@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoMarketSlug, deriveCacheRates, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, deriveCacheRates, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -160,4 +160,32 @@ test("stepPayload sends the trimmed portal provider name", () => {
   const out = stepPayload({ ...makeDraftStep({ provider: "openai", model: "gpt-4o", display_name: "Fast Lane" }), displayName: "  Fast Lane  " });
   assert.equal(out.display_name, "Fast Lane");
   assert.equal(makeDraftStep({ provider: "a", model: "b", display_name: "X" }).displayName, "X");
+});
+
+test("fallbackPricePreview bills the manual price plus only the fallback markup", () => {
+  const got = fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10", markup: "20" }, { input_per_m: 9, output_per_m: 9 });
+  assert.ok(got.ok && got.source === "manual");
+  assert.equal(got.inputPerM, 3);
+  assert.equal(got.outputPerM, 12);
+  assert.equal(got.cacheReadPerM, 3, "empty cache read bills the full input price");
+});
+
+test("fallbackPricePreview uses models.dev with no markup when the price is empty", () => {
+  const got = fallbackPricePreview(EMPTY_FALLBACK_PRICE, { input_per_m: 2.5, output_per_m: 10 });
+  assert.ok(got.ok && got.source === "models.dev");
+  assert.equal(got.markup, 0);
+  assert.equal(got.inputPerM, 2.5);
+  assert.deepEqual(fallbackPricePreview(EMPTY_FALLBACK_PRICE, null), { ok: true, source: "none" });
+});
+
+test("fallbackPricePreview refuses half a price, a zero cache rate and a bad markup", () => {
+  assert.equal(fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, inputPerM: "1" }, null).ok, false);
+  assert.equal(fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, inputPerM: "1", outputPerM: "2", cacheReadPerM: "0" }, null).ok, false);
+  assert.equal(fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, markup: "1001" }, null).ok, false);
+});
+
+test("fallbackPricePayload sends null for empty optional fields and round-trips", () => {
+  const payload = fallbackPricePayload({ ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10" });
+  assert.deepEqual(payload, { input_per_m: 2.5, output_per_m: 10, cache_read_per_m: null, cache_write_per_m: null, markup_percent: null });
+  assert.deepEqual(fallbackPriceDraft({ ...payload, markup_percent: 0, auto: null }), { ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10", markup: "0" });
 });

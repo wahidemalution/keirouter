@@ -176,7 +176,7 @@ func TestServerResolveTargetsExemptsChainsWithoutDiscountGuarantee(t *testing.T)
 	}))
 	require.NoError(t, db.Chains().Create(ctx, store.Chain{
 		ID: "glm", TenantID: store.DefaultTenantID, Name: "glm", Strategy: "priority",
-		FallbackProvider: "openai", FallbackModel: "gpt-4o",
+		FallbackProvider: "openai", FallbackModel: "gpt-4o", FallbackInputPerM: 2.5, FallbackOutputPerM: 10,
 		Steps:     []store.ChainStep{{ID: "g1", Provider: "custom-openai-surplus", Model: "glm-5.3", MarketSlug: "surplus-trusted:glm-5.3", Position: 0}},
 		CreatedAt: now, UpdatedAt: now,
 	}))
@@ -253,6 +253,7 @@ func TestServerResolveTargetsFallbackUnderFloorBySetting(t *testing.T) {
 	require.NoError(t, db.Chains().Create(ctx, store.Chain{
 		ID: "glm", TenantID: store.DefaultTenantID, Name: "glm", Strategy: "round_robin",
 		InputPerM: 5, OutputPerM: 10, FallbackProvider: "openai", FallbackModel: "gpt-4o",
+		FallbackInputPerM: 3, FallbackOutputPerM: 6, FallbackMarkupPercent: ptrFloat(10),
 		Steps: []store.ChainStep{
 			{ID: "s1", Provider: "custom-openai-surplus", Model: "glm-5.3", MarketSlug: "surplus-trusted:glm-5.3", Position: 0},
 			{ID: "s2", Provider: "custom-openai-surplus-2", Model: "glm-5.3", MarketSlug: "surplus-trusted:glm-5.3", Position: 1},
@@ -281,7 +282,9 @@ func TestServerResolveTargetsFallbackUnderFloorBySetting(t *testing.T) {
 	last := res.Targets[2]
 	require.True(t, last.ChainFallback)
 	require.Equal(t, 0, last.MinDiscountPct)
-	require.Equal(t, 5.0, last.InputPerM, "fallback billed at chain price")
+	require.InDelta(t, 3.3, last.InputPerM, 1e-9, "fallback billed at its own price plus its markup")
+	require.InDelta(t, 3.3, last.MarketRateIn, 1e-9)
+	require.Equal(t, 3.0, last.UpstreamRateIn, "cost is the fallback price before markup")
 	require.Equal(t, 1, res.PlanOpts.PinnedTail)
 }
 

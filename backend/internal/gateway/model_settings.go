@@ -113,12 +113,16 @@ func (s *Server) buildModelSettings(ctx context.Context, key store.APIKey, chain
 
 func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float64, names map[string]string, latency map[string]map[string]*float64) modelSettingsRow {
 	row := modelSettingsRow{
-		Model:              c.Name,
-		Supported:          chainCanGuaranteeDiscount(c),
-		Providers:          []modelSettingsProvider{},
-		HasFallback:        c.FallbackProvider != "" && c.FallbackModel != "",
-		FallbackInputPerM:  c.InputPerM,
-		FallbackOutputPerM: c.OutputPerM,
+		Model:     c.Name,
+		Supported: chainCanGuaranteeDiscount(c),
+		Providers: []modelSettingsProvider{},
+	}
+	// A fallback without a price never runs, so the portal does not offer it.
+	if c.FallbackProvider != "" && c.FallbackModel != "" {
+		if fb, ok := s.priceChainFallback(chainFallbackTarget(c, false)); ok {
+			row.HasFallback = true
+			row.FallbackInputPerM, row.FallbackOutputPerM = fb.MarketRateIn, fb.MarketRateOut
+		}
 	}
 	if row.Supported {
 		row.EffectivePct = keyDiscountFloor(key, c.Name, row.Supported)
