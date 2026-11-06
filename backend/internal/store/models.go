@@ -411,6 +411,12 @@ type UsageRecord struct {
 	GuardrailMS        int
 	PonytailActive     bool // ponytail output injection was active
 
+	// EstPromptTokens and EstCostMicros are the budget engine's estimate
+	// made before dispatch (prompt with margin; prompt plus output
+	// allowance at the priciest target). Zero when none was made.
+	EstPromptTokens int
+	EstCostMicros   int64
+
 	CreatedAt time.Time
 }
 

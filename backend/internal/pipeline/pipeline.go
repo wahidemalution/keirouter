@@ -255,6 +255,14 @@ type Result struct {
 
 // Chat runs a non-streaming request through the full pipeline with fallback.
 func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options) (*Result, error) {
+	res, err := p.chat(ctx, req, opts)
+	// Backstop: drop the budget reservation if no path settled it. Release
+	// after Confirm is a no-op.
+	p.budgetRelease(budgetScopeOf(req.Metadata))
+	return res, err
+}
+
+func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options) (*Result, error) {
 	requestStarted := time.Now()
 	if err := p.preflight(ctx, req, opts); err != nil {
 		p.log.Debug("preflight rejected", "err", err)
@@ -263,7 +271,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	release, err := p.acquireLimit(ctx, req, opts)
 	if err != nil {
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeOf(req.Metadata)
 		p.budgetRelease(scope)
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
 		return nil, err
@@ -279,7 +287,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	// non-fallbackable — different providers won't change a safety decision.
 	if gres := p.guardrails.Inbound(ctx, req); gres.Action == guardrails.ActionBlock {
 		p.log.Debug("guardrails blocked inbound", "reason", gres.Reason)
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeOf(req.Metadata)
 		p.budgetRelease(scope)
 		err := &core.ProviderError{Kind: core.ErrPolicyBlocked, Message: gres.Reason}
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
@@ -295,7 +303,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	if hit, ok := p.cacheLookup(ctx, vec); ok {
 		p.log.Debug("cache hit, skipping upstream")
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeOf(req.Metadata)
 		p.budgetRelease(scope)
 		attempt := attemptForTargets(opts.Targets)
 		if hit.Model != "" {
@@ -336,7 +344,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	p.log.Debug("dispatcher planned", "attempts", len(attempts), "required", required)
 
-	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+	scope := budgetScopeOf(req.Metadata)
 	var lastErr error
 	var lastAttempt dispatch.Attempt
 	var lastLatency time.Duration
@@ -706,6 +714,16 @@ func streamRateLimitWait(pe *core.ProviderError, retries int, budget time.Durati
 // fallbackable, the pipeline may re-plan after a short wait. Explicit upstream
 // reset times and account-wide Kiro limits are returned immediately.
 func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Options) (*StreamResult, error) {
+	sr, err := p.stream(ctx, req, opts)
+	if err != nil {
+		// Backstop: a failed stream must not keep its budget reservation. On
+		// success the stream's own completion settles it.
+		p.budgetRelease(budgetScopeOf(req.Metadata))
+	}
+	return sr, err
+}
+
+func (p *Pipeline) stream(ctx context.Context, req *core.ChatRequest, opts Options) (*StreamResult, error) {
 	requestStarted := time.Now()
 	if err := p.preflight(ctx, req, opts); err != nil {
 		p.log.Debug("stream preflight rejected", "err", err)
@@ -714,7 +732,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	}
 	release, err := p.acquireLimit(ctx, req, opts)
 	if err != nil {
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeOf(req.Metadata)
 		p.budgetRelease(scope)
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
 		return nil, err
@@ -737,7 +755,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	// dispatch guard. Strippable modalities (vision, audio) are soft-degraded
 	// by modality stripping in the attempt loop below.
 	required := capability.HardRequired(req)
-	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+	scope := budgetScopeOf(req.Metadata)
 	attempts, err := p.planWithCooldownRetry(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
 		p.log.Debug("stream dispatcher plan failed", "err", err)
@@ -791,7 +809,9 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		}
 		// Re-reserve budget if it was released by streamExec (not-fallbackable path).
 		if budgetReleased {
-			if rerr := p.budget.Reserve(ctx, scope, 0); rerr != nil {
+			rerr := p.reserveBudget(ctx, req, opts.Targets)
+			scope = budgetScopeOf(req.Metadata)
+			if rerr != nil {
 				release(limits.Refund)
 				status, errorKind := terminalStatusAndKind(rerr)
 				p.recordOutcomeWithTTFT(context.WithoutCancel(ctx), req.Metadata, lastAttempt, core.Usage{},
@@ -1611,17 +1631,102 @@ func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Op
 			req.Metadata.ServiceTier = tier
 		}
 	}
-	if p.budget != nil {
-		scope := budget.Scope{
-			TenantID:  req.Metadata.TenantID,
-			ProjectID: req.Metadata.ProjectID,
-			APIKeyID:  req.Metadata.APIKeyID,
-		}
-		if err := p.budget.Reserve(ctx, scope, 0); err != nil {
-			return err
-		}
+	return p.reserveBudget(ctx, req, opts.Targets)
+}
+
+// budgetEstimateMargin pads the prompt estimate. The token heuristic is
+// calibrated to o200k; other tokenizers (Claude's in particular) count more
+// tokens for the same text, and an estimate that runs low lets a request
+// spend past the balance.
+const budgetEstimateMargin = 1.25
+
+// budgetOutputAllowance is the output a request reserves for when the client
+// sets no smaller max_tokens. Agents ask for 32k+ max_tokens but most replies
+// are a few hundred tokens; reserving the full max would lock small balances
+// out, so this covers typical replies and longer ones settle on completion.
+const budgetOutputAllowance = 2048
+
+// reserveBudget reserves the request's estimated cost against its budgets and
+// records the reservation on req.Metadata. The prompt is billed by the
+// upstream before the first output token, so this is the point where an
+// unaffordable request must be refused.
+func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, targets []dispatch.Target) error {
+	req.Metadata.BudgetReservation = 0
+	if p.budget == nil {
+		return nil
 	}
+	prompt, micros := p.estimateRequest(req, targets)
+	req.Metadata.BudgetEstPromptTokens, req.Metadata.BudgetEstMicros = prompt, micros
+	id, err := p.budget.Reserve(ctx, budgetScopeOf(req.Metadata), micros)
+	if err != nil {
+		return err
+	}
+	req.Metadata.BudgetReservation = id
 	return nil
+}
+
+// estimateRequest returns the padded prompt token estimate and the request's
+// cost estimate: that prompt, uncached, plus the output allowance at the most
+// expensive target, since fallback may land on any of them.
+func (p *Pipeline) estimateRequest(req *core.ChatRequest, targets []dispatch.Target) (promptTokens int, micros int64) {
+	if p.meter == nil {
+		return 0, 0
+	}
+	prompt := int(math.Ceil(float64(core.EstimatePromptTokens(req)) * budgetEstimateMargin))
+	if prompt <= 0 {
+		return 0, 0
+	}
+	output := budgetOutputAllowance
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		output = min(output, *req.MaxTokens)
+	}
+	var worst int64
+	for _, t := range targets {
+		ev := targetPriceEvent(t, req.Metadata.ServiceTier)
+		ev.Usage = core.Usage{PromptTokens: prompt, CompletionTokens: output}
+		worst = max(worst, p.meter.QuoteMicros(ev))
+	}
+	return prompt, worst
+}
+
+// budgetScopeOf is the budget scope of a request, carrying its reservation.
+func budgetScopeOf(meta core.RequestMetadata) budget.Scope {
+	return budget.Scope{
+		TenantID:    meta.TenantID,
+		ProjectID:   meta.ProjectID,
+		APIKeyID:    meta.APIKeyID,
+		Reservation: meta.BudgetReservation,
+	}
+}
+
+// targetPriceEvent carries a target's prices into a meter event. Billing and
+// the pre-dispatch budget estimate both build on it, so they price alike.
+func targetPriceEvent(t dispatch.Target, serviceTier string) meter.Event {
+	return meter.Event{
+		Provider:               t.Provider,
+		Model:                  t.Model,
+		ServiceTier:            serviceTier,
+		InputPerM:              t.InputPerM,
+		OutputPerM:             t.OutputPerM,
+		CacheWritePerM:         t.CacheWritePerM,
+		CacheReadPerM:          t.CacheReadPerM,
+		MarketSlug:             t.MarketSlug,
+		StaticPrice:            t.StaticPrice,
+		MarketRateIn:           t.MarketRateIn,
+		MarketRateOut:          t.MarketRateOut,
+		MarketCacheReadRate:    t.MarketCacheReadRate,
+		MarketCacheWriteRate:   t.MarketCacheWriteRate,
+		MarketReasoningRate:    t.MarketReasoningRate,
+		UpstreamRateIn:         t.UpstreamRateIn,
+		UpstreamRateOut:        t.UpstreamRateOut,
+		UpstreamCacheReadRate:  t.UpstreamCacheReadRate,
+		UpstreamCacheWriteRate: t.UpstreamCacheWriteRate,
+		UpstreamReasoningRate:  t.UpstreamReasoningRate,
+		CheapestRateIn:         t.InputPerM,
+		BillUpstreamCost:       t.BillUpstreamCost,
+		UpstreamCostMult:       t.UpstreamCostMult,
+		MinChargeMicro:         t.MinChargeMicro,
+	}
 }
 
 // budgetConfirm releases the reservation after successful metering.
@@ -2070,48 +2175,25 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 	if usage.Source == "" && usage.PromptTokens+usage.CompletionTokens > 0 {
 		usage.Source = core.UsageSourceProvider
 	}
-	ev := meter.Event{
-		RequestID:              meta.RequestID,
-		TenantID:               meta.TenantID,
-		ProjectID:              meta.ProjectID,
-		APIKeyID:               meta.APIKeyID,
-		ChainID:                meta.ChainID,
-		InputPerM:              attempt.Target.InputPerM,
-		OutputPerM:             attempt.Target.OutputPerM,
-		CacheWritePerM:         attempt.Target.CacheWritePerM,
-		CacheReadPerM:          attempt.Target.CacheReadPerM,
-		MarketSlug:             attempt.Target.MarketSlug,
-		StaticPrice:            attempt.Target.StaticPrice,
-		MarketRateIn:           attempt.Target.MarketRateIn,
-		MarketRateOut:          attempt.Target.MarketRateOut,
-		MarketCacheReadRate:    attempt.Target.MarketCacheReadRate,
-		MarketCacheWriteRate:   attempt.Target.MarketCacheWriteRate,
-		MarketReasoningRate:    attempt.Target.MarketReasoningRate,
-		UpstreamRateIn:         attempt.Target.UpstreamRateIn,
-		UpstreamRateOut:        attempt.Target.UpstreamRateOut,
-		UpstreamCacheReadRate:  attempt.Target.UpstreamCacheReadRate,
-		UpstreamCacheWriteRate: attempt.Target.UpstreamCacheWriteRate,
-		UpstreamReasoningRate:  attempt.Target.UpstreamReasoningRate,
-		CheapestRateIn:         attempt.Target.InputPerM,
-		BillUpstreamCost:       attempt.Target.BillUpstreamCost,
-		UpstreamCostMult:       attempt.Target.UpstreamCostMult,
-		MinChargeMicro:         attempt.Target.MinChargeMicro,
-		FallbackCount:          meta.FallbackCount,
-		ServiceTier:            meta.ServiceTier,
-		Guardrail:              meta.Guardrail.Summary(),
-		Provider:               attempt.Target.Provider,
-		Model:                  attempt.Target.Model,
-		AccountID:              attempt.Account.ID,
-		Client:                 meta.ClientKind,
-		Status:                 status,
-		ErrorKind:              errorKind,
-		Usage:                  usage,
-		UsageSource:            string(usage.Source),
-		CacheHit:               cacheHit,
-		Latency:                upstreamLatency,
-		EndToEndLatency:        endToEndLatency,
-		TTFT:                   ttft,
-	}
+	ev := targetPriceEvent(attempt.Target, meta.ServiceTier)
+	ev.EstPromptTokens, ev.EstCostMicros = meta.BudgetEstPromptTokens, meta.BudgetEstMicros
+	ev.RequestID = meta.RequestID
+	ev.TenantID = meta.TenantID
+	ev.ProjectID = meta.ProjectID
+	ev.APIKeyID = meta.APIKeyID
+	ev.ChainID = meta.ChainID
+	ev.FallbackCount = meta.FallbackCount
+	ev.Guardrail = meta.Guardrail.Summary()
+	ev.AccountID = attempt.Account.ID
+	ev.Client = meta.ClientKind
+	ev.Status = status
+	ev.ErrorKind = errorKind
+	ev.Usage = usage
+	ev.UsageSource = string(usage.Source)
+	ev.CacheHit = cacheHit
+	ev.Latency = upstreamLatency
+	ev.EndToEndLatency = endToEndLatency
+	ev.TTFT = ttft
 	if save != nil {
 		ev.SlimStats = save.slimSnap
 		ev.SlimActive = save.slim

@@ -48,7 +48,7 @@ func TestMediaEndpointDoesNotDebitBudget(t *testing.T) {
 	// A budget far smaller than any real image cost, hard cutoff enabled.
 	// Kept at/above the $0.05 minimum-key-balance gate so the metered chat
 	// sanity call below is admitted; it is still too small to fund an image.
-	require.NoError(t, h.gateway.db.Budgets().Create(ctx, store.Budget{
+	require.NoError(t, h.db.Budgets().Create(ctx, store.Budget{
 		ID:          "media-budget",
 		TenantID:    adminTenant,
 		ScopeKind:   store.ScopeAPIKey,
@@ -74,7 +74,7 @@ func TestMediaEndpointDoesNotDebitBudget(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode, "image generation should succeed")
 
 	// ...but records no spend for the key, so the budget is never debited.
-	spent, _, err := h.gateway.usage.SpendAndTokens(ctx, store.ScopeAPIKey, key.ID, time.Time{})
+	spent, _, err := h.db.Usage().SpendAndTokens(ctx, store.ScopeAPIKey, key.ID, time.Time{})
 	require.NoError(t, err)
 	require.Equal(t, int64(0), spent, "media call must not have recorded spend (documents the bypass)")
 }

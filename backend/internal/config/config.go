@@ -80,6 +80,10 @@ type DatabaseConfig struct {
 	// proxies or load balancers expire them. ConnMaxIdleTime bounds idle sockets.
 	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime"`
 	ConnMaxIdleTime time.Duration `koanf:"conn_max_idle_time"`
+	// SpendRollup answers budget spend queries from the per-day totals in
+	// usage_spend_daily instead of summing every usage row. Set false to go
+	// back to summing usage_records directly.
+	SpendRollup bool `koanf:"spend_rollup"`
 }
 
 // SecurityConfig holds auth and encryption settings.
@@ -473,6 +477,7 @@ func Default() Config {
 			MaxIdleConns:    0,
 			ConnMaxLifetime: 30 * time.Minute,
 			ConnMaxIdleTime: 5 * time.Minute,
+			SpendRollup:     true,
 		},
 		Security: SecurityConfig{
 			SessionTTL:            24 * time.Hour,

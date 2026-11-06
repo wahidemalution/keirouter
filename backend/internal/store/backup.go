@@ -172,6 +172,13 @@ func (db *DB) RestoreBackup(ctx context.Context, b Backup) (RestoreStats, error)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if db.dialect == DialectPostgres {
+		// The rollup is rebuilt from the restored rows below, so skip the
+		// per-row trigger work for this transaction.
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('`+skipSpendRollupSetting+`', 'on', true)`); err != nil {
+			return RestoreStats{}, fmt.Errorf("store: restore: %w", err)
+		}
+	}
 	for i := len(tables) - 1; i >= 0; i-- {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+quoteIdent(tables[i])); err != nil {
 			return RestoreStats{}, fmt.Errorf("store: clear %s: %w", tables[i], err)
@@ -230,6 +237,9 @@ func (db *DB) RestoreBackup(ctx context.Context, b Backup) (RestoreStats, error)
 		if _, err := tx.ExecContext(ctx, db.rebind(seed)); err != nil {
 			return RestoreStats{}, fmt.Errorf("store: seed key routing: %w", err)
 		}
+	}
+	if err := rebuildSpendRollup(ctx, tx); err != nil {
+		return RestoreStats{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return RestoreStats{}, err
@@ -339,7 +349,9 @@ func (db *DB) backupTables(ctx context.Context) ([]string, error) {
 			rows.Close()
 			return nil, err
 		}
-		if n != "schema_migrations" {
+		// The spend rollup is derived from usage_records; restore rebuilds it
+		// rather than copying it.
+		if n != "schema_migrations" && n != spendRollupTable {
 			names = append(names, n)
 		}
 	}

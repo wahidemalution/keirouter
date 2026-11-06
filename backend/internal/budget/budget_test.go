@@ -78,7 +78,7 @@ func TestMinKeyBalanceGate(t *testing.T) {
 				scope.TenantID = tc.scopeID
 			}
 
-			err := eng.Reserve(ctx, scope, 1)
+			_, err := eng.Reserve(ctx, scope, 1)
 			if !tc.wantAllowed {
 				require.Error(t, err)
 			} else {

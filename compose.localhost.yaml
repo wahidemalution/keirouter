@@ -19,6 +19,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       # Kunci 127.0.0.1: format "IP:host_port:container_port" agar Docker
       # hanya listen di loopback host. Jangan ubah ke "20180:20180"
@@ -72,11 +74,41 @@ services:
       KEIROUTER_HEALTH__ENABLED: ${KEIROUTER_HEALTH__ENABLED:-false}
       KEIROUTER_DATABASE__DRIVER: postgres
       KEIROUTER_DATABASE__DSN: "postgres://keirouter:${POSTGRES_PASSWORD:-keirouter}@postgres:5432/keirouter?sslmode=disable"
+      # Budget spend dibaca dari tabel ringkasan harian (usage_spend_daily).
+      # Set false untuk kembali menjumlahkan usage_records langsung.
+      KEIROUTER_DATABASE__SPEND_ROLLUP: ${KEIROUTER_DATABASE__SPEND_ROLLUP:-true}
+      # Penghitung budget di Redis: cek budget per request membaca Redis,
+      # bukan SUM ke Postgres. Rate limit tetap ikut limits.enabled (default
+      # off). Set KEIROUTER_LIMITS__BACKEND=memory untuk mematikan.
+      KEIROUTER_LIMITS__BACKEND: ${KEIROUTER_LIMITS__BACKEND:-redis}
+      KEIROUTER_LIMITS__REDIS_URL: ${KEIROUTER_LIMITS__REDIS_URL:-redis://redis:6379/0}
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # SENGAJA tidak ada `ports:`. Isinya hanya cache penghitung yang selalu
+    # bisa dihitung ulang dari Postgres, jadi tanpa persistence. Saat memori
+    # penuh, key ber-TTL (penghitung) dibuang dan dihitung ulang dari DB.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     # SENGAJA tidak ada `ports:` -> tidak terekspos ke host/LAN sama sekali.
+    # Default Postgres hanya 128MB shared_buffers. Sesuaikan lewat .env
+    # dengan RAM host (umumnya ~15-25% RAM).
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}
+    shm_size: 256mb
     environment:
       POSTGRES_USER: keirouter
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-keirouter}

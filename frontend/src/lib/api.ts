@@ -2785,32 +2785,38 @@ export interface HostingFinanceMonth {
   refund_idr: number;
 }
 
-export type HostingCostCategory = "vps" | "domain" | "software" | "other";
-export type HostingCostPeriod = "monthly" | "one_time";
+export type CostPaymentCategory = "vps" | "upstream_ai" | "domain" | "software" | "other";
+export type CostPaymentMethod = "debit_card" | "credit_card" | "bank_transfer" | "crypto";
+export type CostCurrency = "USD" | "IDR";
 
-export interface HostingCost {
+/** One paid operating cost. paid_at is when it was recorded. A USD payment
+ * keeps the USD->IDR rate of that moment, so amount_idr never changes. */
+export interface CostPayment {
   id: string;
   name: string;
-  category: HostingCostCategory;
+  category: CostPaymentCategory;
+  provider: string;
+  currency: CostCurrency;
+  /** Set for USD payments only. */
+  amount_usd: number | null;
+  usd_idr_rate: number | null;
   amount_idr: number;
-  period: HostingCostPeriod;
-  /** YYYY-MM-DD */
-  start_date: string;
-  /** "" or YYYY-MM-DD */
-  end_date: string;
+  payment_method: CostPaymentMethod;
+  paid_at: string;
   note: string;
   created_at: string;
   updated_at: string;
-  this_month_idr: number;
 }
 
-export interface HostingCostInput {
+export interface CostPaymentInput {
   name: string;
-  category: HostingCostCategory;
-  amount_idr: number;
-  period: HostingCostPeriod;
-  start_date: string;
-  end_date?: string;
+  category: CostPaymentCategory;
+  provider?: string;
+  /** Fixed once saved; ignored on update. */
+  currency: CostCurrency;
+  /** Dollars for USD, whole rupiah for IDR. */
+  amount: number;
+  payment_method: CostPaymentMethod;
   note?: string;
 }
 
@@ -2830,7 +2836,7 @@ export interface HostingFinance {
   totals: { revenue_idr: number; cost_idr: number; profit_idr: number };
   status_counts: Record<string, number>;
   refunds_needed: { order_id: string; amount_idr: number; paid_at: string; instance_id: string }[] | null;
-  costs: HostingCost[];
+  costs: CostPayment[];
   note: string;
 }
 
@@ -2979,9 +2985,9 @@ export const api = {
     request<HostingCoupon>("PUT", `/hosting/coupons/${encodeURIComponent(id)}`, body),
   deleteHostingCoupon: (id: string) => request<{ deleted: boolean }>("DELETE", `/hosting/coupons/${encodeURIComponent(id)}`),
   hostingFinance: (months: number) => request<HostingFinance>("GET", `/hosting/finance?months=${months}`),
-  createHostingCost: (body: HostingCostInput) => request<HostingCost>("POST", "/hosting/costs", body),
-  updateHostingCost: (id: string, body: HostingCostInput) => request<HostingCost>("PUT", `/hosting/costs/${encodeURIComponent(id)}`, body),
-  deleteHostingCost: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
+  createCostPayment: (body: CostPaymentInput) => request<CostPayment>("POST", "/hosting/costs", body),
+  updateCostPayment: (id: string, body: CostPaymentInput) => request<CostPayment>("PUT", `/hosting/costs/${encodeURIComponent(id)}`, body),
+  deleteCostPayment: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
 
   // Finance monitor (admin): credit, revenue and provider cost.
   financeReport: (range: FinanceRange, custom?: FinanceCustomRange) => {

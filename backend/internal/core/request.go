@@ -154,6 +154,14 @@ type RequestMetadata struct {
 	// RequestID is generated at the gateway edge and propagated through the
 	// pipeline so audit log rows can be correlated with usage records.
 	RequestID string
+	// BudgetReservation is the budget engine's reservation id for this
+	// request, set by the pipeline preflight. Zero means none.
+	BudgetReservation uint64
+	// BudgetEstPromptTokens and BudgetEstMicros are the estimate that
+	// reservation was made with, stored on the usage row for comparison
+	// with the billed usage.
+	BudgetEstPromptTokens int
+	BudgetEstMicros       int64
 	// Provider is the resolved upstream provider alias (openai, anthropic, ...).
 	// Populated by the gateway after dispatcher target resolution; used by the
 	// guardrails resolver for provider-scoped policy lookup.

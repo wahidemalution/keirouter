@@ -33,10 +33,26 @@ type Delta struct {
 // Counters are a cache of the usage table: a missing counter is seeded from
 // it, and each counter expires after a TTL and is seeded again, which bounds
 // any drift from increments lost to a crash or a full queue.
+//
+// Seeding is two steps so no spend falls between the table read and the
+// counter: BeginSeed creates an empty counter that already collects
+// increments, the usage table is read, and Seed adds that reading. Increments
+// are only sent for rows already in the table, so a row is either in the
+// reading, or arrives as an increment after BeginSeed, or both (counted
+// twice until the next re-seed, the safe direction for a spend limit).
 type Counter interface {
+	// Load returns the seeded counters; a counter still being seeded reads
+	// as not found.
 	Load(ctx context.Context, keys []string) ([]CounterValue, error)
-	// Seed creates a counter unless one already exists.
-	Seed(ctx context.Context, key string, v CounterValue, ttl time.Duration) error
+	// BeginSeed creates an empty, unseeded counter for each key that has
+	// none, expiring after ttl unless Seed completes it. It returns each
+	// key's counter token: a reading taken after BeginSeed is valid only for
+	// the counter with that token.
+	BeginSeed(ctx context.Context, keys []string, ttl time.Duration) ([]string, error)
+	// Seed adds v to the counter with the given token and marks it seeded
+	// with the given ttl. It does nothing if that counter is already seeded,
+	// gone, or was replaced by a newer one.
+	Seed(ctx context.Context, key, token string, v CounterValue, ttl time.Duration) error
 	// Add increments counters that exist; deltas for missing ones are dropped
 	// because the next seed reads them from the usage table.
 	Add(ctx context.Context, deltas []Delta) error
@@ -56,11 +72,26 @@ func counterKey(prefix string, kind store.BudgetScope, scopeID string, since tim
 	return prefix + "{" + string(kind) + ":" + scopeID + "}:" + period
 }
 
+// A counter is a hash: "c" cost nanos, "t" tokens, "g" the token BeginSeed
+// gave it, and "s" once seeded.
+var beginSeedScript = redis.NewScript(`
+local g = redis.call('HGET', KEYS[1], 'g')
+if g then
+  return g
+end
+redis.call('DEL', KEYS[1])
+redis.call('HSET', KEYS[1], 'c', 0, 't', 0, 'g', ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[1])
+return ARGV[2]
+`)
+
 var seedScript = redis.NewScript(`
-if redis.call('EXISTS', KEYS[1]) == 1 then
+if redis.call('HGET', KEYS[1], 'g') ~= ARGV[4] or redis.call('HEXISTS', KEYS[1], 's') == 1 then
   return 0
 end
-redis.call('HSET', KEYS[1], 'c', ARGV[1], 't', ARGV[2])
+redis.call('HINCRBY', KEYS[1], 'c', ARGV[1])
+redis.call('HINCRBY', KEYS[1], 't', ARGV[2])
+redis.call('HSET', KEYS[1], 's', 1)
 redis.call('PEXPIRE', KEYS[1], ARGV[3])
 return 1
 `)
@@ -101,7 +132,7 @@ func (c *RedisCounter) Load(ctx context.Context, keys []string) ([]CounterValue,
 	cmds := make([]*redis.SliceCmd, len(keys))
 	_, err := c.client.Pipelined(ctx, func(p redis.Pipeliner) error {
 		for i, k := range keys {
-			cmds[i] = p.HMGet(ctx, k, "c", "t")
+			cmds[i] = p.HMGet(ctx, k, "c", "t", "s")
 		}
 		return nil
 	})
@@ -111,7 +142,7 @@ func (c *RedisCounter) Load(ctx context.Context, keys []string) ([]CounterValue,
 	out := make([]CounterValue, len(keys))
 	for i, cmd := range cmds {
 		vals := cmd.Val()
-		if len(vals) != 2 || vals[0] == nil {
+		if len(vals) != 3 || vals[0] == nil || vals[2] == nil {
 			continue
 		}
 		out[i].Found = true
@@ -130,13 +161,46 @@ func parseRedisInt(v any) int64 {
 	return n
 }
 
+// BeginSeed implements Counter in one pipelined round trip.
+func (c *RedisCounter) BeginSeed(ctx context.Context, keys []string, ttl time.Duration) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if err := beginSeedScript.Load(ctx, c.client).Err(); err != nil {
+		return nil, err
+	}
+	cmds := make([]*redis.Cmd, len(keys))
+	_, err := c.client.Pipelined(ctx, func(p redis.Pipeliner) error {
+		for i, k := range keys {
+			cmds[i] = beginSeedScript.EvalSha(ctx, p, []string{k}, ttl.Milliseconds(), newSeedToken())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	tokens := make([]string, len(keys))
+	for i, cmd := range cmds {
+		if tokens[i], err = cmd.Text(); err != nil {
+			return nil, err
+		}
+	}
+	return tokens, nil
+}
+
+func newSeedToken() string {
+	return strconv.FormatUint(rand.Uint64(), 36) + strconv.FormatUint(rand.Uint64(), 36)
+}
+
 // Seed implements Counter. The TTL gets ±10% jitter so counters seeded
 // together do not all expire, and hit the database, at the same moment.
-func (c *RedisCounter) Seed(ctx context.Context, key string, v CounterValue, ttl time.Duration) error {
+func (c *RedisCounter) Seed(ctx context.Context, key, token string, v CounterValue, ttl time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	jitter := time.Duration(rand.Int64N(int64(ttl)/5+1)) - ttl/10
-	return seedScript.Run(ctx, c.client, []string{key}, v.CostNanos, v.Tokens, (ttl + jitter).Milliseconds()).Err()
+	return seedScript.Run(ctx, c.client, []string{key}, v.CostNanos, v.Tokens, (ttl + jitter).Milliseconds(), token).Err()
 }
 
 // Add implements Counter in one pipelined round trip.
