@@ -203,3 +203,24 @@ func TestRestorePre0061BackupSeedsKeptFallback(t *testing.T) {
 	require.Empty(t, got.AllowedProviders)
 	require.Empty(t, got.DisabledProviders)
 }
+
+func TestBackupRoundTripCostPayments(t *testing.T) {
+	ctx := context.Background()
+	src := newTestDB(t)
+	paid := time.Date(2026, 11, 5, 3, 4, 5, 0, time.UTC)
+	want := CostPayment{
+		ID: "p1", Name: "OpenRouter credit", Category: "upstream_ai", Provider: "OpenRouter",
+		Currency: CurrencyUSD, AmountUSDCents: 1250, USDIDRRate: 16234.5, AmountIDR: 202931,
+		PaymentMethod: "crypto", PaidAt: paid, Note: "top-up", CreatedAt: paid, UpdatedAt: paid,
+	}
+	require.NoError(t, src.CostPayments().Create(ctx, want))
+
+	b, err := src.ExportBackup(ctx)
+	require.NoError(t, err)
+	dst := newTestDB(t)
+	_, err = dst.RestoreBackup(ctx, roundTripJSON(t, b))
+	require.NoError(t, err)
+	got, err := dst.CostPayments().Get(ctx, "p1")
+	require.NoError(t, err)
+	require.Equal(t, want, got, "the saved rate and rupiah amount survive a restore unchanged")
+}

@@ -20,32 +20,6 @@ func RefundRequired(o store.PaymentOrder) bool {
 	return strings.HasPrefix(o.Reason, "refund_required")
 }
 
-// CostInMonth returns what c costs in the month starting at monthStart (the
-// first day of the month, in Zone).
-func CostInMonth(c store.HostingCost, monthStart time.Time) int64 {
-	start, err := time.ParseInLocation("2006-01-02", c.StartDate, Zone)
-	if err != nil {
-		return 0
-	}
-	monthEnd := monthStart.AddDate(0, 1, 0)
-	if c.Period == store.CostOneTime {
-		if !start.Before(monthStart) && start.Before(monthEnd) {
-			return c.AmountIDR
-		}
-		return 0
-	}
-	if !start.Before(monthEnd) {
-		return 0
-	}
-	if c.EndDate != "" {
-		end, err := time.ParseInLocation("2006-01-02", c.EndDate, Zone)
-		if err == nil && end.Before(monthStart) {
-			return 0
-		}
-	}
-	return c.AmountIDR
-}
-
 // MonthFinance is one month of hosting revenue and cost.
 type MonthFinance struct {
 	Month      string `json:"month"`
@@ -59,7 +33,7 @@ type MonthFinance struct {
 // Months builds the last n months (oldest first) ending with the month of
 // now. Revenue is settled hosting orders by paid month; refunds are paid
 // orders for deleted instances.
-func Months(orders []store.PaymentOrder, costs []store.HostingCost, now time.Time, n int) []MonthFinance {
+func Months(orders []store.PaymentOrder, costs []store.CostPayment, now time.Time, n int) []MonthFinance {
 	if n < 1 {
 		n = 1
 	}
@@ -71,8 +45,11 @@ func Months(orders []store.PaymentOrder, costs []store.HostingCost, now time.Tim
 		m := first.AddDate(0, i, 0)
 		out[i].Month = m.Format("2006-01")
 		idx[out[i].Month] = i
-		for _, c := range costs {
-			out[i].CostIDR += CostInMonth(c, m)
+	}
+	// A payment counts in the month it was paid.
+	for _, c := range costs {
+		if i, ok := idx[MonthKey(c.PaidAt)]; ok {
+			out[i].CostIDR += c.AmountIDR
 		}
 	}
 	for _, o := range orders {
