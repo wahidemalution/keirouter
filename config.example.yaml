@@ -20,6 +20,9 @@ server:
     - "*"
   # Maximum inbound API request body size in bytes (default: 128 MiB).
   max_request_body_bytes: 134217728
+  # Maximum /v1/* requests in flight at once, across all API keys (default: 100).
+  # When full, new requests get an immediate 503. 0 also means 100.
+  max_concurrent_requests: 100
 
 database:
   # "sqlite" (default, zero-config) or "postgres".

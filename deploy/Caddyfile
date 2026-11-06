@@ -19,7 +19,7 @@ DOMAIN {
 
 	# Selaras KEIROUTER_SERVER__MAX_REQUEST_BODY_BYTES (default 128 MiB).
 	request_body {
-		max_size 128MB
+		max_size 128MiB
 	}
 
 	header {

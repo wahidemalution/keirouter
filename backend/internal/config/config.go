@@ -62,8 +62,8 @@ type ServerConfig struct {
 	// are replaced by DefaultMaxRequestBodyBytes.
 	MaxRequestBodyBytes int64 `koanf:"max_request_body_bytes"`
 	// MaxConcurrentRequests caps in-flight API requests to prevent resource
-	// exhaustion. Zero or negative means unlimited (not recommended for
-	// high-traffic deployments). Default: 100.
+	// exhaustion. Zero or negative falls back to 100; the cap cannot be
+	// turned off.
 	MaxConcurrentRequests int `koanf:"max_concurrent_requests"`
 }
 
