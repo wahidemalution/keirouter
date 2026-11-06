@@ -14,6 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { ChainRoutePreview } from "../components/chains/ChainRoutePreview";
 import { strategyIcon, strategyLabel } from "../components/chains/chainUtils";
 import { fmtRate } from "../components/ModelCatalog";
+import { chainVendor } from "../lib/chainVendor";
 
 type StrategyFilter = "all" | "priority" | "round_robin" | "latency" | "cost";
 type HealthFilter = "all" | "healthy" | "degraded" | "unhealthy" | "unknown";
@@ -36,13 +37,6 @@ const HEALTH_FILTERS: { value: HealthFilter; label: string }[] = [
 
 const matchesStrategyFilter = (chain: Chain, strategy: StrategyFilter) =>
   strategy === "all" || chain.strategy === strategy || (strategy === "round_robin" && chain.strategy === "round-robin");
-
-// A chain uses a provider when any step or the final fallback routes to it.
-const chainProviders = (chain: Chain) => {
-  const ids = new Set(chain.steps.map((step) => step.provider));
-  if (chain.fallback_provider) ids.add(chain.fallback_provider);
-  return ids;
-};
 
 type BulkAction = "sold_out" | "on_sale" | "maintenance" | "enable" | "hide" | "show";
 
@@ -454,6 +448,7 @@ export function ChainsPage() {
   const [bulkRunning, setBulkRunning] = useState<BulkAction | null>(null);
   const chainsQuery = useQuery({ queryKey: ["chains"], queryFn: () => api.listChains() });
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), staleTime: 300_000 });
+  const categoriesQuery = useQuery({ queryKey: ["provider-categories"], queryFn: () => api.listProviderCategories(), staleTime: 300_000 });
   const healthQuery = useQuery({ queryKey: ["health-chains", "24h"], queryFn: () => api.healthChains("24h"), staleTime: 30_000, retry: 1 });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteChain(id),
@@ -497,29 +492,33 @@ export function ChainsPage() {
     },
     onError: (error: Error) => toast.error("Couldn't update the chain", error.message),
   });
+  const vendorByID = useMemo(() => {
+    const labels = new Map((categoriesQuery.data?.categories ?? []).map((category) => [category.id.toLowerCase(), category.label]));
+    return new Map((chainsQuery.data?.chains ?? []).map((chain) => [chain.id, chainVendor(chain, labels)]));
+  }, [chainsQuery.data, categoriesQuery.data]);
   const healthByID = useMemo(() => new Map((healthQuery.data?.chains ?? []).map((item) => [item.chain_id, item])), [healthQuery.data]);
   const allChains = chainsQuery.data?.chains ?? [];
   const chains = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return (chainsQuery.data?.chains ?? []).filter((chain) => {
-      const matchesQuery = !normalizedQuery || [chain.name, chain.strategy, ...chain.steps.map((step) => `${step.provider}/${step.model}`)].join(" ").toLowerCase().includes(normalizedQuery);
+      const matchesQuery = !normalizedQuery || [chain.name, chain.strategy, vendorByID.get(chain.id)?.label ?? "", ...chain.steps.map((step) => `${step.provider}/${step.model}`)].join(" ").toLowerCase().includes(normalizedQuery);
       const matchesStrategy = matchesStrategyFilter(chain, strategy);
       const matchesHealth = healthFilter === "all" || healthByID.get(chain.id)?.status === healthFilter;
-      const matchesProvider = providerFilter === "all" || chainProviders(chain).has(providerFilter);
+      const matchesProvider = providerFilter === "all" || vendorByID.get(chain.id)?.id === providerFilter;
       return matchesQuery && matchesStrategy && matchesHealth && matchesProvider;
     });
-  }, [chainsQuery.data, healthByID, healthFilter, providerFilter, query, strategy]);
-  // Providers that appear in at least one chain, with how many chains use each.
+  }, [chainsQuery.data, healthByID, healthFilter, providerFilter, query, strategy, vendorByID]);
+  // Model vendors (DeepSeek, Anthropic, OpenAI) with how many chains each has.
+  // "Other" sorts last.
   const providerOptions = useMemo(() => {
-    const names = new Map((providersQuery.data?.providers ?? []).map((provider) => [provider.id, provider.display_name || provider.id]));
-    const counts = new Map<string, number>();
-    for (const chain of chainsQuery.data?.chains ?? []) {
-      for (const id of chainProviders(chain)) counts.set(id, (counts.get(id) ?? 0) + 1);
+    const options = new Map<string, { id: string; name: string; count: number }>();
+    for (const vendor of vendorByID.values()) {
+      const option = options.get(vendor.id) ?? { id: vendor.id, name: vendor.label, count: 0 };
+      option.count += 1;
+      options.set(vendor.id, option);
     }
-    return [...counts.entries()]
-      .map(([id, count]) => ({ id, name: names.get(id) ?? id, count }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [chainsQuery.data, providersQuery.data]);
+    return [...options.values()].sort((a, b) => Number(a.id === "other") - Number(b.id === "other") || a.name.localeCompare(b.name));
+  }, [vendorByID]);
 
   // Selection follows the filters: a chain filtered out of view is dropped
   // from the selection, so a bulk action never touches rows you can't see.
