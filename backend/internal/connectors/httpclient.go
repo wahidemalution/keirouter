@@ -928,7 +928,7 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		kind = core.ErrQuotaExhausted
 		if wait := githubMonthlyUsageRetryAfter(provider, resp.StatusCode, body, time.Now()); wait > 0 {
 			retryAfter = wait
-		} else {
+		} else if !isSurplusInsufficientCredit(resp, body) {
 			creditsExhausted = true
 		}
 	case resp.StatusCode == http.StatusNotFound:
@@ -1025,6 +1025,23 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 }
 
 const githubMonthlyUsageLimitMessage = "you've reached your additional usage limit for your plan"
+
+// isSurplusInsufficientCredit reports a Surplus 402 insufficient_credit.
+// Surplus holds the worst-case cost of every in-flight request against the
+// buyer balance and answers this code when the holds leave too little free
+// balance, which clears within seconds. A truly dry balance gets the same
+// code, so it takes the ordinary quota cooldown instead of the 24h park and
+// is re-checked when that cooldown ends.
+func isSurplusInsufficientCredit(resp *http.Response, body []byte) bool {
+	if resp.Request == nil || resp.Request.URL == nil {
+		return false
+	}
+	host := strings.ToLower(resp.Request.URL.Hostname())
+	if host != "surplusintelligence.ai" && !strings.HasSuffix(host, ".surplusintelligence.ai") {
+		return false
+	}
+	return strings.Contains(string(body), `"insufficient_credit"`)
+}
 
 // githubMonthlyUsageRetryAfter identifies GitHub Copilot's resettable monthly
 // premium-request limit. It is intentionally narrow: unrelated HTTP 402
