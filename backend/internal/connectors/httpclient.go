@@ -892,6 +892,7 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 	kind := core.ErrUpstream
 	var retryAfter time.Duration
 	var creditsExhausted bool
+	var quotaCooldown time.Duration
 	var scope core.FailureScope
 	switch {
 	// inferhub: no seller asks at or below the request's bid cap. The price
@@ -928,7 +929,9 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		kind = core.ErrQuotaExhausted
 		if wait := githubMonthlyUsageRetryAfter(provider, resp.StatusCode, body, time.Now()); wait > 0 {
 			retryAfter = wait
-		} else if !isSurplusInsufficientCredit(resp, body) {
+		} else if isSurplusInsufficientCredit(resp, body) {
+			quotaCooldown = surplusBalanceHoldCooldown
+		} else {
 			creditsExhausted = true
 		}
 	case resp.StatusCode == http.StatusNotFound:
@@ -1011,6 +1014,7 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		Message:          truncateError(body),
 		RetryAfter:       retryAfter,
 		CreditsExhausted: creditsExhausted,
+		QuotaCooldown:    quotaCooldown,
 	}
 	// Honour Retry-After on every status (503 "overloaded, retry in 2s" is
 	// common). Transient hints are capped so a single odd header cannot park
@@ -1026,11 +1030,16 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 
 const githubMonthlyUsageLimitMessage = "you've reached your additional usage limit for your plan"
 
+// surplusBalanceHoldCooldown is how long a Surplus account rests after a 402
+// insufficient_credit. Holds clear within seconds, so this is short; a truly
+// dry balance is re-checked at the same pace.
+const surplusBalanceHoldCooldown = 5 * time.Minute
+
 // isSurplusInsufficientCredit reports a Surplus 402 insufficient_credit.
 // Surplus holds the worst-case cost of every in-flight request against the
 // buyer balance and answers this code when the holds leave too little free
 // balance, which clears within seconds. A truly dry balance gets the same
-// code, so it takes the ordinary quota cooldown instead of the 24h park and
+// code, so it takes surplusBalanceHoldCooldown instead of the 24h park and
 // is re-checked when that cooldown ends.
 func isSurplusInsufficientCredit(resp *http.Response, body []byte) bool {
 	if resp.Request == nil || resp.Request.URL == nil {

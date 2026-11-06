@@ -443,6 +443,7 @@ func TestHTTPStatusError_Surplus402InsufficientCreditIsNotTerminal(t *testing.T)
 	require.Equal(t, core.ErrQuotaExhausted, pe.Kind)
 	require.Equal(t, core.FailureScopeAccount, pe.EffectiveScope())
 	require.False(t, pe.CreditsExhausted, "a Surplus balance hold must get the short quota cooldown, not the 24h park")
+	require.Equal(t, 5*time.Minute, pe.QuotaCooldown)
 	require.True(t, pe.Fallbackable())
 }
 
@@ -458,4 +459,5 @@ func TestHTTPStatusError_402InsufficientCreditElsewhereStaysTerminal(t *testing.
 
 	require.Equal(t, core.ErrQuotaExhausted, pe.Kind)
 	require.True(t, pe.CreditsExhausted)
+	require.Zero(t, pe.QuotaCooldown)
 }
