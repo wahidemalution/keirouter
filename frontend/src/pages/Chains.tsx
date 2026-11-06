@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { AlertTriangle, Ban, Copy, Eye, EyeOff, MoreHorizontal, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Trash2, X } from "lucide-react";
@@ -7,13 +7,14 @@ import { api, type Chain, type HealthChainRow, type Provider } from "../lib/api"
 import { dashboard } from "../lib/dashboardRoutes";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
-import { Badge, Button, EmptyState, ErrorBanner, SectionTitle, Skeleton } from "../components/ui";
+import { Badge, Button, EmptyState, ErrorBanner, SectionTitle, Select, Skeleton } from "../components/ui";
 import { ICONS } from "../lib/icons";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { ChainRoutePreview } from "../components/chains/ChainRoutePreview";
 import { strategyIcon, strategyLabel } from "../components/chains/chainUtils";
 import { fmtRate } from "../components/ModelCatalog";
+import { chainVendor } from "../lib/chainVendor";
 
 type StrategyFilter = "all" | "priority" | "round_robin" | "latency" | "cost";
 type HealthFilter = "all" | "healthy" | "degraded" | "unhealthy" | "unknown";
@@ -36,6 +37,96 @@ const HEALTH_FILTERS: { value: HealthFilter; label: string }[] = [
 
 const matchesStrategyFilter = (chain: Chain, strategy: StrategyFilter) =>
   strategy === "all" || chain.strategy === strategy || (strategy === "round_robin" && chain.strategy === "round-robin");
+
+type BulkAction = "sold_out" | "on_sale" | "maintenance" | "enable" | "hide" | "show";
+
+type BulkActionSpec = {
+  label: string;
+  icon: typeof Ban;
+  // Only chains that would actually change are sent.
+  needs: (chain: Chain) => boolean;
+  patch: { disabled?: boolean; maintenance?: boolean; hidden?: boolean };
+  confirm?: { title: (count: number) => string; description: ReactNode; confirmLabel: string };
+  done: string;
+};
+
+const BULK_ACTIONS: Record<BulkAction, BulkActionSpec> = {
+  sold_out: {
+    label: "Mark sold out",
+    icon: Ban,
+    needs: (chain) => !chain.disabled,
+    patch: { disabled: true },
+    confirm: {
+      title: (count) => `Mark ${count} chain${count === 1 ? "" : "s"} sold out?`,
+      description: "The catalog shows them as sold out and calls to them are refused right away. You can put them back on sale from this bar or the row menu.",
+      confirmLabel: "Mark sold out",
+    },
+    done: "marked sold out",
+  },
+  on_sale: {
+    label: "Put back on sale",
+    icon: RotateCcw,
+    needs: (chain) => Boolean(chain.disabled),
+    patch: { disabled: false },
+    done: "back on sale",
+  },
+  maintenance: {
+    label: "Disable for maintenance",
+    icon: PowerOff,
+    needs: (chain) => !chain.maintenance,
+    patch: { maintenance: true },
+    confirm: {
+      title: (count) => `Disable ${count} chain${count === 1 ? "" : "s"} for maintenance?`,
+      description: "Calls to them are refused right away with a temporarily disabled error, and they are left out of the portal, landing page and catalog. You can enable them again from this bar or the row menu.",
+      confirmLabel: "Disable chains",
+    },
+    done: "disabled for maintenance",
+  },
+  enable: {
+    label: "Enable",
+    icon: Power,
+    needs: (chain) => Boolean(chain.maintenance),
+    patch: { maintenance: false },
+    done: "enabled",
+  },
+  hide: {
+    label: "Hide from portal and catalog",
+    icon: EyeOff,
+    needs: (chain) => !chain.hidden,
+    patch: { hidden: true },
+    done: "hidden from the portal and catalog",
+  },
+  show: {
+    label: "Show in portal and catalog",
+    icon: Eye,
+    needs: (chain) => Boolean(chain.hidden),
+    patch: { hidden: false },
+    done: "shown in the portal and catalog",
+  },
+};
+
+const BULK_ORDER: BulkAction[] = ["sold_out", "on_sale", "maintenance", "enable", "hide", "show"];
+
+// Requests go out a few at a time so a large selection doesn't flood the API.
+const BULK_CONCURRENCY = 5;
+
+const checkboxClass = "h-4 w-4 cursor-pointer rounded border-input accent-accent-500";
+
+// SelectBox pads the native checkbox to a 24×24 target (WCAG 2.5.8).
+function SelectBox({ checked, indeterminate = false, onChange, label, className }: { checked: boolean; indeterminate?: boolean; onChange: () => void; label: string; className?: string }) {
+  return (
+    <label className={cn("inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded", className)} onClick={(event) => event.stopPropagation()}>
+      <input
+        type="checkbox"
+        checked={checked}
+        ref={(node) => { if (node) node.indeterminate = indeterminate; }}
+        onChange={onChange}
+        aria-label={label}
+        className={checkboxClass}
+      />
+    </label>
+  );
+}
 
 const statusDot = (status?: HealthChainRow["status"]) => {
   switch (status) {
@@ -137,6 +228,8 @@ type ChainRowProps = {
   chain: Chain;
   providers: Provider[];
   health?: HealthChainRow;
+  selected: boolean;
+  onSelect: () => void;
   onOpen: () => void;
   onCopy: () => void;
   onDelete: () => void;
@@ -251,7 +344,7 @@ function ChainPricing({ chain }: { chain: Chain }) {
 
 // ChainCard is the below-md rendering of a chain row: identity + health on
 // the first line, the route on the second, key facts and the menu last.
-function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden }: ChainRowProps) {
+function ChainCard({ chain, providers, health, selected, onSelect, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden }: ChainRowProps) {
   const hasIssue = health?.status === "degraded" || health?.status === "unhealthy";
   const facts = [
     strategyLabel(chain.strategy),
@@ -260,9 +353,10 @@ function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggl
     health ? `${health.fallback_rate.toFixed(1)}% fallback` : null,
   ].filter(Boolean).join(" · ");
   return (
-    <li className="space-y-2 px-4 py-3">
+    <li className={cn("space-y-2 px-4 py-3", selected && "bg-subtle")}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <SelectBox checked={selected} onChange={onSelect} label={`Select ${chain.name}`} />
+        <div className="min-w-0 flex-1">
           <Link
             to={dashboard(`/chains/${chain.id}/edit`)}
             className="block truncate rounded-sm text-[13px] leading-6 font-medium text-fg hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
@@ -289,12 +383,15 @@ function ChainCard({ chain, providers, health, onOpen, onCopy, onDelete, onToggl
   );
 }
 
-function ChainRow({ chain, providers, health, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden }: ChainRowProps) {
+function ChainRow({ chain, providers, health, selected, onSelect, onOpen, onCopy, onDelete, onToggleSale, onToggleMaintenance, onToggleHidden }: ChainRowProps) {
   const hasIssue = health?.status === "degraded" || health?.status === "unhealthy";
   const StrategyIcon = strategyIcon(chain.strategy);
   const stop = (event: MouseEvent) => event.stopPropagation();
   return (
-    <tr className="cursor-pointer transition-colors hover:bg-hover" onClick={onOpen}>
+    <tr className={cn("cursor-pointer transition-colors hover:bg-hover", selected && "bg-subtle")} onClick={onOpen}>
+      <td className="w-10 py-2.5 pl-3 pr-0" onClick={stop}>
+        <SelectBox checked={selected} onChange={onSelect} label={`Select ${chain.name}`} />
+      </td>
       <td className="max-w-[260px] px-4 py-2.5">
         <Link
           to={dashboard(`/chains/${chain.id}/edit`)}
@@ -346,8 +443,12 @@ export function ChainsPage() {
   const [query, setQuery] = useState("");
   const [strategy, setStrategy] = useState<StrategyFilter>("all");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRunning, setBulkRunning] = useState<BulkAction | null>(null);
   const chainsQuery = useQuery({ queryKey: ["chains"], queryFn: () => api.listChains() });
   const providersQuery = useQuery({ queryKey: ["providers"], queryFn: () => api.providers(), staleTime: 300_000 });
+  const categoriesQuery = useQuery({ queryKey: ["provider-categories"], queryFn: () => api.listProviderCategories(), staleTime: 300_000 });
   const healthQuery = useQuery({ queryKey: ["health-chains", "24h"], queryFn: () => api.healthChains("24h"), staleTime: 30_000, retry: 1 });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.deleteChain(id),
@@ -391,17 +492,98 @@ export function ChainsPage() {
     },
     onError: (error: Error) => toast.error("Couldn't update the chain", error.message),
   });
+  const vendorByID = useMemo(() => {
+    const labels = new Map((categoriesQuery.data?.categories ?? []).map((category) => [category.id.toLowerCase(), category.label]));
+    return new Map((chainsQuery.data?.chains ?? []).map((chain) => [chain.id, chainVendor(chain, labels)]));
+  }, [chainsQuery.data, categoriesQuery.data]);
   const healthByID = useMemo(() => new Map((healthQuery.data?.chains ?? []).map((item) => [item.chain_id, item])), [healthQuery.data]);
   const allChains = chainsQuery.data?.chains ?? [];
   const chains = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return (chainsQuery.data?.chains ?? []).filter((chain) => {
-      const matchesQuery = !normalizedQuery || [chain.name, chain.strategy, ...chain.steps.map((step) => `${step.provider}/${step.model}`)].join(" ").toLowerCase().includes(normalizedQuery);
+      const matchesQuery = !normalizedQuery || [chain.name, chain.strategy, vendorByID.get(chain.id)?.label ?? "", ...chain.steps.map((step) => `${step.provider}/${step.model}`)].join(" ").toLowerCase().includes(normalizedQuery);
       const matchesStrategy = matchesStrategyFilter(chain, strategy);
       const matchesHealth = healthFilter === "all" || healthByID.get(chain.id)?.status === healthFilter;
-      return matchesQuery && matchesStrategy && matchesHealth;
+      const matchesProvider = providerFilter === "all" || vendorByID.get(chain.id)?.id === providerFilter;
+      return matchesQuery && matchesStrategy && matchesHealth && matchesProvider;
     });
-  }, [chainsQuery.data, healthByID, healthFilter, query, strategy]);
+  }, [chainsQuery.data, healthByID, healthFilter, providerFilter, query, strategy, vendorByID]);
+  // Model vendors (DeepSeek, Anthropic, OpenAI) with how many chains each has.
+  // "Other" sorts last.
+  const providerOptions = useMemo(() => {
+    const options = new Map<string, { id: string; name: string; count: number }>();
+    for (const vendor of vendorByID.values()) {
+      const option = options.get(vendor.id) ?? { id: vendor.id, name: vendor.label, count: 0 };
+      option.count += 1;
+      options.set(vendor.id, option);
+    }
+    return [...options.values()].sort((a, b) => Number(a.id === "other") - Number(b.id === "other") || a.name.localeCompare(b.name));
+  }, [vendorByID]);
+
+  // Selection follows the filters: a chain filtered out of view is dropped
+  // from the selection, so a bulk action never touches rows you can't see.
+  useEffect(() => {
+    setSelected((previous) => {
+      if (previous.size === 0) return previous;
+      const visible = new Set(chains.map((chain) => chain.id));
+      const next = new Set([...previous].filter((id) => visible.has(id)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [chains]);
+  const selectedChains = chains.filter((chain) => selected.has(chain.id));
+  const allSelected = chains.length > 0 && selectedChains.length === chains.length;
+  const someSelected = selectedChains.length > 0 && !allSelected;
+  const toggleSelected = (id: string) => setSelected((previous) => {
+    const next = new Set(previous);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(chains.map((chain) => chain.id)));
+
+  const runBulk = async (action: BulkAction) => {
+    const spec = BULK_ACTIONS[action];
+    const targets = selectedChains.filter(spec.needs);
+    if (targets.length === 0) return;
+    if (spec.confirm) {
+      const ok = await confirmAction({
+        title: spec.confirm.title(targets.length),
+        description: (
+          <>
+            {spec.confirm.description}
+            <span className="mt-2 block font-mono text-[12px] text-fg">
+              {targets.slice(0, 5).map((chain) => `chain:${chain.name}`).join(", ")}
+              {targets.length > 5 ? ` and ${targets.length - 5} more` : ""}
+            </span>
+          </>
+        ),
+        confirmLabel: spec.confirm.confirmLabel,
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setBulkRunning(action);
+    const failed: string[] = [];
+    try {
+      for (let index = 0; index < targets.length; index += BULK_CONCURRENCY) {
+        const batch = targets.slice(index, index + BULK_CONCURRENCY);
+        const results = await Promise.allSettled(batch.map((chain) => api.updateChain(chain.id, spec.patch)));
+        results.forEach((result, position) => { if (result.status === "rejected") failed.push(batch[position].name); });
+      }
+    } finally {
+      setBulkRunning(null);
+      queryClient.invalidateQueries({ queryKey: ["chains"] });
+    }
+    const updated = targets.length - failed.length;
+    if (failed.length === 0) {
+      toast.success(`${updated} chain${updated === 1 ? "" : "s"} ${spec.done}`);
+    } else {
+      toast.error(
+        `${failed.length} of ${targets.length} chains not updated`,
+        `Failed: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? ` and ${failed.length - 5} more` : ""}. Try those again.`,
+      );
+    }
+  };
   const strategyCounts = useMemo(() => {
     const list = chainsQuery.data?.chains ?? [];
     return Object.fromEntries(STRATEGY_FILTERS.map((f) => [f.value, list.filter((chain) => matchesStrategyFilter(chain, f.value)).length])) as Record<StrategyFilter, number>;
@@ -410,7 +592,7 @@ export function ChainsPage() {
     const list = chainsQuery.data?.chains ?? [];
     return Object.fromEntries(HEALTH_FILTERS.map((f) => [f.value, f.value === "all" ? list.length : list.filter((chain) => healthByID.get(chain.id)?.status === f.value).length])) as Record<HealthFilter, number>;
   }, [chainsQuery.data, healthByID]);
-  const filtersActive = Boolean(query || strategy !== "all" || healthFilter !== "all");
+  const filtersActive = Boolean(query || strategy !== "all" || healthFilter !== "all" || providerFilter !== "all");
   const providers = providersQuery.data?.providers ?? [];
   const isEmpty = !chainsQuery.isLoading && !chainsQuery.isError && allChains.length === 0;
 
@@ -467,6 +649,7 @@ export function ChainsPage() {
     setQuery("");
     setStrategy("all");
     setHealthFilter("all");
+    setProviderFilter("all");
   };
 
   return (
@@ -518,6 +701,19 @@ export function ChainsPage() {
                 </button>
               )}
             </div>
+            <label className="flex items-center gap-2 sm:w-auto">
+              <span className="shrink-0 text-[12px] font-medium text-fg-muted">Provider</span>
+              <Select
+                value={providerFilter}
+                onChange={(event) => setProviderFilter(event.target.value)}
+                className="h-9 min-h-9 py-0 pl-2.5 pr-7 text-[12.5px] sm:w-56"
+              >
+                <option value="all">All providers</option>
+                {providerOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.name} ({option.count})</option>
+                ))}
+              </Select>
+            </label>
             <FilterGroup
               label="Filter by strategy"
               value={strategy}
@@ -559,10 +755,59 @@ export function ChainsPage() {
               />
               <span className="sr-only" role="status">{filtersActive ? `${chains.length} of ${allChains.length} chains shown` : ""}</span>
             </div>
+            {selectedChains.length > 0 && (
+              <div role="group" aria-label="Bulk actions" aria-busy={bulkRunning !== null} className="flex flex-wrap items-center gap-2 border-b border-line bg-subtle px-4 py-2 text-[12.5px]">
+                <span role="status" className="w-full font-medium tabular-nums text-fg sm:mr-1 sm:w-auto">
+                  {selectedChains.length} selected{bulkRunning ? ", updating…" : ""}
+                </span>
+                {BULK_ORDER.map((action) => {
+                  const spec = BULK_ACTIONS[action];
+                  const count = selectedChains.filter(spec.needs).length;
+                  if (count === 0) return null;
+                  const Icon = spec.icon;
+                  return (
+                    <Button
+                      key={action}
+                      variant="secondary"
+                      className="h-8 min-h-8 text-[12.5px]"
+                      disabled={bulkRunning !== null}
+                      onClick={() => runBulk(action)}
+                    >
+                      <Icon strokeWidth={1.75} aria-hidden="true" />
+                      {spec.label}
+                      {count !== selectedChains.length && <span className="tabular-nums text-fg-muted">{count}</span>}
+                    </Button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setSelected(new Set())}
+                  disabled={bulkRunning !== null}
+                  className="inline-flex h-8 items-center rounded-lg px-2 text-fg-muted transition-colors hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-50"
+                >
+                  Clear selection
+                </button>
+              </div>
+            )}
             {chains.length === 0 ? (
               <EmptyState icon={Search} title="No chains match" hint="Clear the search or a filter to see every chain." />
             ) : (
               <>
+                {/* Phones have no table header, so select-all lives here. */}
+                <div className="flex items-center border-b border-line px-4 py-1.5 md:hidden">
+                  <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-[12.5px] text-fg-muted">
+                    <span className="inline-flex h-6 w-6 items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={(node) => { if (node) node.indeterminate = someSelected; }}
+                        onChange={toggleAll}
+                        className={checkboxClass}
+                      />
+                    </span>
+                    {filtersActive ? "Select all shown chains" : "Select all chains"}
+                  </label>
+                </div>
                 <ul className="divide-y divide-line md:hidden" aria-label="Chains">
                   {chains.map((chain) => (
                     <ChainCard
@@ -570,20 +815,30 @@ export function ChainsPage() {
                       chain={chain}
                       providers={providers}
                       health={healthByID.get(chain.id)}
+                      selected={selected.has(chain.id)}
+                      onSelect={() => toggleSelected(chain.id)}
                       onOpen={() => navigate(dashboard(`/chains/${chain.id}/edit`))}
                       onCopy={() => copyTarget(chain)}
                       onDelete={() => deleteChain(chain)}
-                          onToggleSale={() => toggleSale(chain)}
-                          onToggleMaintenance={() => toggleMaintenance(chain)}
-                          onToggleHidden={() => toggleHidden(chain)}
+                      onToggleSale={() => toggleSale(chain)}
+                      onToggleMaintenance={() => toggleMaintenance(chain)}
+                      onToggleHidden={() => toggleHidden(chain)}
                     />
                   ))}
                 </ul>
                 <div className="hidden overflow-x-auto md:block">
-                  <table className="w-full min-w-[980px] text-[13px]">
+                  <table className="w-full min-w-[1020px] text-[13px]">
                     <caption className="sr-only">Chains, with health for the last 24 hours</caption>
                     <thead>
                       <tr className="border-b border-line bg-subtle text-left text-[12px] text-fg-muted">
+                        <th scope="col" className="w-10 py-1 pl-3 pr-0">
+                          <SelectBox
+                            checked={allSelected}
+                            indeterminate={someSelected}
+                            onChange={toggleAll}
+                            label={filtersActive ? "Select all shown chains" : "Select all chains"}
+                          />
+                        </th>
                         <th scope="col" className="px-4 py-2 font-medium">Chain</th>
                         <th scope="col" className="px-4 py-2 font-medium">Strategy</th>
                         <th scope="col" className="px-4 py-2 font-medium">Route</th>
@@ -601,6 +856,8 @@ export function ChainsPage() {
                           chain={chain}
                           providers={providers}
                           health={healthByID.get(chain.id)}
+                          selected={selected.has(chain.id)}
+                          onSelect={() => toggleSelected(chain.id)}
                           onOpen={() => navigate(dashboard(`/chains/${chain.id}/edit`))}
                           onCopy={() => copyTarget(chain)}
                           onDelete={() => deleteChain(chain)}
