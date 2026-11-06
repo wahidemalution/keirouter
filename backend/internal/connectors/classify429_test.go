@@ -427,3 +427,37 @@ func TestHTTPStatusErrorSurplusConfigErrors(t *testing.T) {
 		})
 	}
 }
+
+// Surplus reserves the worst-case cost of every in-flight request against the
+// buyer balance. When those holds leave too little free balance it answers
+// 402 insufficient_credit even though the balance itself is fine, and the
+// holds clear within seconds. That must not park the account for a day.
+func TestHTTPStatusError_Surplus402InsufficientCreditIsNotTerminal(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.surplusintelligence.ai/v1/chat/completions", nil)
+	require.NoError(t, err)
+	resp := &http.Response{StatusCode: http.StatusPaymentRequired, Header: http.Header{}, Request: req}
+	body := []byte(`{"error":{"type":"payment_required","code":"insufficient_credit","message":"This request needs $0.0007 and your balance covers it, but another request in flight is holding that amount. Please retry in a moment."},"request_id":"01M6QGV6R3Z6ZSCC2QVPM07DK2"}`)
+
+	pe := core.AsProviderError(httpStatusError("custom-openai-surplus-openrouter", "deepseek-v4.1-flash-1017", resp, body))
+
+	require.Equal(t, core.ErrQuotaExhausted, pe.Kind)
+	require.Equal(t, core.FailureScopeAccount, pe.EffectiveScope())
+	require.False(t, pe.CreditsExhausted, "a Surplus balance hold must get the short quota cooldown, not the 24h park")
+	require.Equal(t, 5*time.Minute, pe.QuotaCooldown)
+	require.True(t, pe.Fallbackable())
+}
+
+// The Surplus exception is keyed on the upstream host: the same body from any
+// other gateway keeps the terminal credits-exhausted handling.
+func TestHTTPStatusError_402InsufficientCreditElsewhereStaysTerminal(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/v1/chat/completions", nil)
+	require.NoError(t, err)
+	resp := &http.Response{StatusCode: http.StatusPaymentRequired, Header: http.Header{}, Request: req}
+	body := []byte(`{"error":{"type":"payment_required","code":"insufficient_credit","message":"not enough credit"}}`)
+
+	pe := core.AsProviderError(httpStatusError("other", "model", resp, body))
+
+	require.Equal(t, core.ErrQuotaExhausted, pe.Kind)
+	require.True(t, pe.CreditsExhausted)
+	require.Zero(t, pe.QuotaCooldown)
+}

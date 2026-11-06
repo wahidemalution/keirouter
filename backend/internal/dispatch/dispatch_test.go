@@ -402,6 +402,25 @@ func TestNoteFailurePlainQuotaDoesNotFlagCredits(t *testing.T) {
 	require.NotNil(t, account.CooldownUntil)
 }
 
+func TestNoteFailureQuotaCooldownOverridesDefault(t *testing.T) {
+	ctx := context.Background()
+	d, db := newDispatchTest(t, testAccount("acc-hold", 10))
+
+	d.NoteFailure(ctx, "acc-hold", &core.ProviderError{
+		Kind:          core.ErrQuotaExhausted,
+		QuotaCooldown: 5 * time.Minute,
+	})
+
+	account, err := db.Accounts().Get(ctx, "acc-hold")
+	require.NoError(t, err)
+	require.False(t, account.CreditsExhausted)
+	require.NotNil(t, account.CooldownUntil)
+	limit := 5*time.Minute + time.Duration(float64(5*time.Minute)*BackoffJitterFraction)
+	until := time.Until(*account.CooldownUntil)
+	require.GreaterOrEqual(t, until, 5*time.Minute-time.Second)
+	require.LessOrEqual(t, until, limit)
+}
+
 func TestWithJitterStaysWithinBounds(t *testing.T) {
 	base := 100 * time.Second
 	limit := base + time.Duration(float64(base)*BackoffJitterFraction)

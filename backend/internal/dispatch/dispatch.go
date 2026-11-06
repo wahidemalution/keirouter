@@ -840,6 +840,9 @@ func (d *Dispatcher) NoteFailure(ctx context.Context, accountID string, err *cor
 		cooldown = d.exponentialCooldown(ctx, accountID)
 	case core.ErrQuotaExhausted:
 		cooldown = 30 * time.Minute
+		if err.QuotaCooldown > 0 {
+			cooldown = err.QuotaCooldown
+		}
 		if err.CreditsExhausted {
 			// A depleted paid balance is terminal until the user tops up.
 			// Park the account for a day instead of thrashing through
