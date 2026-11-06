@@ -16,6 +16,9 @@ services:
         SOURCE_COMMIT: ${SOURCE_COMMIT:-}
     image: ${KEIROUTER_IMAGE:-ghcr.io/mydisha/keirouter:latest}
     restart: unless-stopped
+    # Batas RAM container. Bila diisi, app memasang GOMEMLIMIT 80% dari nilai
+    # ini sehingga GC bekerja lebih awal. 0 = tanpa batas. Atur lewat .env.
+    mem_limit: ${KEIROUTER_MEM_LIMIT:-0}
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +75,9 @@ services:
       # Stream memegang slot sampai selesai. Saat penuh, request baru langsung
       # dapat 503 (tidak antre). Atur nilainya lewat .env.
       KEIROUTER_SERVER__MAX_CONCURRENT_REQUESTS: ${KEIROUTER_SERVER__MAX_CONCURRENT_REQUESTS:-100}
+      # Ukuran body request maksimal dalam byte (default 128 MiB). Samakan
+      # dengan request_body max_size di Caddyfile.
+      KEIROUTER_SERVER__MAX_REQUEST_BODY_BYTES: ${KEIROUTER_SERVER__MAX_REQUEST_BODY_BYTES:-134217728}
       # Background account/model health probes send real billed requests to each
       # provider every 30s by default. Default off in this compose; set true to
       # re-enable.
