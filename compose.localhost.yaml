@@ -68,6 +68,10 @@ services:
       KEIROUTER_TURNSTILE__SITE_KEY: ${KEIROUTER_TURNSTILE__SITE_KEY:-}
       KEIROUTER_TURNSTILE__SECRET_KEY: ${KEIROUTER_TURNSTILE__SECRET_KEY:-}
       KEIROUTER_LOG__FORMAT: ${KEIROUTER_LOG_FORMAT:-json}
+      # Batas request /v1/* yang boleh berjalan bersamaan, gabungan semua key.
+      # Stream memegang slot sampai selesai. Saat penuh, request baru langsung
+      # dapat 503 (tidak antre). Atur nilainya lewat .env.
+      KEIROUTER_SERVER__MAX_CONCURRENT_REQUESTS: ${KEIROUTER_SERVER__MAX_CONCURRENT_REQUESTS:-100}
       # Background account/model health probes send real billed requests to each
       # provider every 30s by default. Default off in this compose; set true to
       # re-enable.
