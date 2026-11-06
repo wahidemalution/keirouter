@@ -1655,7 +1655,9 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, tar
 	if p.budget == nil {
 		return nil
 	}
-	id, err := p.budget.Reserve(ctx, budgetScopeOf(req.Metadata), p.estimateRequestMicros(req, targets))
+	prompt, micros := p.estimateRequest(req, targets)
+	req.Metadata.BudgetEstPromptTokens, req.Metadata.BudgetEstMicros = prompt, micros
+	id, err := p.budget.Reserve(ctx, budgetScopeOf(req.Metadata), micros)
 	if err != nil {
 		return err
 	}
@@ -1663,15 +1665,16 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, tar
 	return nil
 }
 
-// estimateRequestMicros prices the estimated prompt, uncached, plus the output
-// allowance at the most expensive target: fallback may land on any of them.
-func (p *Pipeline) estimateRequestMicros(req *core.ChatRequest, targets []dispatch.Target) int64 {
+// estimateRequest returns the padded prompt token estimate and the request's
+// cost estimate: that prompt, uncached, plus the output allowance at the most
+// expensive target, since fallback may land on any of them.
+func (p *Pipeline) estimateRequest(req *core.ChatRequest, targets []dispatch.Target) (promptTokens int, micros int64) {
 	if p.meter == nil {
-		return 0
+		return 0, 0
 	}
 	prompt := int(math.Ceil(float64(core.EstimatePromptTokens(req)) * budgetEstimateMargin))
 	if prompt <= 0 {
-		return 0
+		return 0, 0
 	}
 	output := budgetOutputAllowance
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
@@ -1683,7 +1686,7 @@ func (p *Pipeline) estimateRequestMicros(req *core.ChatRequest, targets []dispat
 		ev.Usage = core.Usage{PromptTokens: prompt, CompletionTokens: output}
 		worst = max(worst, p.meter.QuoteMicros(ev))
 	}
-	return worst
+	return prompt, worst
 }
 
 // budgetScopeOf is the budget scope of a request, carrying its reservation.
@@ -2173,6 +2176,7 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 		usage.Source = core.UsageSourceProvider
 	}
 	ev := targetPriceEvent(attempt.Target, meta.ServiceTier)
+	ev.EstPromptTokens, ev.EstCostMicros = meta.BudgetEstPromptTokens, meta.BudgetEstMicros
 	ev.RequestID = meta.RequestID
 	ev.TenantID = meta.TenantID
 	ev.ProjectID = meta.ProjectID

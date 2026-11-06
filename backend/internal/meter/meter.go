@@ -239,6 +239,11 @@ type Event struct {
 	HeadroomStats  *HeadroomSnapshot
 	PonytailActive bool
 
+	// EstPromptTokens and EstCostMicros carry the budget estimate made
+	// before dispatch onto the usage row (see store.UsageRecord).
+	EstPromptTokens int
+	EstCostMicros   int64
+
 	// Guardrail is what the guardrails did to the request (zero when no
 	// policy applied).
 	Guardrail core.GuardrailSummary
@@ -359,8 +364,9 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		SlimActive: ev.SlimActive, TerseActive: ev.TerseActive, PonytailActive: ev.PonytailActive,
 		GuardrailAction: ev.Guardrail.Action, GuardrailDetector: ev.Guardrail.Detector,
 		GuardrailDirection: ev.Guardrail.Direction, GuardrailMidStream: ev.Guardrail.MidStream,
-		GuardrailMS: int(ev.Guardrail.Elapsed.Milliseconds()),
-		CreatedAt:   recordedAt,
+		GuardrailMS:     int(ev.Guardrail.Elapsed.Milliseconds()),
+		EstPromptTokens: ev.EstPromptTokens, EstCostMicros: ev.EstCostMicros,
+		CreatedAt: recordedAt,
 	}
 	if ev.SlimStats != nil {
 		rec.SlimBytesSaved, rec.SlimTokensSaved, rec.SlimRules = ev.SlimStats.BytesSaved, ev.SlimStats.TokensSaved, ev.SlimStats.Rules

@@ -221,3 +221,37 @@ func TestE2E_Budget_ConcurrentBurstDoesNotOverspend(t *testing.T) {
 	require.Equal(t, ok.Load(), calls.Load(), "only admitted requests reach the upstream")
 	require.LessOrEqual(t, spent, int64(limit), "the burst overspent the balance")
 }
+
+// The pre-dispatch estimate is stored on the usage row, next to the billed
+// usage, so production data can show how far estimates run from bills.
+func TestE2E_Budget_EstimateStoredOnUsageRow(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var calls atomic.Int64
+			h := newE2E(t, billedUpstream(&calls, 0, http.StatusOK), pricedGPT4o)
+			scope := fundKey(t, h, 1_000_000)
+
+			body := `{"model":"openai/gpt-4o","max_tokens":100,"stream":` + fmt.Sprint(stream) +
+				`,"messages":[{"role":"user","content":"` + strings.Repeat("hello world ", 200) + `"}]}`
+			resp := h.post(t, "/v1/chat/completions", body, h.apiKey)
+			require.Equal(t, http.StatusOK, resp.StatusCode, drain(t, resp))
+
+			var estPrompt, estCost, prompt, cost int64
+			require.Eventually(t, func() bool {
+				err := h.db.SQL().QueryRowContext(context.Background(),
+					`SELECT est_prompt_tokens, est_cost_micros, prompt_tokens, cost_micros FROM usage_records WHERE api_key_id = ?`,
+					scope.APIKeyID).Scan(&estPrompt, &estCost, &prompt, &cost)
+				return err == nil
+			}, 3*time.Second, 20*time.Millisecond)
+
+			// "hello world " x200 is about 400 tokens; +25% margin.
+			require.Greater(t, estPrompt, int64(400))
+			require.Less(t, estPrompt, int64(700))
+			// The estimate prices that prompt plus the 100-token max_tokens.
+			wantCost := estPrompt*10 + 100*30 // micros at $10/M in, $30/M out
+			require.InDelta(t, float64(wantCost), float64(estCost), 2)
+			require.Equal(t, int64(1000), prompt)
+			require.Equal(t, int64(replyCostMicros), cost)
+		})
+	}
+}
