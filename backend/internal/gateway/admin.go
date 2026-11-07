@@ -76,6 +76,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/chains", s.adminCreateChain)
 	r.Patch("/chains/{id}", s.adminUpdateChain)
 	r.Delete("/chains/{id}", s.adminDeleteChain)
+	r.Get("/model-reference", s.adminModelReference)
 
 	r.Get("/plans", s.adminListPlans)
 	r.Post("/plans", s.adminCreatePlan)

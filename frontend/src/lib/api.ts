@@ -437,6 +437,8 @@ export interface ChainStep {
   static_cache_read_per_m?: number | null;
   static_cache_write_per_m?: number | null;
   markup_percent?: number | null;
+  discount_percent?: number | null;
+  cost_multiplier?: number | null;
   display_name?: string;
 }
 
@@ -451,8 +453,24 @@ export type ChainStepPayload = {
   static_cache_read_per_m?: number | null;
   static_cache_write_per_m?: number | null;
   markup_percent?: number | null;
+  /** Set on a discount step: the static rates are a list price the customer
+   * pays (100 − discount_percent)% of, with no markup. */
+  discount_percent?: number | null;
+  /** Operator cost as a fraction of list on a discount step; null = cost
+   * equals the customer price. */
+  cost_multiplier?: number | null;
   display_name?: string;
 };
+
+/** A model's models.dev list price per 1M tokens. Null cache = unlisted. */
+export interface ModelReferencePrice {
+  model: string;
+  provider: string;
+  input_per_m: number;
+  output_per_m: number;
+  cache_read_per_m: number | null;
+  cache_write_per_m: number | null;
+}
 
 /** A chain's final fallback price per 1M tokens. Input and output at 0 mean
  * the models.dev price (auto). markup_percent null means no markup. */
@@ -3072,6 +3090,8 @@ export const api = {
   updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; maintenance?: boolean; hidden?: boolean; fallback_price?: ChainFallbackPricePayload; steps?: ChainStepPayload[] }) =>
     request<{ id: string }>("PATCH", `/chains/${id}`, patch),
   deleteChain: (id: string) => request<void>("DELETE", `/chains/${id}`),
+  modelReference: (model: string) =>
+    request<ModelReferencePrice>("GET", `/model-reference?model=${encodeURIComponent(model)}`),
 
   listBudgets: () => request<{ budgets: Budget[] }>("GET", "/budgets"),
   budgetStatus: () => request<{ budgets: BudgetStatus[] }>("GET", "/budgets/status"),
