@@ -295,6 +295,13 @@ type ChainStep struct {
 	// MarkupPercent overrides the chain markup for a static step. Nil follows
 	// the chain (then global) markup; 0 is an explicit no-markup override.
 	MarkupPercent *float64
+	// DiscountPercent makes the static price a list price the customer gets
+	// a discount on: they pay list × (100 − DiscountPercent) / 100, and no
+	// markup applies. Nil = a plain static step.
+	DiscountPercent *float64
+	// CostMultiplier is the operator's cost as a fraction of the list price on
+	// a discount step. Nil = cost equals the customer price.
+	CostMultiplier *float64
 	// DisplayName is the provider name the portal shows for this step. Empty
 	// keeps the default: the Surplus label, then the provider's own name.
 	DisplayName string

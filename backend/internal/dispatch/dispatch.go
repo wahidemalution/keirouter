@@ -166,6 +166,14 @@ type Target struct {
 	// StepMarkupPercent overrides the chain markup when StepMarkupSet.
 	StepMarkupPercent float64
 	StepMarkupSet     bool
+	// DiscountPercent, when DiscountSet, makes the Static* rates a list price:
+	// the customer pays list × (100 − DiscountPercent) / 100 and no markup
+	// applies. CostMultiplier, when CostMultiplierSet, is the operator's cost
+	// as a fraction of list; unset means cost equals the customer price.
+	DiscountPercent   float64
+	DiscountSet       bool
+	CostMultiplier    float64
+	CostMultiplierSet bool
 
 	// ChainFallback marks the chain's last-resort fallback target, billed at
 	// the chain price.
@@ -1361,6 +1369,12 @@ func TargetsFromChain(chain store.Chain) []Target {
 		}
 		if s.MarkupPercent != nil {
 			t.StepMarkupPercent, t.StepMarkupSet = *s.MarkupPercent, true
+		}
+		if s.DiscountPercent != nil {
+			t.DiscountPercent, t.DiscountSet = *s.DiscountPercent, true
+		}
+		if s.CostMultiplier != nil {
+			t.CostMultiplier, t.CostMultiplierSet = *s.CostMultiplier, true
 		}
 		out = append(out, t)
 	}

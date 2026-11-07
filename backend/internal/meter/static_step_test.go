@@ -45,3 +45,20 @@ func TestStaticStepCachedInputUsesCacheReadRate(t *testing.T) {
 		t.Fatalf("upstream = %d micros, want 1M cached × 0.05 = 50_000", got)
 	}
 }
+
+// A 90% discount step with cost multiplier 0.01 on list 0.28/0.42: the gateway
+// stamps billable 0.028/0.042 and cost 0.0028/0.0042.
+func TestDiscountStepBillsAndCostsStampedRates(t *testing.T) {
+	ev := Event{
+		StaticPrice: true, Provider: "openai", Model: "gpt-4o",
+		MarketRateIn: 0.028, MarketRateOut: 0.042, MarketCacheReadRate: 0.0028, MarketCacheWriteRate: 0.035,
+		UpstreamRateIn: 0.0028, UpstreamRateOut: 0.0042, UpstreamCacheReadRate: 0.00028, UpstreamCacheWriteRate: 0.0035,
+		Usage: core.Usage{PromptTokens: 1_000_000, CachedTokens: 400_000, CacheWriteTokens: 100_000, CompletionTokens: 200_000},
+	}
+	if got := (&Meter{}).costForEvent(ev).CostMicros; got != 27_020 {
+		t.Fatalf("user = %d micros, want 27_020", got)
+	}
+	if got := upstreamCostForEvent(ev).CostMicros; got != 2_702 {
+		t.Fatalf("upstream = %d micros, want 2_702", got)
+	}
+}

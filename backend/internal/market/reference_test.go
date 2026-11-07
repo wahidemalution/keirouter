@@ -62,3 +62,30 @@ func TestModelsDevFallsBackToMostCommonPrice(t *testing.T) {
 	require.Equal(t, Reference{InputPerM: 0.2, OutputPerM: 1, ContextTokens: 200000}, ref,
 		"no vendor listing: the price two providers share beats the outlier; the free variant is ignored")
 }
+
+func TestModelsDevCachePrices(t *testing.T) {
+	refs, err := ParseModelsDev(strings.NewReader(`{
+  "deepseek": {"models": {
+    "deepseek-v4-flash": {"id":"deepseek-v4-flash","canonical_model_id":"deepseek/deepseek-v4-flash",
+      "cost":{"input":0.28,"output":0.42,"cache_read":0.028,"cache_write":0.35}}
+  }},
+  "r1": {"models": {"m": {"id":"m","cost":{"input":1,"output":2,"cache_read":0.1}}}},
+  "r2": {"models": {"m": {"id":"m","cost":{"input":1,"output":2,"cache_read":0.1}}}},
+  "r3": {"models": {"m": {"id":"m","cost":{"input":1,"output":2,"cache_read":0.5,"cache_write":1.25}}}},
+  "r4": {"models": {"m": {"id":"m","cost":{"input":3,"output":4,"cache_read":0.01}}}}
+}`))
+	require.NoError(t, err)
+	c := NewReferenceCache()
+	c.Replace(refs)
+
+	ref, ok := c.Lookup("deepseek-v4-flash")
+	require.True(t, ok)
+	require.Equal(t, 0.028, ref.CacheReadPerM)
+	require.Equal(t, 0.35, ref.CacheWritePerM)
+
+	ref, ok = c.Lookup("m")
+	require.True(t, ok)
+	require.Equal(t, 1.0, ref.InputPerM)
+	require.Equal(t, 0.1, ref.CacheReadPerM, "cache comes from the most common listing of the chosen price")
+	require.Equal(t, 0.0, ref.CacheWritePerM, "unlisted cache write stays 0 (unknown)")
+}

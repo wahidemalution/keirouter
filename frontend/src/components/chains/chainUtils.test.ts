@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoMarketSlug, deriveCacheRates, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, deriveCacheRates, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -188,4 +188,78 @@ test("fallbackPricePayload sends null for empty optional fields and round-trips"
   const payload = fallbackPricePayload({ ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10" });
   assert.deepEqual(payload, { input_per_m: 2.5, output_per_m: 10, cache_read_per_m: null, cache_write_per_m: null, markup_percent: null });
   assert.deepEqual(fallbackPriceDraft({ ...payload, markup_percent: 0, auto: null }), { ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10", markup: "0" });
+});
+
+const discountDraft = (over: Record<string, string> = {}) => ({
+  ...makeDraftStep({ provider: "openai", model: "deepseek-v4-flash" }),
+  priceSource: "discount" as const,
+  staticInputPerM: "0.28",
+  staticOutputPerM: "0.42",
+  staticCacheReadPerM: "0.028",
+  staticCacheWritePerM: "0.35",
+  discountPercent: "90",
+  ...over,
+});
+
+test("discountStepPreview bills list × (100 − discount)/100 and costs list × multiplier", () => {
+  const p = discountStepPreview(discountDraft({ costMultiplier: "0.01" }));
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  close(p.customer.inputPerM, 0.028);
+  close(p.customer.outputPerM, 0.042);
+  close(p.customer.cacheReadPerM, 0.0028);
+  close(p.customer.cacheWritePerM, 0.035);
+  close(p.cost.inputPerM, 0.0028);
+  close(p.cost.outputPerM, 0.0042);
+  close(p.cost.cacheReadPerM, 0.00028);
+  close(p.cost.cacheWritePerM, 0.0035);
+  assert.equal(p.loss, false);
+});
+
+test("discountStepPreview keeps the factor exact", () => {
+  for (const [d, f] of [["0", 1], ["90", 0.1], ["99", 0.01], ["99.5", 0.005], ["33.3", 0.667]] as const) {
+    const p = discountStepPreview(discountDraft({ staticInputPerM: "1", staticOutputPerM: "1", discountPercent: d }));
+    assert.equal(p.ok, true);
+    if (p.ok) assert.ok(Math.abs(p.customer.inputPerM - f) < 1e-15, `${d}: ${p.customer.inputPerM}`);
+  }
+});
+
+test("discountStepPreview: empty cost multiplier means cost = customer price; above it flags a loss", () => {
+  const even = discountStepPreview(discountDraft());
+  assert.equal(even.ok && even.cost.inputPerM === even.customer.inputPerM, true);
+  const loss = discountStepPreview(discountDraft({ costMultiplier: "0.2" }));
+  assert.equal(loss.ok && loss.loss, true);
+});
+
+test("discountStepPreview derives empty cache prices from the list input", () => {
+  const p = discountStepPreview(discountDraft({ staticInputPerM: "2", staticCacheReadPerM: "", staticCacheWritePerM: "" }));
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  close(p.customer.cacheReadPerM, 0.02);
+  close(p.customer.cacheWritePerM, 0.25);
+});
+
+test("discountStepPreview rejects a missing or out-of-range discount and multiplier", () => {
+  assert.deepEqual(discountStepPreview(discountDraft({ discountPercent: "" })), { ok: false, error: "Enter a discount from 0 to below 100." });
+  assert.deepEqual(discountStepPreview(discountDraft({ discountPercent: "100" })), { ok: false, error: "Enter a discount from 0 to below 100." });
+  assert.deepEqual(discountStepPreview(discountDraft({ costMultiplier: "0" })), { ok: false, error: "Cost multiplier must be above 0 and at most 100." });
+  assert.deepEqual(discountStepPreview(discountDraft({ staticOutputPerM: "" })), { ok: false, error: "Enter an input and output price above 0." });
+});
+
+test("stepPayload for a discount step sends list prices, discount and multiplier, never markup", () => {
+  const out = stepPayload({ ...discountDraft({ costMultiplier: "0.01", stepMarkup: "25" }), marketSlug: "leftover" });
+  assert.deepEqual(out, {
+    provider: "openai", model: "deepseek-v4-flash", display_name: "", market_slug: "",
+    static_input_per_m: 0.28, static_output_per_m: 0.42,
+    static_cache_read_per_m: 0.028, static_cache_write_per_m: 0.35, markup_percent: null,
+    discount_percent: 90, cost_multiplier: 0.01,
+  });
+});
+
+test("makeDraftStep reads a discount step from the API", () => {
+  const d = makeDraftStep({ provider: "openai", model: "m", static_input_per_m: 1, static_output_per_m: 2, discount_percent: 90, cost_multiplier: null });
+  assert.equal(d.priceSource, "discount");
+  assert.equal(d.discountPercent, "90");
+  assert.equal(d.costMultiplier, "");
+  assert.equal(stepKey(d), stepKey(staticDraft({})).replace("gpt-4o", "m"));
 });

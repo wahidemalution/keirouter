@@ -10,7 +10,7 @@ export type ChainStrategy = "priority" | "round_robin" | "latency" | "cost";
 export const CACHE_WRITE_FACTOR = 1.25;
 export const CACHE_READ_FACTOR = 0.1;
 
-export type StepPriceSource = "market" | "static";
+export type StepPriceSource = "market" | "static" | "discount";
 
 export interface DraftChainStep {
   id: string;
@@ -29,6 +29,11 @@ export interface DraftChainStep {
   staticCacheReadPerM: string;
   staticCacheWritePerM: string;
   stepMarkup: string;
+  // A discount step reuses the static fields as the models.dev list price.
+  // discountPercent is what the customer gets off it; costMultiplier is the
+  // operator's cost as a fraction of list ("" = cost equals customer price).
+  discountPercent: string;
+  costMultiplier: string;
   // displayName is the provider name the portal shows; "" keeps the default.
   displayName: string;
 }
@@ -98,6 +103,11 @@ export const providerIcon = (provider?: Provider, providerID?: string) =>
 
 const numText = (v?: number | null) => (v === undefined || v === null ? "" : String(v));
 
+const draftPriceSource = (step?: Partial<ChainStep>): StepPriceSource => {
+  if (!((step?.static_input_per_m ?? 0) > 0 || (step?.static_output_per_m ?? 0) > 0)) return "market";
+  return step?.discount_percent === undefined || step?.discount_percent === null ? "static" : "discount";
+};
+
 export const makeDraftStep = (step?: Partial<ChainStep> & { provider: string; model: string }): DraftChainStep => ({
   id: crypto.randomUUID(),
   provider: step?.provider ?? "",
@@ -107,12 +117,14 @@ export const makeDraftStep = (step?: Partial<ChainStep> & { provider: string; mo
   outputPerM: 0,
   cacheWritePerM: 0,
   cacheReadPerM: 0,
-  priceSource: (step?.static_input_per_m ?? 0) > 0 || (step?.static_output_per_m ?? 0) > 0 ? "static" : "market",
+  priceSource: draftPriceSource(step),
   staticInputPerM: step?.static_input_per_m ? String(step.static_input_per_m) : "",
   staticOutputPerM: step?.static_output_per_m ? String(step.static_output_per_m) : "",
   staticCacheReadPerM: numText(step?.static_cache_read_per_m),
   staticCacheWritePerM: numText(step?.static_cache_write_per_m),
   stepMarkup: numText(step?.markup_percent),
+  discountPercent: numText(step?.discount_percent),
+  costMultiplier: numText(step?.cost_multiplier),
   displayName: step?.display_name ?? "",
 });
 
@@ -155,13 +167,63 @@ export const staticStepPreview = (step: DraftChainStep, inheritedMarkup: number)
   };
 };
 
+export interface StepRates {
+  inputPerM: number;
+  outputPerM: number;
+  cacheReadPerM: number;
+  cacheWritePerM: number;
+}
+
+export type DiscountStepPreview =
+  | { ok: true; discount: number; customer: StepRates; cost: StepRates; loss: boolean }
+  | { ok: false; error: string };
+
+// discountStepPreview computes a discount step's customer price and operator
+// cost per 1M tokens. It mirrors the gateway's priceStaticSteps exactly: the
+// customer pays list × (100 − discount) / 100 with no markup, the cost is
+// list × multiplier (customer price when empty), and empty cache prices derive
+// from the list input.
+export const discountStepPreview = (step: DraftChainStep): DiscountStepPreview => {
+  const input = parseOptional(step.staticInputPerM) ?? 0;
+  const output = parseOptional(step.staticOutputPerM) ?? 0;
+  const cacheRead = parseOptional(step.staticCacheReadPerM);
+  const cacheWrite = parseOptional(step.staticCacheWritePerM);
+  const discount = parseOptional(step.discountPercent);
+  const multiplier = parseOptional(step.costMultiplier);
+  if ([input, output, cacheRead ?? 0, cacheWrite ?? 0].some((v) => !Number.isFinite(v) || v < 0)) return { ok: false, error: "Prices must be 0 or more." };
+  if (!(input > 0 && output > 0)) return { ok: false, error: "Enter an input and output price above 0." };
+  if (cacheRead === 0 || cacheWrite === 0) return { ok: false, error: "Cache prices must be above 0, or leave them empty." };
+  if (discount === undefined || !(Number.isFinite(discount) && discount >= 0 && discount < 100)) {
+    return { ok: false, error: "Enter a discount from 0 to below 100." };
+  }
+  if (multiplier !== undefined && !(Number.isFinite(multiplier) && multiplier > 0 && multiplier <= 100)) {
+    return { ok: false, error: "Cost multiplier must be above 0 and at most 100." };
+  }
+  // (100 − d) / 100 keeps 90 at exactly 0.1, as the gateway computes it.
+  const bill = (100 - discount) / 100;
+  const cost = multiplier ?? bill;
+  const list: StepRates = {
+    inputPerM: input,
+    outputPerM: output,
+    cacheReadPerM: cacheRead ?? input * CACHE_READ_FACTOR,
+    cacheWritePerM: cacheWrite ?? input * CACHE_WRITE_FACTOR,
+  };
+  const scale = (f: number): StepRates => ({
+    inputPerM: list.inputPerM * f,
+    outputPerM: list.outputPerM * f,
+    cacheReadPerM: list.cacheReadPerM * f,
+    cacheWritePerM: list.cacheWritePerM * f,
+  });
+  return { ok: true, discount, customer: scale(bill), cost: scale(cost), loss: cost > bill };
+};
+
 // stepKey identifies a route step for duplicate checks. It mirrors the
 // dispatcher's attempt key (provider, model, market slug): two steps may share
 // a provider/model only when their market slugs differ (surplus-fast then
 // surplus-trusted). A static step sends no slug, so it collides with a
 // slugless or another static step on the same provider/model.
 export const stepKey = (step: Pick<DraftChainStep, "provider" | "model" | "marketSlug"> & Partial<DraftChainStep>): string => {
-  const slug = step.priceSource === "static" ? "" : (step.marketSlug ?? "").trim();
+  const slug = step.priceSource === "static" || step.priceSource === "discount" ? "" : (step.marketSlug ?? "").trim();
   return `${step.provider}/${step.model}|${slug}`;
 };
 
@@ -171,14 +233,21 @@ export const stepKey = (step: Pick<DraftChainStep, "provider" | "model" | "marke
 export const stepPayload = (step: DraftChainStep): ChainStepPayload => {
   const base = { provider: step.provider, model: step.model, display_name: step.displayName.trim() };
   if (step.priceSource === "market") return { ...base, market_slug: step.marketSlug ?? "" };
-  return {
+  const prices = {
     ...base,
     market_slug: "",
     static_input_per_m: parseOptional(step.staticInputPerM) ?? 0,
     static_output_per_m: parseOptional(step.staticOutputPerM) ?? 0,
     static_cache_read_per_m: parseOptional(step.staticCacheReadPerM) ?? null,
     static_cache_write_per_m: parseOptional(step.staticCacheWritePerM) ?? null,
-    markup_percent: parseOptional(step.stepMarkup) ?? null,
+  };
+  if (step.priceSource === "static") return { ...prices, markup_percent: parseOptional(step.stepMarkup) ?? null };
+  // Markup never applies to a discount step, so a leftover one is not sent.
+  return {
+    ...prices,
+    markup_percent: null,
+    discount_percent: parseOptional(step.discountPercent) ?? null,
+    cost_multiplier: parseOptional(step.costMultiplier) ?? null,
   };
 };
 
