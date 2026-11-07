@@ -155,12 +155,44 @@ type costPaymentRequest struct {
 	Amount        float64 `json:"amount"`
 	PaymentMethod string  `json:"payment_method"`
 	Note          string  `json:"note"`
+	// PaidDate is the day it was paid, YYYY-MM-DD in the server zone. Empty
+	// keeps the current date: now on create, the saved date on update.
+	PaidDate string `json:"paid_date"`
 }
 
 var (
 	costPaymentCategories = map[string]bool{"vps": true, "upstream_ai": true, "domain": true, "software": true, "other": true}
 	costPaymentMethods    = map[string]bool{"debit_card": true, "credit_card": true, "bank_transfer": true, "crypto": true}
 )
+
+// earliestCostDate is the oldest paid date accepted, to catch typos like 0202.
+var earliestCostDate = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// paidAt resolves a YYYY-MM-DD paid date against the saved time prev. The
+// same day keeps prev, today uses now, and any other day is set to noon in
+// hosting.Zone so it stays in that day and month. Future days are refused.
+func paidAt(date string, prev, now time.Time) (time.Time, error) {
+	date = strings.TrimSpace(date)
+	if date == "" {
+		return prev, nil
+	}
+	d, err := time.ParseInLocation("2006-01-02", date, hosting.Zone)
+	if err != nil {
+		return time.Time{}, errors.New("paid_date must be a date as YYYY-MM-DD")
+	}
+	day := func(t time.Time) string { return t.In(hosting.Zone).Format("2006-01-02") }
+	switch {
+	case date > day(now):
+		return time.Time{}, errors.New("paid_date cannot be in the future")
+	case d.Before(earliestCostDate):
+		return time.Time{}, errors.New("paid_date must be in 2000 or later")
+	case !prev.IsZero() && date == day(prev):
+		return prev, nil
+	case date == day(now):
+		return now, nil
+	}
+	return d.Add(12 * time.Hour).UTC(), nil
+}
 
 // maxCostAmountIDR bounds one payment, in rupiah.
 const maxCostAmountIDR = 1_000_000_000_000
@@ -226,7 +258,12 @@ func (s *Server) adminCreateHostingCost(w http.ResponseWriter, r *http.Request) 
 	}
 	// Stored to the second, so the response matches what a later read returns.
 	now := time.Now().UTC().Truncate(time.Second)
-	p := store.CostPayment{ID: uuid.NewString(), Currency: ccy, USDIDRRate: rate, PaidAt: now, CreatedAt: now, UpdatedAt: now}
+	paid, err := paidAt(body.PaidDate, now, now)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	p := store.CostPayment{ID: uuid.NewString(), Currency: ccy, USDIDRRate: rate, PaidAt: paid, CreatedAt: now, UpdatedAt: now}
 	if err := body.apply(&p, ccy, rate); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -238,8 +275,9 @@ func (s *Server) adminCreateHostingCost(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, costPaymentView(p))
 }
 
-// adminUpdateHostingCost edits a payment. Its currency, rate and paid time
-// stay as recorded, so a USD amount is re-converted at the saved rate.
+// adminUpdateHostingCost edits a payment. Its currency and rate stay as
+// recorded, so a USD amount is re-converted at the saved rate. The paid date
+// can move; without paid_date the saved paid time is kept.
 func (s *Server) adminUpdateHostingCost(w http.ResponseWriter, r *http.Request) {
 	var body costPaymentRequest
 	if !decodeJSON(w, r, &body) {
@@ -256,6 +294,10 @@ func (s *Server) adminUpdateHostingCost(w http.ResponseWriter, r *http.Request) 
 	}
 	if c := strings.TrimSpace(body.Currency); c != "" && !strings.EqualFold(c, p.Currency) {
 		writeError(w, http.StatusBadRequest, "the currency of a saved payment cannot change: delete it and add a new one")
+		return
+	}
+	if p.PaidAt, err = paidAt(body.PaidDate, p.PaidAt, time.Now().UTC().Truncate(time.Second)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := body.apply(&p, p.Currency, p.USDIDRRate); err != nil {

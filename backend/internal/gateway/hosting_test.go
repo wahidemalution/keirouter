@@ -568,6 +568,60 @@ func TestCostPayments_CRUDAndFinance(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, doJSON(t, r, http.MethodDelete, "/hosting/costs/"+id, "").Code)
 }
 
+func TestCostPayments_PaidDate(t *testing.T) {
+	s, _, _ := hostingTestServer(t)
+	r := chi.NewRouter()
+	s.mountHostingOps(r)
+
+	now := time.Now().In(hosting.Zone)
+	day := func(t time.Time) string { return t.In(hosting.Zone).Format("2006-01-02") }
+	// The 10th, so a month step never spills into the next month.
+	past := time.Date(now.Year(), now.Month()-2, 10, 9, 0, 0, 0, hosting.Zone)
+	body := func(date string) string {
+		return `{"name":"VPS 8GB","category":"vps","currency":"IDR","amount":150000,"payment_method":"bank_transfer","paid_date":"` + date + `"}`
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/hosting/costs", body(day(past)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	created := decodeBody(t, rec)
+	paid, err := time.Parse(time.RFC3339Nano, created["paid_at"].(string))
+	require.NoError(t, err)
+	require.Equal(t, day(past), day(paid), "back-dated to the chosen day")
+
+	// It counts in its own month, not the current one.
+	rec = doJSON(t, r, http.MethodGet, "/hosting/finance?months=3", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	fin := decodeBody(t, rec)
+	require.EqualValues(t, 0, fin["current"].(map[string]any)["cost_idr"])
+	months := fin["months"].([]any)
+	require.EqualValues(t, 150000, months[0].(map[string]any)["cost_idr"])
+
+	for _, bad := range []string{day(now.AddDate(0, 0, 1)), "15-03-2026", "1999-12-31", "2026-02-30"} {
+		require.Equal(t, http.StatusBadRequest, doJSON(t, r, http.MethodPost, "/hosting/costs", body(bad)).Code, bad)
+	}
+
+	// An edit without paid_date keeps the saved time; with one, it moves.
+	id := created["id"].(string)
+	rec = doJSON(t, r, http.MethodPut, "/hosting/costs/"+id, `{"name":"VPS 8GB","category":"vps","amount":160000,"payment_method":"bank_transfer"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, created["paid_at"], decodeBody(t, rec)["paid_at"])
+
+	moved := time.Date(now.Year(), now.Month()-1, 10, 9, 0, 0, 0, hosting.Zone)
+	rec = doJSON(t, r, http.MethodPut, "/hosting/costs/"+id, body(day(moved)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	paid, err = time.Parse(time.RFC3339Nano, decodeBody(t, rec)["paid_at"].(string))
+	require.NoError(t, err)
+	require.Equal(t, day(moved), day(paid))
+
+	// Today on create is dated now, not noon.
+	before := time.Now().Add(-time.Second)
+	rec = doJSON(t, r, http.MethodPost, "/hosting/costs", body(day(now)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	paid, err = time.Parse(time.RFC3339Nano, decodeBody(t, rec)["paid_at"].(string))
+	require.NoError(t, err)
+	require.True(t, paid.After(before))
+}
+
 func TestHosting_MultiNodePlacement(t *testing.T) {
 	s, _, fake := hostingTestServer(t)
 	ctx := t.Context()

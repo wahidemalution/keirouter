@@ -15,7 +15,8 @@ const (
 )
 
 // CostPayment is one paid operating cost (VPS rent, upstream AI credit, ...).
-// PaidAt is the moment it was recorded. A USD payment stores the USD->IDR rate
+// PaidAt is when it was paid: the moment it was recorded, or noon of a
+// back-dated day. A USD payment stores the USD->IDR rate
 // of that moment; AmountIDR is fixed at save time and never re-converted.
 type CostPayment struct {
 	ID             string
@@ -52,13 +53,13 @@ func (r *CostPaymentRepo) Create(ctx context.Context, p CostPayment) error {
 	return nil
 }
 
-// Update replaces the editable fields. The currency, rate and paid time stay
-// as recorded.
+// Update replaces the editable fields, paid time included. The currency and
+// rate stay as recorded.
 func (r *CostPaymentRepo) Update(ctx context.Context, p CostPayment) error {
 	q := r.db.rebind(`UPDATE cost_payments SET name = ?, category = ?, provider = ?, amount_usd_cents = ?, amount_idr = ?,
-		payment_method = ?, note = ?, updated_at = ? WHERE id = ?`)
+		payment_method = ?, paid_at = ?, note = ?, updated_at = ? WHERE id = ?`)
 	res, err := r.db.sql.ExecContext(ctx, q, p.Name, p.Category, p.Provider, p.AmountUSDCents, p.AmountIDR,
-		p.PaymentMethod, p.Note, formatTime(time.Now()), p.ID)
+		p.PaymentMethod, formatTime(p.PaidAt), p.Note, formatTime(time.Now()), p.ID)
 	if err != nil {
 		return fmt.Errorf("store: update cost payment: %w", err)
 	}

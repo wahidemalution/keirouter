@@ -49,7 +49,7 @@ import {
   Skeleton,
   Textarea,
 } from "../../components/ui";
-import { Panel, TH, THEAD, count, dateID, errorText, idr } from "../payments/shared";
+import { Panel, TH, THEAD, count, dateID, errorText, idr, toDateInput, todayISO } from "../payments/shared";
 import { QK_HOSTING, idrCompact, monthLabel } from "./shared";
 
 type Range = "6" | "12" | "24";
@@ -405,7 +405,7 @@ function CostsPanel({ costs, monthTotal }: { costs: CostPayment[]; monthTotal: n
       title: "Delete payment?",
       description: (
         <>
-          <span className="font-medium text-fg">{c.name}</span> ({idr(c.amount_idr)}, paid {dateID(c.paid_at, true)}) is removed from that month's
+          <span className="font-medium text-fg">{c.name}</span> ({idr(c.amount_idr)}, paid {dateID(c.paid_at)}) is removed from that month's
           costs, so its profit changes.
         </>
       ),
@@ -454,7 +454,7 @@ function CostsPanel({ costs, monthTotal }: { costs: CostPayment[]; monthTotal: n
             <tbody className="divide-y divide-line">
               {costs.map((c) => (
                 <tr key={c.id} className="align-top transition-colors hover:bg-hover">
-                  <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(c.paid_at, true)}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(c.paid_at)}</td>
                   <td className="px-4 py-2.5">
                     <p className="font-medium text-fg">{c.name}</p>
                     {c.provider && <p className="text-[11.5px] text-fg-muted">{c.provider}</p>}
@@ -513,6 +513,8 @@ function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () =>
   const [amount, setAmount] = useState(cost ? String(cost.currency === "USD" ? cost.amount_usd ?? "" : cost.amount_idr) : "");
   const [method, setMethod] = useState<CostPaymentMethod>(cost?.payment_method ?? "debit_card");
   const [note, setNote] = useState(cost?.note ?? "");
+  const today = todayISO();
+  const [paidDate, setPaidDate] = useState(cost ? toDateInput(cost.paid_at) : today);
   const [touched, setTouched] = useState(false);
   // The live rate only previews a new USD payment; the server locks the rate on save.
   const rateQ = useQuery({ queryKey: ["currency-settings"], queryFn: () => api.currencySettings(), enabled: !cost && currency === "USD" });
@@ -522,6 +524,9 @@ function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () =>
   const needsProvider = category === "upstream_ai";
   const nameError = touched && !name.trim() ? "Enter a name." : null;
   const providerError = touched && needsProvider && !provider.trim() ? "Enter the provider you paid." : null;
+  const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(paidDate) && paidDate >= "2000-01-01" && paidDate <= today;
+  const dateError = touched && !dateValid ? (paidDate > today ? "Pick today or an earlier day." : "Pick the day it was paid.") : null;
+  const backDated = !cost && dateValid && paidDate !== today;
   const amountError = touched && !amountValid ? (currency === "IDR" ? "Enter whole rupiah above 0." : "Enter a dollar amount of at least 0.01.") : null;
 
   const rate = cost ? cost.usd_idr_rate ?? 0 : rateQ.data?.effective_rate ?? 0;
@@ -529,7 +534,8 @@ function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () =>
   if (currency === "USD" && !amountError) {
     if (cost) amountHint = amountValid ? `${idr(Math.round(amountNum * rate))} at the saved rate of ${idr(rate)}/USD.` : `Converted at the saved rate of ${idr(rate)}/USD.`;
     else if (rateQ.isLoading) amountHint = "Loading today's rate…";
-    else if (rate > 0) amountHint = `${amountValid ? `About ${idr(Math.round(amountNum * rate))}` : "Converted"} at today's rate of ${idr(rate)}/USD. The rate is locked when you save.`;
+    else if (rate > 0)
+      amountHint = `${amountValid ? `About ${idr(Math.round(amountNum * rate))}` : "Converted"} at today's rate of ${idr(rate)}/USD. The rate is locked when you save${backDated ? ", even for an earlier paid date" : ""}.`;
     else amountHint = "No USD to IDR rate is available yet. Refresh it or set an override in Settings, Currency.";
   } else if (currency === "IDR" && !amountError && amountValid) {
     amountHint = idr(amountNum);
@@ -547,7 +553,7 @@ function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () =>
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     setTouched(true);
-    if (!name.trim() || !amountValid || (needsProvider && !provider.trim()) || save.isPending) return;
+    if (!name.trim() || !amountValid || !dateValid || (needsProvider && !provider.trim()) || save.isPending) return;
     save.mutate({
       name: name.trim(),
       category,
@@ -556,6 +562,7 @@ function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () =>
       amount: amountNum,
       payment_method: method,
       note: note.trim(),
+      paid_date: paidDate,
     });
   };
 
@@ -564,12 +571,15 @@ function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () =>
       open
       onClose={save.isPending ? () => {} : onClose}
       title={cost ? "Edit payment" : "Record payment"}
-      subtitle={cost ? `Paid ${dateID(cost.paid_at, true)}` : "Dated now, when you save."}
+      subtitle={cost ? `Paid ${dateID(cost.paid_at)}` : "It counts in the month of its paid date."}
     >
       <form onSubmit={onSubmit} noValidate>
         <div className="space-y-4 px-5 py-4">
           <Field label="Name" error={nameError} required>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="VPS Contabo 8 GB" autoFocus />
+          </Field>
+          <Field label="Paid on" error={dateError} hint={dateError ? undefined : "Defaults to today. Pick an earlier day for a past bill."} required>
+            <Input type="date" value={paidDate} min="2000-01-01" max={today} onChange={(e) => setPaidDate(e.target.value)} className="tabular-nums" />
           </Field>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Category">
