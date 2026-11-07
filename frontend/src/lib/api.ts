@@ -2789,8 +2789,9 @@ export type CostPaymentCategory = "vps" | "upstream_ai" | "domain" | "software" 
 export type CostPaymentMethod = "debit_card" | "credit_card" | "bank_transfer" | "crypto";
 export type CostCurrency = "USD" | "IDR";
 
-/** One paid operating cost. paid_at is when it was recorded. A USD payment
- * keeps the USD->IDR rate of that moment, so amount_idr never changes. */
+/** One paid operating cost. paid_at is when it was paid: the moment it was
+ * recorded, or noon of a back-dated day. A USD payment keeps the USD->IDR
+ * rate of the moment it was recorded, so amount_idr never changes. */
 export interface CostPayment {
   id: string;
   name: string;
@@ -2818,6 +2819,9 @@ export interface CostPaymentInput {
   amount: number;
   payment_method: CostPaymentMethod;
   note?: string;
+  /** Day it was paid, YYYY-MM-DD in the server zone. Omitted: now on create,
+   * the saved date on update. */
+  paid_date?: string;
 }
 
 export interface HostingFinance {
