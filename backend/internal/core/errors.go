@@ -98,7 +98,9 @@ type ProviderError struct {
 	// CreditsExhausted marks a quota_exhausted error caused by a depleted
 	// paid balance rather than a scheduled quota window. A dry balance never
 	// recovers on its own — the user must top up — so the dispatcher parks
-	// the account for a long horizon and flags it for the dashboard.
+	// the account for a long horizon and flags it for the dashboard. On
+	// budget_blocked it marks a KeiRouter API key whose prepaid credit cannot
+	// cover the request, so the client is told to top up.
 	CreditsExhausted bool
 	// QuotaCooldown, when non-zero, replaces the dispatcher's default
 	// quota_exhausted cooldown. Connectors set it for quota answers known to

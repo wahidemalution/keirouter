@@ -128,6 +128,9 @@ type Decision struct {
 	Allowed bool
 	// Blocking is the budget that caused a block (nil when allowed).
 	Blocking *store.Budget
+	// CreditsExhausted is true when the block is an API key's prepaid credit
+	// running out, rather than a spend or token cap.
+	CreditsExhausted bool
 	// Alerts lists budgets that have crossed their alert threshold but not their
 	// hard limit. Informational; does not block.
 	Alerts []store.Budget
@@ -308,6 +311,7 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 			dec.Allowed = false
 			blocking := b
 			dec.Blocking = &blocking
+			dec.CreditsExhausted = isKeyCredit(b)
 			return dec, nil
 		}
 		// Check token limit.
@@ -337,12 +341,23 @@ func (e *Engine) CheckOrError(ctx context.Context, scope Scope) error {
 		return err
 	}
 	if !dec.Allowed {
-		return &core.ProviderError{
-			Kind:    core.ErrBudgetBlocked,
-			Message: fmt.Sprintf("budget %q exhausted for %s", dec.Blocking.ID, dec.Blocking.ScopeKind),
-		}
+		return blockedError(dec)
 	}
 	return nil
+}
+
+// isKeyCredit reports whether b is an API key's prepaid credit: a key budget
+// that never resets. Periodic key budgets are spend caps, not credit.
+func isKeyCredit(b store.Budget) bool {
+	return b.ScopeKind == store.ScopeAPIKey && (b.Period == "" || b.Period == "total")
+}
+
+func blockedError(dec Decision) error {
+	return &core.ProviderError{
+		Kind:             core.ErrBudgetBlocked,
+		Message:          fmt.Sprintf("budget %q exhausted for %s", dec.Blocking.ID, dec.Blocking.ScopeKind),
+		CreditsExhausted: dec.CreditsExhausted,
+	}
 }
 
 // Reserve checks the budget and records this request's estimated spend as a
@@ -377,10 +392,7 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 		return 0, err
 	}
 	if !dec.Allowed {
-		return 0, &core.ProviderError{
-			Kind:    core.ErrBudgetBlocked,
-			Message: fmt.Sprintf("budget %q exhausted for %s", dec.Blocking.ID, dec.Blocking.ScopeKind),
-		}
+		return 0, blockedError(dec)
 	}
 	if estimatedMicros < 0 {
 		estimatedMicros = 0
@@ -429,6 +441,7 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 				Kind: core.ErrBudgetBlocked,
 				Message: fmt.Sprintf("minimum API key balance is $%.2f (remaining $%s)",
 					float64(minKeyBalanceMicros)/1_000_000, usd(remaining)),
+				CreditsExhausted: isKeyCredit(b),
 			}
 		}
 		if estimatedMicros > remaining {
@@ -436,6 +449,7 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 				Kind: core.ErrBudgetBlocked,
 				Message: fmt.Sprintf("insufficient balance: request estimated at $%s, remaining $%s",
 					usd(estimatedMicros), usd(remaining)),
+				CreditsExhausted: isKeyCredit(b),
 			}
 		}
 	}

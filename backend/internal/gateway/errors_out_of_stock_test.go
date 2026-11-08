@@ -60,3 +60,20 @@ func TestWriteProviderError_MinDiscountNotMet(t *testing.T) {
 	require.NotContains(t, strings.ToLower(body), "surplus")
 	require.NotContains(t, body, "minimum_discount_not_met")
 }
+
+// Only a key's used-up prepaid credit asks the client to top up; any other
+// budget block keeps the generic message.
+func TestSanitizeUpstreamError_BudgetBlocked(t *testing.T) {
+	credit := &core.ProviderError{Kind: core.ErrBudgetBlocked, CreditsExhausted: true}
+	require.Contains(t, sanitizeUpstreamError(credit), "Top up your credit")
+
+	cap := &core.ProviderError{Kind: core.ErrBudgetBlocked}
+	require.Equal(t, "request blocked by budget policy", sanitizeUpstreamError(cap))
+}
+
+// Both discount-floor errors point the client at the final fallback.
+func TestDiscountFloorErrorsSuggestFallback(t *testing.T) {
+	require.Contains(t, errDiscountFloor("m", 30).Error(), "turn on the final fallback")
+	notMet := &core.ProviderError{Kind: core.ErrMinDiscountNotMet}
+	require.Contains(t, sanitizeUpstreamError(notMet), "turn on the final fallback")
+}

@@ -114,7 +114,8 @@ func sanitizeUpstreamError(err error) string {
 		return "upstream provider request failed"
 	}
 
-	switch core.AsProviderError(err).Kind {
+	pe := core.AsProviderError(err)
+	switch pe.Kind {
 	case core.ErrBadRequest:
 		return "upstream provider rejected the request"
 	case core.ErrContextWindow:
@@ -138,8 +139,12 @@ func sanitizeUpstreamError(err error) string {
 	case core.ErrModelOutOfStock:
 		return "model is temporarily out of stock, please retry in 15 seconds"
 	case core.ErrMinDiscountNotMet:
-		return "no offer for this model currently meets the minimum discount; retry in 15 seconds or lower your minimum discount in the portal"
+		return "no offer for this model currently meets the minimum discount. Retry in 15 seconds, lower your minimum discount, " +
+			"or turn on the final fallback in Model Settings to run at the normal price when no discount is available"
 	case core.ErrBudgetBlocked:
+		if pe.CreditsExhausted {
+			return "your API key does not have enough credit to call this model. Top up your credit in the portal, then try again"
+		}
 		return "request blocked by budget policy"
 	case core.ErrPolicyBlocked:
 		return "request blocked by policy"
