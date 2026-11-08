@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoMarketSlug, deriveCacheRates, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -154,6 +154,30 @@ test("autoMarketSlug pins Surplus providers by alias", () => {
   assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, "kimi-k3"), "surplus-trusted@openrouter:kimi-k3");
   assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, ""), "");
   assert.equal(autoMarketSlug(undefined, "kimi-k3"), "");
+});
+
+test("resolveSurplusProvider maps aliases to the id and name Surplus uses", () => {
+  const surplus = "https://api.surplusintelligence.ai/min30/v1";
+  const labels = {
+    bedrock: "Amazon Bedrock",
+    "dashscope-cn": "Alibaba DashScope - China",
+    concentrate: "Concentrate.ai",
+    zai: "Z.ai",
+    "0g": "0G Compute Router",
+    openrouter: "OpenRouter",
+    orcarouter: "OrcaRouter",
+  };
+  const p = (alias: string, display_name = "") => ({ alias, base_url: surplus, display_name });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-amazon-bedrock"), labels), { id: "bedrock", name: "Amazon Bedrock" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-aws", "Surplus Amazon Bedrock"), labels), { id: "bedrock", name: "Amazon Bedrock" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-dashscope-cn"), labels), { id: "dashscope-cn", name: "Alibaba DashScope - China" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-concentrate-ai"), labels), { id: "concentrate", name: "Concentrate.ai" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-zai", "Surplus Z.ai"), labels), { id: "zai", name: "Z.ai" });
+  // "router" is in both OpenRouter and OrcaRouter: no single match, keep the alias.
+  assert.deepEqual(resolveSurplusProvider(p("surplus-router"), labels), { id: "router", name: "" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-unknown"), labels), { id: "unknown", name: "" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-amazon-bedrock")), { id: "amazon-bedrock", name: "" });
+  assert.equal(autoMarketSlug(p("surplus-amazon-bedrock"), "claude-sonnet-5", labels), "surplus-trusted@bedrock:claude-sonnet-5");
 });
 
 test("stepPayload sends the trimmed portal provider name", () => {

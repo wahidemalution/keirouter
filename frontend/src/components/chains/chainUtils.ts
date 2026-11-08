@@ -265,10 +265,49 @@ export const surplusProviderOf = (provider?: Pick<Provider, "alias" | "base_url"
   return alias.startsWith("surplus-") ? alias.slice("surplus-".length) : "";
 };
 
+// SurplusLabels maps a Surplus provider id (bedrock) to the name Surplus
+// shows for it (Amazon Bedrock), as read from a model's order book.
+export type SurplusLabels = Record<string, string>;
+
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// resolveSurplusProvider finds the Surplus provider id and name a pinned
+// keirouter provider stands for. The alias suffix is tried as an id first,
+// then the alias and display name are compared with each Surplus id and name
+// (surplus-amazon-bedrock and "Surplus Amazon Bedrock" both match bedrock =
+// Amazon Bedrock). Without labels, or with no single match, the alias suffix
+// is kept as the id and the name is "".
+export const resolveSurplusProvider = (
+  provider: Pick<Provider, "alias" | "base_url"> & Partial<Pick<Provider, "display_name">> | undefined,
+  labels?: SurplusLabels,
+): { id: string; name: string } => {
+  const alias = surplusProviderOf(provider);
+  if (!alias || !labels) return { id: alias, name: "" };
+  if (labels[alias]) return { id: alias, name: labels[alias] };
+  const wants = [squash(alias), squash((provider?.display_name ?? "").replace(/^\s*surplus\b/i, ""))].filter(Boolean);
+  const ids = Object.keys(labels);
+  const unique = (found: string[]) => (found.length === 1 ? { id: found[0], name: labels[found[0]] } : null);
+  const exact = unique(ids.filter((id) => wants.includes(squash(id)) || wants.includes(squash(labels[id]))));
+  if (exact) return exact;
+  // Partial match, e.g. amazon-bedrock holds bedrock. Short ids are skipped so
+  // "0g" or "ai" never match by accident.
+  const partial = unique(ids.filter((id) => {
+    const sid = squash(id);
+    const sname = squash(labels[id]);
+    return wants.some((w) => (sid.length >= 4 && w.includes(sid)) || (w.length >= 4 && sname.includes(w)));
+  }));
+  return partial ?? { id: alias, name: "" };
+};
+
 // autoMarketSlug is the slug a step on a pinned Surplus provider routes by:
-// surplus-trusted@<provider>:<model>; "" when it has none.
-export const autoMarketSlug = (provider: Pick<Provider, "alias" | "base_url"> | undefined, model: string): string => {
-  const surplus = surplusProviderOf(provider);
+// surplus-trusted@<provider>:<model>; "" when it has none. With labels the
+// provider part is the id Surplus uses, not the alias suffix.
+export const autoMarketSlug = (
+  provider: Pick<Provider, "alias" | "base_url"> & Partial<Pick<Provider, "display_name">> | undefined,
+  model: string,
+  labels?: SurplusLabels,
+): string => {
+  const surplus = resolveSurplusProvider(provider, labels).id;
   return surplus && model.trim() ? `surplus-trusted@${surplus}:${model.trim()}` : "";
 };
 

@@ -3174,6 +3174,9 @@ export const api = {
   updateMarketPricingSettings: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent" | "surplus_fallback_depth">>) =>
     request<MarketPricingSettings>("PATCH", "/market-pricing/settings", patch),
   refreshMarketPrices: () => request<{ synced: number; last_fetched_at: string }>("POST", "/market-pricing/refresh", {}),
+  /** Surplus provider ids and names for a model; complete=false is a cached fallback. */
+  surplusProviders: (model: string) =>
+    request<{ providers: { id: string; name: string }[]; complete: boolean }>("GET", `/market-pricing/surplus-providers?model=${encodeURIComponent(model)}`),
   publicPricing: () => request<PublicPricingSettings>("GET", "/public-pricing"),
   updatePublicPricing: (body: { enabled: boolean; chain_ids: string[] }) =>
     request<PublicPricingSettings>("PUT", "/public-pricing", body),

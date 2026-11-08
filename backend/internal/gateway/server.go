@@ -114,6 +114,9 @@ type Server struct {
 	pricing pricingCache
 	// detail caches the Surplus reads behind /v1/public/model-detail.
 	detail detailCache
+	// surplusLabels caches the provider names behind the chain editor's
+	// Surplus step naming.
+	surplusLabels surplusLabelCache
 	// surplusURL overrides the Surplus feed the detail popup reads; empty
 	// uses market.SurplusAPIURL.
 	surplusURL string

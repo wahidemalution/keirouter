@@ -1,11 +1,12 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Provider } from "../../lib/api";
 import { useModelCatalog } from "../ModelSelect";
 import { ProviderLogo } from "../ProviderLogo";
 import { Button, Input } from "../ui";
-import { autoMarketSlug, providerIcon, surplusProviderOf } from "./chainUtils";
+import { autoMarketSlug, providerIcon, resolveSurplusProvider, surplusProviderOf } from "./chainUtils";
+import { loadSurplusLabels, useSurplusLabels } from "./useSurplusLabels";
 
 const focusRing = "focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500";
 
@@ -13,11 +14,14 @@ export interface NewStep {
   provider: string;
   model: string;
   marketSlug: string;
+  /** Portal provider name; "" when Surplus does not list the provider. */
+  displayName: string;
 }
 
 // SurplusStepsAdder adds one step per pinned Surplus provider for a model in
 // one go: the operator types the model once, ticks providers, and each step
-// gets its surplus-trusted@<provider>:<model> slug filled in.
+// gets its surplus-trusted@<provider>:<model> slug and portal name filled in
+// from the model's Surplus order book.
 export function SurplusStepsAdder({
   providers,
   existing,
@@ -35,11 +39,20 @@ export function SurplusStepsAdder({
   const [open, setOpen] = useState(false);
   const [model, setModel] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
   const surplus = useMemo(
     () => providers.filter((p) => surplusProviderOf(p)).sort((a, b) => a.display_name.localeCompare(b.display_name)),
     [providers],
   );
   const trimmed = model.trim();
+  // Wait for typing to pause before asking Surplus for the model's providers.
+  const [settled, setSettled] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(trimmed), 400);
+    return () => clearTimeout(t);
+  }, [trimmed]);
+  const labels = useSurplusLabels(open && settled ? [settled] : [])[trimmed];
+  const naming = open && trimmed !== "" && !labels && settled !== trimmed;
   // Model ids any Surplus provider lists, for the suggestion list.
   const knownModels = useMemo(() => {
     const ids = new Set(surplus.map((p) => p.id));
@@ -64,8 +77,16 @@ export function SurplusStepsAdder({
       else next.delete(id);
       return next;
     });
-  const add = () => {
-    onAdd(chosen.map((p) => ({ provider: p.id, model: trimmed, marketSlug: autoMarketSlug(p, trimmed) })));
+  const add = async () => {
+    setAdding(true);
+    const book = labels ?? (await loadSurplusLabels(trimmed)) ?? undefined;
+    setAdding(false);
+    onAdd(chosen.map((p) => ({
+      provider: p.id,
+      model: trimmed,
+      marketSlug: autoMarketSlug(p, trimmed, book),
+      displayName: resolveSurplusProvider(p, book).name,
+    })));
     setOpen(false);
   };
 
@@ -88,7 +109,7 @@ export function SurplusStepsAdder({
       <div>
         <h3 id={`${uid}-title`} className="text-[13px] font-medium text-fg">Add Surplus providers</h3>
         <p className="mt-0.5 text-[12px] leading-5 text-fg-muted">
-          One step per provider you tick, with its market slug filled in.
+          One step per provider you tick, with its market slug and portal name filled in from Surplus.
         </p>
       </div>
       <label className="block space-y-1.5">
@@ -119,6 +140,7 @@ export function SurplusStepsAdder({
           )}
         </div>
         {!trimmed && <p className="text-[12px] text-fg-muted">Enter a model ID first.</p>}
+        <p className="sr-only" role="status">{naming ? "Reading provider names from Surplus." : ""}</p>
         <ul className="divide-y divide-line rounded-lg border border-line bg-surface">
           {surplus.map((p) => {
             const dup = trimmed !== "" && already(p.id);
@@ -138,7 +160,12 @@ export function SurplusStepsAdder({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] text-fg">{p.display_name}</span>
                     {trimmed && (
-                      <span className="block truncate font-mono text-[11.5px] text-fg-muted">{autoMarketSlug(p, trimmed)}</span>
+                      <span className="block truncate font-mono text-[11.5px] text-fg-muted">{autoMarketSlug(p, trimmed, labels)}</span>
+                    )}
+                    {trimmed && labels && (
+                      <span className="block truncate text-[11.5px] text-fg-muted">
+                        {resolveSurplusProvider(p, labels).name ? `Portal name: ${resolveSurplusProvider(p, labels).name}` : "Not found on Surplus for this model"}
+                      </span>
                     )}
                   </span>
                   {dup ? (
@@ -156,7 +183,7 @@ export function SurplusStepsAdder({
         <Button type="button" variant="secondary" onClick={() => setOpen(false)} className="[@media(pointer:coarse)]:min-h-11">
           Cancel
         </Button>
-        <Button type="button" onClick={add} disabled={!trimmed || chosen.length === 0} className="[@media(pointer:coarse)]:min-h-11">
+        <Button type="button" onClick={() => void add()} disabled={!trimmed || chosen.length === 0 || adding} className="[@media(pointer:coarse)]:min-h-11">
           {chosen.length === 1 ? "Add 1 step" : `Add ${chosen.length} steps`}
         </Button>
       </div>
