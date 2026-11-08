@@ -470,6 +470,7 @@ func (s *Server) routes() chi.Router {
 		r.Get("/portal/api/discounts", s.handlePortalDiscounts)
 		r.Put("/portal/api/discounts/models/{model}", s.handlePortalSetModelDiscount)
 		r.Delete("/portal/api/discounts/models/{model}", s.handlePortalDeleteModelDiscount)
+		r.Get("/portal/api/models", s.handlePortalModels)
 		r.Get("/portal/api/model-settings", s.handlePortalModelSettings)
 		r.Put("/portal/api/model-settings/{model}/providers/{provider}", s.handlePortalSetModelProvider)
 		r.Put("/portal/api/model-settings/{model}/final-fallback", s.handlePortalSetModelFinalFallback)

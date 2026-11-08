@@ -2082,6 +2082,32 @@ export async function fetchPortalUsage(days?: number): Promise<KeyUsageData> {
   return data;
 }
 
+/** One model the portal key may call, with its best price per 1M tokens. */
+export interface PortalModelPrice {
+  name: string;
+  provider: string;
+  provider_id: string;
+  input_per_m: number;
+  output_per_m: number;
+  cached_per_m: number;
+  /** live follows the market (the price is today's cheapest offer), fixed is set. Empty when sold out. */
+  price_basis: "live" | "fixed" | "";
+  max_input_per_m: number | null;
+  max_output_per_m: number | null;
+  official_input_per_m: number | null;
+  official_output_per_m: number | null;
+  discount_up_to_pct: number | null;
+  context_tokens: number | null;
+  sold_out: boolean;
+}
+
+export async function fetchPortalModels(): Promise<{ models: PortalModelPrice[] }> {
+  const resp = await fetch("/portal/api/models");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load models");
+  return data;
+}
+
 export async function portalLogout(): Promise<void> {
   await fetch("/portal/auth/logout", { method: "POST" });
 }
