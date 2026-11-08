@@ -63,3 +63,18 @@ func (c *SnapshotCache) ProviderLabel(id string) string {
 	defer c.mu.RUnlock()
 	return c.labels[strings.ToLower(strings.TrimSpace(id))]
 }
+
+// ProviderLabels returns a copy of every Surplus provider label seen so far,
+// keyed by lowercased provider id.
+func (c *SnapshotCache) ProviderLabels() map[string]string {
+	if c == nil {
+		return map[string]string{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]string, len(c.labels))
+	for id, label := range c.labels {
+		out[id] = label
+	}
+	return out
+}
