@@ -792,10 +792,16 @@ func (p *Pipeline) stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		wait, shouldRetry := streamRateLimitWait(pe, rlRetries, waitBudget)
 		if !shouldRetry {
 			release(limits.Refund)
-			if !budgetReleased {
+			var usage core.Usage
+			if pe.AttemptUsage != nil {
+				usage = *pe.AttemptUsage
+			}
+			// A charged attempt keeps its hold until Confirm, like any
+			// recorded request.
+			if !budgetReleased && usageTokens(usage) == 0 {
 				p.budgetRelease(scope)
 			}
-			pe, cost := p.recordAttemptTerminal(ctx, req.Metadata, lastAttempt, pe, core.Usage{},
+			pe, cost := p.recordAttemptTerminal(ctx, req.Metadata, lastAttempt, pe, usage,
 				lastLatency, time.Since(requestStarted), 0, nil, fellBack || rlRetries > 0)
 			p.budgetConfirm(scope, cost)
 			return nil, pe
@@ -999,8 +1005,14 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 						defer func() { release(settled) }()
 						recordCtx := context.WithoutCancel(ctx)
 						var usage core.Usage
+						chars, hadOutput := 0, true
 						if meta.TokenMetered {
-							usage = tokenDirectStreamUsage(req, capture.Bytes(), streamErr)
+							scan := scanDirectStream(capture.Bytes())
+							chars, hadOutput = scan.chars, scan.hadOutput()
+							if streamErr == nil && !scan.finished && !hadOutput && usageTokens(scan.usage) == 0 {
+								streamErr = noOutputError(acc)
+							}
+							usage = tokenDirectStreamUsage(req, scan, streamErr)
 						} else {
 							usage = capturedStreamUsage(req, capture.Bytes())
 						}
@@ -1017,7 +1029,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 						}
 						if streamErr != nil {
 							pe := p.recordTerminalStreamFailure(recordCtx, req, meta, acc, streamErr,
-								started, requestStarted, usage, 0, ttft, saveCopy, fellBack, budgetScope)
+								started, requestStarted, usage, chars, hadOutput, ttft, saveCopy, fellBack, budgetScope)
 							p.log.Warn("direct stream terminated with upstream error",
 								"provider", acc.Target.Provider, "model", acc.Target.Model, "kind", pe.Kind)
 							return
@@ -1093,6 +1105,14 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		if callErr != nil {
 			cancelUpstream()
 			pe := providerErrorForAttempt(callErr, attempt)
+			if req.Metadata.TokenMetered && errors.Is(callErr, context.Canceled) {
+				// The upstream accepted the request and may have been
+				// reasoning for minutes before the client left: charge the
+				// attempt as a cut stream. stream() records it.
+				usage := tokenCutStreamUsage(req, core.Usage{}, 0)
+				pe.AttemptUsage = &usage
+				return nil, pe, false, attempt, time.Since(started), fellBack
+			}
 			lastErr = pe
 			if pe.Fallbackable() {
 				reportFast(0, false)
@@ -1237,7 +1257,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 			Message: "stream stall: no data received for " + stallTimeout.String(),
 		}
 		pe := p.recordTerminalStreamFailure(ctx, req, meta, attempt, stallErr,
-			attemptStarted, requestStarted, usage, completionChars, *ttft, save, fellBack, scope)
+			attemptStarted, requestStarted, usage, completionChars, completionChars > 0 || sawToolCall, *ttft, save, fellBack, scope)
 		select {
 		case out <- core.StreamChunk{Type: core.ChunkError, Err: pe}:
 		case <-ctx.Done():
@@ -1335,13 +1355,8 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 					if completionChars == 0 && !sawToolCall {
 						// The upstream closed the connection before producing
 						// anything: a failure, not an empty answer.
-						truncErr := &core.ProviderError{
-							Kind: core.ErrUpstream, Scope: core.FailureScopeProvider,
-							Provider: attempt.Target.Provider, Model: attempt.Target.Model,
-							Message: "upstream closed the stream before producing output",
-						}
-						pe := p.recordTerminalStreamFailure(ctx, req, meta, attempt, truncErr,
-							attemptStarted, requestStarted, usage, completionChars, *ttft, save, fellBack, scope)
+						pe := p.recordTerminalStreamFailure(ctx, req, meta, attempt, noOutputError(attempt),
+							attemptStarted, requestStarted, usage, completionChars, false, *ttft, save, fellBack, scope)
 						select {
 						case out <- core.StreamChunk{Type: core.ChunkError, Err: pe}:
 						case <-ctx.Done():
@@ -1403,7 +1418,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 					streamErr = &core.ProviderError{Kind: core.ErrUpstream, Message: "provider stream failed"}
 				}
 				pe := p.recordTerminalStreamFailure(ctx, req, meta, attempt, streamErr,
-					attemptStarted, requestStarted, usage, completionChars, *ttft, save, fellBack, scope)
+					attemptStarted, requestStarted, usage, completionChars, completionChars > 0 || sawToolCall, *ttft, save, fellBack, scope)
 				chunk.Err = pe
 				select {
 				case out <- chunk:
@@ -1500,6 +1515,7 @@ func mergeUsage(old, new core.Usage) core.Usage {
 	}
 	if new.CompletionTokens != 0 {
 		old.CompletionTokens = new.CompletionTokens
+		old.OutputPending = new.OutputPending
 	}
 	if new.TotalTokens != 0 {
 		old.TotalTokens = new.TotalTokens
@@ -1981,7 +1997,7 @@ func (p *Pipeline) recordSuccessTelemetry(meta core.RequestMetadata, attempt dis
 // estimated from the canonical request and streamed text seen so far.
 func (p *Pipeline) recordTerminalStreamFailure(ctx context.Context, req *core.ChatRequest,
 	meta core.RequestMetadata, attempt dispatch.Attempt, streamErr error,
-	attemptStarted, requestStarted time.Time, usage core.Usage, completionChars int,
+	attemptStarted, requestStarted time.Time, usage core.Usage, completionChars int, hadOutput bool,
 	ttft time.Duration, save *saveState, fellBack bool, scope budget.Scope) *core.ProviderError {
 	pe := providerErrorForAttempt(streamErr, attempt)
 	clientCanceled := core.IsClientDisconnect(pe)
@@ -1994,7 +2010,7 @@ func (p *Pipeline) recordTerminalStreamFailure(ctx context.Context, req *core.Ch
 		p.recordFailureTelemetry(meta, attempt, pe, upstreamLatency, false)
 	}
 	upstreamLatency := time.Since(attemptStarted)
-	usage = cutStreamUsage(req, usage, completionChars)
+	usage = failedStreamUsage(req, usage, completionChars, hadOutput, clientCanceled)
 	pe, cost := p.recordAttemptTerminal(ctx, meta, attempt, pe, usage, upstreamLatency,
 		time.Since(requestStarted), ttft, save, fellBack)
 	p.budgetConfirm(scope, cost)
@@ -2175,14 +2191,14 @@ func tokenPromptEstimate(req *core.ChatRequest) int {
 // tokens up to the output cap it was sent, and only the visible text is
 // countable here, so the cap is charged. A reported output count is kept.
 func tokenCutStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int) core.Usage {
-	// Above 1: an Anthropic message_start reports a 1-token placeholder.
-	if usage.CompletionTokens > 1 {
+	if usage.CompletionTokens > 0 && !usage.OutputPending {
 		return usage
 	}
 	usage.PromptTokens = max(usage.PromptTokens, tokenPromptEstimate(req))
 	usage.CompletionTokens = max(estimateStreamUsage(req, completionChars).CompletionTokens, int(maxOutputTokens(req)))
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	usage.Source = core.UsageSourceEstimated
+	usage.OutputPending = false
 	return usage
 }
 
@@ -2190,7 +2206,7 @@ func tokenCutStreamUsage(req *core.ChatRequest, usage core.Usage, completionChar
 // a stream without its finish event was cut; a finished one without usage is
 // estimated from its output, never as zero output.
 func tokenStreamEndUsage(req *core.ChatRequest, usage core.Usage, completionChars int, truncated bool) core.Usage {
-	if truncated {
+	if truncated || usage.OutputPending {
 		return tokenCutStreamUsage(req, usage, completionChars)
 	}
 	if usage.PromptTokens+usage.CompletionTokens > 0 {
@@ -2230,30 +2246,122 @@ func tokenUnaryUsageEstimate(req *core.ChatRequest, resp *core.ChatResponse) cor
 	return tokenEstimate(req, (chars*2+6)/7)
 }
 
-// tokenDirectStreamUsage is tokenStreamEndUsage for a direct stream, read
-// from the captured upstream bytes.
-func tokenDirectStreamUsage(req *core.ChatRequest, raw []byte, streamErr error) core.Usage {
-	truncated := streamErr != nil || !directStreamFinished(raw)
-	return tokenStreamEndUsage(req, extractUsageFromStream(raw), completionCharsFromStream(raw), truncated)
+// failedStreamUsage is the usage recorded for a stream that failed or was
+// cancelled. A token stream the upstream failed before any output is charged
+// nothing, as when it fails before admission; a cancelled one is charged as cut.
+func failedStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int, hadOutput, clientCanceled bool) core.Usage {
+	if req.Metadata.TokenMetered && !clientCanceled && !hadOutput && usageTokens(usage) == 0 {
+		return core.Usage{}
+	}
+	return cutStreamUsage(req, usage, completionChars)
 }
 
-// streamFinishMarkers are the terminal events of each dialect's stream.
-var streamFinishMarkers = [][]byte{
-	[]byte("[DONE]"),             // OpenAI chat
-	[]byte(`"finish_reason":"`),  // OpenAI chat without [DONE]
-	[]byte(`"finish_reason": "`), // the same, spaced
-	[]byte("message_stop"),       // Anthropic
-	[]byte("response.completed"), // Responses
-	[]byte("response.incomplete"),
-	[]byte(`"finishReason"`), // Gemini
-	[]byte(`"done":true`),    // Ollama
+// noOutputError reports an upstream that closed its stream before any output.
+func noOutputError(attempt dispatch.Attempt) *core.ProviderError {
+	return &core.ProviderError{
+		Kind: core.ErrUpstream, Scope: core.FailureScopeProvider,
+		Provider: attempt.Target.Provider, Model: attempt.Target.Model,
+		Message: "upstream closed the stream before producing output",
+	}
 }
 
-// directStreamFinished reports whether a captured direct stream reached its
-// dialect's terminal event.
-func directStreamFinished(raw []byte) bool {
-	for _, m := range streamFinishMarkers {
-		if bytes.Contains(raw, m) {
+// directStreamScan is what a token-metered direct stream's captured bytes
+// show.
+type directStreamScan struct {
+	usage    core.Usage // provider usage, merged across events
+	chars    int        // streamed text and reasoning
+	toolCall bool
+	finished bool // the dialect's terminal event arrived
+}
+
+func (s directStreamScan) hadOutput() bool { return s.chars > 0 || s.toolCall }
+
+func scanDirectStream(raw []byte) directStreamScan {
+	finished, toolCall := scanStreamFraming(raw)
+	return directStreamScan{
+		usage:    extractUsageFromStream(raw),
+		chars:    completionCharsFromStream(raw),
+		toolCall: toolCall,
+		finished: finished,
+	}
+}
+
+// tokenDirectStreamUsage is the usage recorded for a token-metered direct
+// stream.
+func tokenDirectStreamUsage(req *core.ChatRequest, scan directStreamScan, streamErr error) core.Usage {
+	if streamErr != nil {
+		return failedStreamUsage(req, scan.usage, scan.chars, scan.hadOutput(), errors.Is(streamErr, context.Canceled))
+	}
+	return tokenStreamEndUsage(req, scan.usage, scan.chars, !scan.finished)
+}
+
+// jsonMembers renders "key":value pairs both compact and with a space after
+// the colon. Inside a JSON string the quotes would be escaped, so model text
+// that mentions them never matches.
+func jsonMembers(pairs ...string) [][]byte {
+	var out [][]byte
+	for i := 0; i+1 < len(pairs); i += 2 {
+		out = append(out, []byte(`"`+pairs[i]+`":`+pairs[i+1]), []byte(`"`+pairs[i]+`": `+pairs[i+1]))
+	}
+	return out
+}
+
+var (
+	// streamFinishMembers end a stream: OpenAI chat finish_reason, Anthropic
+	// message_stop, Responses completed/incomplete, Gemini finishReason,
+	// Ollama done.
+	streamFinishMembers = jsonMembers(
+		"finish_reason", `"`,
+		"type", `"message_stop"`,
+		"type", `"response.completed"`,
+		"type", `"response.incomplete"`,
+		"finishReason", `"`,
+		"done", "true",
+	)
+	// streamFinishEvents are the same endings as SSE event names.
+	streamFinishEvents = map[string]bool{
+		"message_stop": true, "response.completed": true, "response.incomplete": true,
+	}
+	// streamToolCallMembers start or carry a streamed tool call.
+	streamToolCallMembers = jsonMembers(
+		"tool_calls", "[{",
+		"type", `"tool_use"`,
+		"type", `"input_json_delta"`,
+		"type", `"function_call"`,
+		"type", `"custom_tool_call"`,
+		"functionCall", "{",
+	)
+)
+
+// scanStreamFraming reports whether a captured stream reached its dialect's
+// terminal event and whether it streamed a tool call, matching only SSE
+// framing and JSON members.
+func scanStreamFraming(raw []byte) (finished, toolCall bool) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64*1024), len(raw)+1)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if name, ok := bytes.CutPrefix(line, []byte("event:")); ok {
+			finished = finished || streamFinishEvents[string(bytes.TrimSpace(name))]
+			continue
+		}
+		if data, ok := bytes.CutPrefix(line, []byte("data:")); ok && bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
+			finished = true
+			continue
+		}
+		payload, ok := streamJSONPayloadBytes(line)
+		if !ok {
+			continue
+		}
+		finished = finished || containsAny(payload, streamFinishMembers)
+		toolCall = toolCall || containsAny(payload, streamToolCallMembers)
+	}
+	return finished, toolCall
+}
+
+func containsAny(b []byte, subs [][]byte) bool {
+	for _, s := range subs {
+		if bytes.Contains(b, s) {
 			return true
 		}
 	}
@@ -2909,6 +3017,7 @@ func extractUsageFromSSEData(data []byte) *core.Usage {
 		if env.Message.Usage.InputTokens > 0 || u.CachedTokens > 0 || u.CacheWriteTokens > 0 {
 			u.PromptTokens = env.Message.Usage.InputTokens + u.CachedTokens + u.CacheWriteTokens
 		}
+		u.OutputPending = true
 	}
 	// Responses input_tokens already include the cached ones, and
 	// output_tokens the reasoning ones.

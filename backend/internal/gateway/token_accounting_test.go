@@ -370,3 +370,165 @@ func TestTokenStreamRequestsUpstreamUsage(t *testing.T) {
 		})
 	}
 }
+
+// zeroByteSSEUpstream opens the stream and ends it without a byte.
+func zeroByteSSEUpstream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// errorOnlySSEUpstream sends only an in-band error event.
+func errorOnlySSEUpstream(w http.ResponseWriter, r *http.Request) {
+	zeroByteSSEUpstream(w, r)
+	fmt.Fprintf(w, "%s\n\n", `data: {"error":{"message":"upstream overloaded","type":"server_error"}}`)
+}
+
+// resetBeforeOutputSSEUpstream opens the stream and resets the connection
+// before the first token.
+func resetBeforeOutputSSEUpstream(w http.ResponseWriter, r *http.Request) {
+	zeroByteSSEUpstream(w, r)
+	panic(http.ErrAbortHandler)
+}
+
+// An upstream that fails before any output costs the token key nothing, on
+// the direct path as on the translated one (where admission refuses it).
+func TestTokenStreamFailureBeforeOutputNotCharged(t *testing.T) {
+	upstreams := []struct {
+		name string
+		h    http.HandlerFunc
+	}{
+		{"clean_eof", zeroByteSSEUpstream},
+		{"error_event", errorOnlySSEUpstream},
+		{"reset", resetBeforeOutputSSEUpstream},
+	}
+	for _, up := range upstreams {
+		for _, c := range streamPaths {
+			t.Run(up.name+"/"+c.name, func(t *testing.T) {
+				h := newE2E(t, up.h)
+				h.budget.SetTokenHoldTail(0)
+				tokenKey, keyID := e2eTokenKey(t, h)
+				addKeyBudget(t, h, keyID, 0, 1_000_000)
+
+				_ = readAllString(t, h.post(t, c.path, c.body, tokenKey))
+
+				row := lastUsageRow(t, h, keyID)
+				require.Equal(t, "failed", row.Status)
+				require.Zero(t, row.Prompt)
+				require.Zero(t, row.Completion)
+				require.Eventually(t, func() bool { return heldTokens(t, h, keyID) == 0 },
+					3*time.Second, 20*time.Millisecond)
+			})
+		}
+	}
+}
+
+// TestTokenStreamCancelDuringAdmissionCharged: the client leaves while the
+// upstream has accepted the stream but sent no output yet (hidden reasoning).
+func TestTokenStreamCancelDuringAdmissionCharged(t *testing.T) {
+	accepted := make(chan struct{}, 1)
+	upstream := func(w http.ResponseWriter, r *http.Request) {
+		zeroByteSSEUpstream(w, r)
+		accepted <- struct{}{}
+		<-r.Context().Done()
+	}
+	h := newE2E(t, upstream)
+	h.budget.SetTokenHoldTail(0)
+	tokenKey, keyID := e2eTokenKey(t, h)
+	addKeyBudget(t, h, keyID, 0, 1_000_000)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.server.URL+streamPaths[1].path, strings.NewReader(streamPaths[1].body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tokenKey)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+	}()
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream never received the request")
+	}
+	cancel()
+	<-done
+
+	row := lastUsageRow(t, h, keyID)
+	require.Equal(t, "cancelled", row.Status)
+	require.Equal(t, 4000, row.Completion, "an accepted stream is charged the cap")
+	require.Positive(t, row.Prompt)
+	require.Eventually(t, func() bool { return heldTokens(t, h, keyID) == 0 },
+		3*time.Second, 20*time.Millisecond)
+}
+
+// TestPAYGStreamCancelDuringAdmissionUnchanged: PAYG still records nothing.
+func TestPAYGStreamCancelDuringAdmissionUnchanged(t *testing.T) {
+	accepted := make(chan struct{}, 1)
+	upstream := func(w http.ResponseWriter, r *http.Request) {
+		zeroByteSSEUpstream(w, r)
+		accepted <- struct{}{}
+		<-r.Context().Done()
+	}
+	h := newE2E(t, upstream)
+	_, _ = e2eTokenKey(t, h)
+	keyID := paygKeyID(t, h)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.server.URL+streamPaths[1].path, strings.NewReader(streamPaths[1].body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+	}()
+	<-accepted
+	cancel()
+	<-done
+
+	row := lastUsageRow(t, h, keyID)
+	require.Equal(t, "cancelled", row.Status)
+	require.Zero(t, row.Prompt)
+	require.Zero(t, row.Completion)
+}
+
+// longHangingSSEUpstream streams 700 characters, then holds the stream open.
+func longHangingSSEUpstream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprintf(w, "data: {\"id\":\"s1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\n", strings.Repeat("x", 700))
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	<-r.Context().Done()
+}
+
+// TestTokenStreamCancelVisibleOutputAboveCap: an upstream that streamed more
+// than the cap is charged what it visibly streamed.
+func TestTokenStreamCancelVisibleOutputAboveCap(t *testing.T) {
+	for _, c := range streamPaths {
+		t.Run(c.name, func(t *testing.T) {
+			h := newE2E(t, longHangingSSEUpstream)
+			tokenKey, keyID := e2eTokenKey(t, h)
+			addKeyBudget(t, h, keyID, 0, 1_000_000)
+
+			body := strings.Replace(c.body, `"max_tokens":4000`, `"max_tokens":5`, 1)
+			cancelAfterFirstByte(t, h, c.path, body, tokenKey)
+
+			row := lastUsageRow(t, h, keyID)
+			require.Equal(t, "cancelled", row.Status)
+			require.Equal(t, 200, row.Completion, "700 visible chars at 3.5 per token, above the cap of 5")
+		})
+	}
+}

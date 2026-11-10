@@ -57,6 +57,9 @@ type Usage struct {
 	ProviderCostNanos int64 `json:"-"`
 	// Source is router-internal provenance and is never emitted to API clients.
 	Source UsageSource `json:"-"`
+	// OutputPending marks CompletionTokens as a placeholder sent before the
+	// output (Anthropic message_start); the real count comes later.
+	OutputPending bool `json:"-"`
 }
 
 // ChatResponse is the canonical non-streaming completion result.

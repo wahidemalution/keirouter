@@ -126,6 +126,7 @@ func (AnthropicCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk
 	case "message_start":
 		if ev.Message != nil {
 			u := antUsageToCore(ev.Message.Usage)
+			u.OutputPending = true
 			return []core.StreamChunk{{Type: core.ChunkUsage, Usage: &u}}, nil
 		}
 		return nil, nil
