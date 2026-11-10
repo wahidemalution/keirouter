@@ -19,9 +19,9 @@ import (
 // markTokenOrderPaid settles a token package order exactly once: the guarded
 // transition out of a settleable status must win, then the user's token key
 // gains the package (created on the first purchase). It never adds PAYG
-// credit. A payment that cannot be applied (package deleted, or a days
-// package with no active package) moves the order to manual with reason
-// refund_required, grants nothing and reports applied=false.
+// credit. A payment that cannot be applied (package or portal user deleted,
+// or a days package with no active package) moves the order to manual with
+// reason refund_required, grants nothing and reports applied=false.
 func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrder, to store.PaymentOrderStatus, actor, reason string) (bool, error) {
 	if !order.Status.Settleable() {
 		return false, nil
@@ -52,6 +52,16 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 	if err != nil {
 		return false, err
 	}
+	// The user can be deleted between checkout and payment; without it there
+	// is no key to grant to, so the payment goes to manual instead of failing
+	// on every retry.
+	user, err := s.db.PortalUsers().GetBySub(ctx, order.GoogleSub)
+	if errors.Is(err, store.ErrNotFound) {
+		return s.markTokenOrderManualOnTx(ctx, tx, order, actor, "portal user deleted", reason)
+	}
+	if err != nil {
+		return false, fmt.Errorf("token: load portal user: %w", err)
+	}
 
 	now := time.Now()
 	var (
@@ -69,7 +79,15 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		if err != nil {
 			return false, err
 		}
-		state = tokenpkg.State{Exists: true, ExpiresAt: sub.ExpiresAt, UsedTokens: used, LimitTokens: bud.LimitTokens}
+		limit := bud.LimitTokens
+		if limit <= 0 {
+			// The budget was removed or zeroed, and 0 reads as unlimited.
+			// Fail closed: whatever was left before is gone.
+			s.log.Error("token: token key budget has no token limit; resetting to used tokens",
+				"key", sub.KeyID, "order", order.ID, "used", used)
+			limit = used
+		}
+		state = tokenpkg.State{Exists: true, ExpiresAt: sub.ExpiresAt, UsedTokens: used, LimitTokens: limit}
 	case !errors.Is(err, store.ErrNotFound):
 		return false, err
 	}
@@ -82,15 +100,17 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		return false, err
 	}
 
+	if res.LimitTokens <= 0 {
+		// Only a days package on an unused key whose budget was lost lands
+		// here; the smallest non-zero limit keeps it from being unlimited.
+		res.LimitTokens = 1
+	}
+
 	applied, err := s.db.PaymentOrders().TransitionFromOnTx(ctx, tx, order.ID, store.PaymentSettleable, to, actor, reason, now.UTC().Format(time.RFC3339))
 	if err != nil || !applied {
 		return false, err
 	}
 	if !state.Exists {
-		user, err := s.db.PortalUsers().GetBySub(ctx, order.GoogleSub)
-		if err != nil {
-			return false, fmt.Errorf("token: load portal user: %w", err)
-		}
 		settings, err := tokenpkg.Load(ctx, s.db.Settings())
 		if err != nil {
 			return false, err

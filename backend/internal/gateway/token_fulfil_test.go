@@ -115,8 +115,9 @@ func TestTokenOrderFirstPurchaseCreatesKey(t *testing.T) {
 	require.Equal(t, "total", b.Period)
 	require.True(t, b.HardCutoff)
 
-	models, _, err := s.identity.Keys().EffectiveAllowedModels(ctx, sub.KeyID, "")
+	models, source, err := s.identity.Keys().EffectiveAllowedModels(ctx, sub.KeyID, key.PlanID)
 	require.NoError(t, err)
+	require.Equal(t, "plan", source)
 	require.ElementsMatch(t, tokenpkg.DefaultModels, models)
 
 	order, err := s.db.PaymentOrders().Get(ctx, "t1")
@@ -303,4 +304,63 @@ func TestAdminCancelAndSummaryRecogniseTokenOrders(t *testing.T) {
 	require.Zero(t, sum.TotalIDR, "token sales are not credit revenue")
 	require.EqualValues(t, 259000, sum.TokenIDR)
 	require.Equal(t, map[string]int{"cancelled": 1, "completed": 1}, sum.TokenCounts)
+}
+
+// A token key's budget must never be left at LimitTokens=0, which the budget
+// engine reads as unlimited.
+func TestTokenDaysOrderNeverLeavesUnlimitedBudget(t *testing.T) {
+	t.Run("zeroed limit", func(t *testing.T) {
+		s, paygKey := newTokenTestServer(t)
+		require.True(t, payTokenOrder(t, s, paygKey, "t1", "tp-100m"))
+		sub, err := s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
+		require.NoError(t, err)
+		recordTokens(t, s, "u1", sub.KeyID, 0, 500)
+		tx, err := s.db.SQL().BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		require.NoError(t, s.budgets.SetTokenLimitOnTx(t.Context(), tx, tokenBudget(t, s, sub.KeyID).ID, 0))
+		require.NoError(t, tx.Commit())
+
+		require.True(t, payTokenOrder(t, s, paygKey, "t2", "tp-days-15"))
+		require.EqualValues(t, 500, tokenBudget(t, s, sub.KeyID).LimitTokens, "nothing remaining, not unlimited")
+	})
+	t.Run("deleted budget", func(t *testing.T) {
+		s, paygKey := newTokenTestServer(t)
+		require.True(t, payTokenOrder(t, s, paygKey, "t1", "tp-100m"))
+		sub, err := s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
+		require.NoError(t, err)
+		recordTokens(t, s, "u1", sub.KeyID, 0, 700)
+		require.NoError(t, s.budgets.Delete(t.Context(), tokenBudget(t, s, sub.KeyID).ID))
+
+		require.True(t, payTokenOrder(t, s, paygKey, "t2", "tp-days-15"))
+		require.EqualValues(t, 700, tokenBudget(t, s, sub.KeyID).LimitTokens)
+
+		require.True(t, payTokenOrder(t, s, paygKey, "t3", "tp-20m"))
+		require.EqualValues(t, 20_000_700, tokenBudget(t, s, sub.KeyID).LimitTokens)
+	})
+	t.Run("deleted budget, nothing used", func(t *testing.T) {
+		s, paygKey := newTokenTestServer(t)
+		require.True(t, payTokenOrder(t, s, paygKey, "t1", "tp-100m"))
+		sub, err := s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
+		require.NoError(t, err)
+		require.NoError(t, s.budgets.Delete(t.Context(), tokenBudget(t, s, sub.KeyID).ID))
+
+		require.True(t, payTokenOrder(t, s, paygKey, "t2", "tp-days-15"))
+		require.Positive(t, tokenBudget(t, s, sub.KeyID).LimitTokens)
+	})
+}
+
+func TestTokenOrderDeletedPortalUserIsManual(t *testing.T) {
+	s, paygKey := newTokenTestServer(t)
+	o := makeTokenOrder(t, s, paygKey, "t1", "tp-100m")
+	require.NoError(t, s.db.PortalUsers().Delete(t.Context(), tokenTestSub))
+
+	applied, err := s.markTokenOrderPaid(t.Context(), o, store.PaymentCompleted, "webhook", "")
+	require.NoError(t, err)
+	require.False(t, applied)
+	order, err := s.db.PaymentOrders().Get(t.Context(), "t1")
+	require.NoError(t, err)
+	require.Equal(t, store.PaymentManual, order.Status)
+	require.Contains(t, order.Reason, "refund_required: portal user deleted")
+	_, err = s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
+	require.ErrorIs(t, err, store.ErrNotFound)
 }
