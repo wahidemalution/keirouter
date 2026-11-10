@@ -95,12 +95,7 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusConflict, "api key is not usable")
 		return
 	}
-	// Token keys never carry PAYG credit.
-	if _, terr := s.db.TokenSubscriptions().GetByKey(r.Context(), keyID); terr == nil {
-		writeError(w, http.StatusConflict, "credit cannot be added to a token package key")
-		return
-	} else if !errors.Is(terr, store.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, terr, "internal server error"))
+	if s.refuseTokenKeyCredit(r.Context(), w, keyID) {
 		return
 	}
 

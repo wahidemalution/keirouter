@@ -68,6 +68,9 @@ func (s *Server) topupKeyCore(w http.ResponseWriter, r *http.Request, keyID stri
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
+	if s.refuseTokenKeyCredit(r.Context(), w, key.ID) {
+		return
+	}
 
 	var body topupRequest
 	if !decodeJSON(w, r, &body) {

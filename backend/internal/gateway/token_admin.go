@@ -41,6 +41,22 @@ func (s *Server) isTokenPlan(ctx context.Context, planID string) (bool, error) {
 
 const tokenPlanReservedMsg = "this plan is reserved for token packages"
 
+// refuseTokenKeyCredit writes 409 and reports true when keyID is a token
+// package key: those keys carry a token budget and never PAYG credit.
+func (s *Server) refuseTokenKeyCredit(ctx context.Context, w http.ResponseWriter, keyID string) bool {
+	_, err := s.db.TokenSubscriptions().GetByKey(ctx, keyID)
+	switch {
+	case err == nil:
+		writeError(w, http.StatusConflict, "credit cannot be added to a token package key")
+		return true
+	case errors.Is(err, store.ErrNotFound):
+		return false
+	default:
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return true
+	}
+}
+
 func tokenPackageView(p store.TokenPackage) map[string]any {
 	return map[string]any{
 		"id": p.ID, "name": p.Name, "kind": string(p.Kind), "tokens": p.Tokens, "days": p.Days,

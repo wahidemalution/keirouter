@@ -63,6 +63,9 @@ func (s *Server) adminAdjustKeyLimit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
+	if s.refuseTokenKeyCredit(r.Context(), w, key.ID) {
+		return
+	}
 
 	var body adjustLimitRequest
 	if !decodeJSON(w, r, &body) {
