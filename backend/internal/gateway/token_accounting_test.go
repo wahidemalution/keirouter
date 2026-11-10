@@ -145,7 +145,9 @@ func TestTokenStreamUpstreamDisconnectCharged(t *testing.T) {
 	}
 }
 
-func TestTokenStreamCompleteWithoutUsageEstimated(t *testing.T) {
+// A finished stream without a usage frame may have spent hidden reasoning:
+// it is charged like a cut one.
+func TestTokenStreamCompleteWithoutUsageChargedCap(t *testing.T) {
 	noUsage := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for _, l := range []string{
@@ -168,8 +170,7 @@ func TestTokenStreamCompleteWithoutUsageEstimated(t *testing.T) {
 			row := lastUsageRow(t, h, keyID)
 			require.Equal(t, "success", row.Status)
 			require.Positive(t, row.Prompt)
-			require.Positive(t, row.Completion)
-			require.Less(t, row.Completion, 100, "a finished stream is estimated from its output, not the cap")
+			require.Equal(t, 4000, row.Completion, "no reported output: charged the output cap")
 		})
 	}
 }

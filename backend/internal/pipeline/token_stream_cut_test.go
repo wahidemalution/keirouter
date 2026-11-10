@@ -95,3 +95,21 @@ func TestDirectStreamFinishMatchesFramingOnly(t *testing.T) {
 	_, tool = scanStreamFraming([]byte(`data: {"choices":[{"index":0,"delta":{"content":"tool_calls tool_use"}}]}` + "\n\n"))
 	require.False(t, tool)
 }
+
+// A finished token stream is billed from reported output only; without it
+// the hidden reasoning is unknown, so it is charged as cut.
+func TestTokenStreamEndUsageFinishedWithoutReportedOutput(t *testing.T) {
+	for name, usage := range map[string]core.Usage{
+		"no_usage":    {},
+		"prompt_only": {PromptTokens: 20},
+		"pending":     {PromptTokens: 20, CompletionTokens: 1, OutputPending: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := tokenStreamEndUsage(tokenReq(4000), usage, 40, false)
+			require.Equal(t, 4000, got.CompletionTokens)
+			require.Equal(t, max(usage.PromptTokens, 7), got.PromptTokens)
+		})
+	}
+	reported := core.Usage{PromptTokens: 20, CompletionTokens: 30, TotalTokens: 50}
+	require.Equal(t, reported, tokenStreamEndUsage(tokenReq(4000), reported, 40, false))
+}

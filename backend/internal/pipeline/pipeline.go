@@ -2244,17 +2244,14 @@ func tokenCutStreamUsage(req *core.ChatRequest, usage core.Usage, completionChar
 	return usage
 }
 
-// tokenStreamEndUsage settles a token-metered stream whose upstream closed:
-// a stream without its finish event was cut; a finished one without usage is
-// estimated from its output, never as zero output.
+// tokenStreamEndUsage settles a token-metered stream whose upstream closed.
+// Only a reported output count is billed as is: without one, finished or
+// not, hidden reasoning may have run to the cap, so it is charged as cut.
 func tokenStreamEndUsage(req *core.ChatRequest, usage core.Usage, completionChars int, truncated bool) core.Usage {
-	if truncated || usage.OutputPending {
+	if truncated || !reportedOutput(usage) {
 		return tokenCutStreamUsage(req, usage, completionChars)
 	}
-	if usage.PromptTokens+usage.CompletionTokens > 0 {
-		return usage
-	}
-	return tokenEstimate(req, (completionChars*2+6)/7)
+	return usage
 }
 
 // tokenEstimate is a token-metered request's usage when the upstream
