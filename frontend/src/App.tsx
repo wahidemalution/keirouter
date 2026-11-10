@@ -47,6 +47,7 @@ const BansosPage = lazy(routeLoaders["/bansos"]);
 const PortalUsersPage = lazy(routeLoaders["/portal-users"]);
 const FinancePage = lazy(routeLoaders["/finance"]);
 const HostingPage = lazy(routeLoaders["/hosting"]);
+const TokenPackagesPage = lazy(routeLoaders["/token-packages"]);
 const PublicLanding = lazy(() => import("./pages/PublicLanding"));
 const PublicBansos = lazy(() => import("./pages/PublicBansos"));
 const PublicModels = lazy(() => import("./pages/PublicModels"));
@@ -131,6 +132,7 @@ export function App() {
                 <Route path="finance/:tab" element={<FinancePage />} />
                 <Route path="payments" element={<Navigate to={dashboard("/finance")} replace />} />
                 <Route path="hosting/finance" element={<Navigate to={dashboard("/finance/hosting")} replace />} />
+                <Route path="token-packages" element={<TokenPackagesPage />} />
                 <Route path="hosting" element={<HostingPage />} />
                 <Route path="hosting/:section" element={<HostingPage />} />
                 <Route path="system" element={<SystemPage />} />

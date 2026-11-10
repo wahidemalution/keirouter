@@ -2013,6 +2013,56 @@ export interface PaymentOrder {
   paid_at?: string;
 }
 
+export interface TokenSettings {
+  enabled: boolean;
+  allowed_models: string[];
+  /** 0 = unlimited. */
+  rpm_limit: number;
+  /** 0 = unlimited. */
+  concurrency_limit: number;
+}
+
+export type TokenSettingsInput = Partial<TokenSettings>;
+
+export type TokenPackageKind = "tokens" | "days";
+
+export interface TokenPackage {
+  id: string;
+  name: string;
+  kind: TokenPackageKind;
+  /** 0 for a days package. */
+  tokens: number;
+  days: number;
+  price_idr: number;
+  enabled: boolean;
+  featured: boolean;
+  sort: number;
+}
+
+export interface TokenPackageInput {
+  name: string;
+  kind: TokenPackageKind;
+  tokens: number;
+  days: number;
+  price_idr: number;
+  enabled: boolean;
+  featured: boolean;
+  sort: number;
+}
+
+export interface TokenSubscription {
+  google_sub: string;
+  email: string;
+  key_id: string;
+  key_display: string;
+  /** All-time usage; remaining = limit_tokens - used_tokens. */
+  used_tokens: number;
+  limit_tokens: number;
+  expires_at: string;
+  active: boolean;
+  disabled: boolean;
+}
+
 export interface PaymentOrderAdmin extends PaymentOrder {
   /** "hosting" for Hosting 9router orders; "" or "credit" for credit top-ups. */
   product?: string;
@@ -2715,6 +2765,16 @@ export const api = {
 
   // Payment orders (admin): revenue summary and manual credit approval.
   paymentOrders: () => request<{ orders: PaymentOrderAdmin[] }>("GET", "/payments/orders"),
+  getTokenSettings: () => request<TokenSettings>("GET", "/token-packages/settings"),
+  saveTokenSettings: (input: TokenSettingsInput) => request<TokenSettings>("PUT", "/token-packages/settings", input),
+  listTokenPackages: () => request<TokenPackage[]>("GET", "/token-packages"),
+  createTokenPackage: (input: TokenPackageInput) => request<TokenPackage>("POST", "/token-packages", input),
+  updateTokenPackage: (id: string, input: TokenPackageInput) =>
+    request<TokenPackage>("PUT", `/token-packages/${encodeURIComponent(id)}`, input),
+  deleteTokenPackage: (id: string) => request<void>("DELETE", `/token-packages/${encodeURIComponent(id)}`),
+  listTokenSubscriptions: () => request<TokenSubscription[]>("GET", "/token-packages/subscriptions"),
+  toggleTokenKey: (sub: string) =>
+    request<{ disabled: boolean }>("POST", `/token-packages/subscriptions/${encodeURIComponent(sub)}/key/toggle`),
   paymentSummary: () => request<PaymentSummary>("GET", "/payments/summary"),
   paymentEconomics: () => request<UsageEconomics>("GET", "/payments/economics"),
   approvePaymentOrder: (id: string, reason: string) =>

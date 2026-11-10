@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Check, CreditCard, Loader2, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,7 +30,8 @@ const STATUS_LABEL: Record<string, string> = {
 // order's SumoPod link stays payable, so it can be approved too.
 const SETTLEABLE = new Set(["pending", "expired", "failed", "cancelled"]);
 
-export function PortalOrders() {
+/** `product` limits the list to one product's orders; the backend returns all of them. */
+export function PortalOrders({ product }: { product?: "token" } = {}) {
   const qc = useQueryClient();
   const toast = useToast();
   const [approving, setApproving] = useState<PaymentOrderAdmin | null>(null);
@@ -44,7 +45,12 @@ export function PortalOrders() {
     mutationFn: ({ id, reason }: { id: string; reason: string }) => api.approvePaymentOrder(id, reason),
     onSuccess: (order) => {
       const hosting = (order?.product ?? approving?.product) === "hosting";
-      toast.success("Payment approved", hosting ? "The instance can now be created on the Hosting page." : "Credit added to the user's key.");
+      const token = (order?.product ?? approving?.product) === "token";
+      toast.success(
+        "Payment approved",
+        hosting ? "The instance can now be created on the Hosting page." : token ? "Paket token dipasang ke key pelanggan." : "Credit added to the user's key.",
+      );
+      if (token) qc.invalidateQueries({ queryKey: ["token-subscriptions"] });
       if (hosting) qc.invalidateQueries({ queryKey: ["hosting-instances"] });
       qc.invalidateQueries({ queryKey: ["payment-orders"] });
       qc.invalidateQueries({ queryKey: ["payment-summary"] });
@@ -69,8 +75,9 @@ export function PortalOrders() {
     cancel.reset();
   };
 
-  const orders = ordersQuery.data?.orders ?? [];
-  const pending = summaryQuery.data?.count_by_status?.pending ?? 0;
+  const allOrders = ordersQuery.data?.orders;
+  const orders = useMemo(() => (product ? (allOrders ?? []).filter((o) => o.product === product) : (allOrders ?? [])), [allOrders, product]);
+  const pending = product ? orders.filter((o) => o.status === "pending").length : (summaryQuery.data?.count_by_status?.pending ?? 0);
   const { paged, page, pages, setPage, total } = useClientPagination(orders, 10);
 
   const close = () => {
@@ -81,8 +88,12 @@ export function PortalOrders() {
   return (
     <Panel
       icon={ShoppingCart}
-      title="Portal orders"
-      subtitle="User credit top-ups through the payment gateway, with manual approval."
+      title={product === "token" ? "Order paket token" : "Portal orders"}
+      subtitle={
+        product === "token"
+          ? "Pembelian paket token lewat payment gateway, dengan persetujuan manual."
+          : "User credit top-ups through the payment gateway, with manual approval."
+      }
       action={pending > 0 ? <Badge tone="warning">{pending} pending</Badge> : undefined}
     >
       {ordersQuery.isLoading ? (
@@ -96,7 +107,12 @@ export function PortalOrders() {
           <ErrorBanner message={`Couldn't load portal orders. ${errorText(ordersQuery.error)}`} />
         </div>
       ) : orders.length === 0 ? (
-        <EmptyState icon={ShoppingCart} size="sm" title="No payments yet" hint="Portal top-ups show up here as soon as a user starts a payment." />
+        <EmptyState
+          icon={ShoppingCart}
+          size="sm"
+          title={product === "token" ? "Belum ada order paket token" : "No payments yet"}
+          hint={product === "token" ? "Order muncul di sini begitu pelanggan memulai pembayaran paket token." : "Portal top-ups show up here as soon as a user starts a payment."}
+        />
       ) : (
         <>
           <div className="overflow-x-auto" role="region" aria-label="Portal orders table" tabIndex={0}>
@@ -122,13 +138,14 @@ export function PortalOrders() {
                       <p className="flex flex-wrap items-center gap-1.5 text-fg">
                         {o.user_email || o.google_sub || "-"}
                         {o.product === "hosting" && <Badge tone="accent">Hosting</Badge>}
+                        {o.product === "token" && <Badge tone="accent">Token</Badge>}
                       </p>
                       <p className="font-mono text-[11px] text-fg-muted">{o.provider_payment_id}</p>
                     </td>
                     <td className="px-4 py-2.5 font-mono text-[12px] text-fg-muted">{o.key_display || o.key_id}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">{idr(o.amount_idr)}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">
-                      {o.product === "hosting" ? <span className="font-normal text-fg-muted">-</span> : usd(o.credit_usd)}
+                      {o.product === "hosting" || o.product === "token" ? <span className="font-normal text-fg-muted">-</span> : usd(o.credit_usd)}
                     </td>
                     <td className="px-4 py-2.5">
                       <Badge tone={STATUS_TONE[o.status] ?? "neutral"}>{STATUS_LABEL[o.status] ?? o.status}</Badge>
@@ -164,7 +181,9 @@ export function PortalOrders() {
             <p className="text-[13px] text-fg-muted">
               {approving.product === "hosting"
                 ? `Mark the ${idr(approving.amount_idr)} hosting order from ${approving.user_email || approving.key_id} as paid. The instance can then be created on the Hosting page.`
-                : `Add ${usd(approving.credit_usd)} credit to ${approving.user_email || approving.key_id}.`}{" "}
+                : approving.product === "token"
+                  ? `Tandai order paket token ${idr(approving.amount_idr)} dari ${approving.user_email || approving.key_id} sebagai lunas. Paket langsung dipasang ke key pelanggan.`
+                  : `Add ${usd(approving.credit_usd)} credit to ${approving.user_email || approving.key_id}.`}{" "}
               This can't be reversed automatically.
             </p>
             {approving.status !== "pending" && (
@@ -187,7 +206,7 @@ export function PortalOrders() {
             </Button>
             <Button onClick={() => approve.mutate({ id: approving.order_id, reason })} disabled={approve.isPending}>
               {approve.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <CreditCard aria-hidden="true" />}
-              {approving.product === "hosting" ? "Approve payment" : "Approve and add credit"}
+              {approving.product === "hosting" || approving.product === "token" ? "Approve payment" : "Approve and add credit"}
             </Button>
           </ModalFooter>
         </Modal>
