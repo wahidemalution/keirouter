@@ -1735,7 +1735,7 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opt
 		}
 		est = budget.Estimate{
 			TokenMetered:    true,
-			PromptTokens:    int64(core.EstimatePromptTokens(req)),
+			PromptTokens:    int64(core.EstimateTokenPackagePromptTokens(req)),
 			MaxOutputTokens: want,
 		}
 	}
@@ -1762,7 +1762,8 @@ const CodeNNotSupported = "n_not_supported_for_token_package"
 var tokenMeteredDroppedParams = []string{"prediction", "audio", "modalities", "web_search_options"}
 
 // limitTokenMeteredParams refuses n > 1, which multiplies the output past
-// the hold, and drops the parameters in tokenMeteredDroppedParams.
+// the hold, and drops the parameters in tokenMeteredDroppedParams and
+// previous_response_id, whose server-side context the estimate cannot see.
 func limitTokenMeteredParams(req *core.ChatRequest) error {
 	if raw, ok := req.Extra["n"]; ok {
 		var n float64
@@ -1777,6 +1778,7 @@ func limitTokenMeteredParams(req *core.ChatRequest) error {
 	for _, k := range tokenMeteredDroppedParams {
 		delete(req.Extra, k)
 	}
+	req.PreviousResponseID = ""
 	return nil
 }
 
@@ -2225,7 +2227,7 @@ func tokenPromptEstimate(req *core.ChatRequest) int {
 	if n := req.Metadata.BudgetPromptTokens; n > 0 {
 		return int(n)
 	}
-	return core.EstimatePromptTokens(req)
+	return core.EstimateTokenPackagePromptTokens(req)
 }
 
 // tokenCutStreamUsage settles a token-metered stream cut before the provider

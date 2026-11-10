@@ -3,7 +3,10 @@ package core
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"image"
+	"io"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -45,6 +48,24 @@ const (
 	defaultImageTokens = 765
 	// documentBytesPerToken approximates PDF/document attachments by size.
 	documentBytesPerToken = 8
+
+	// Token package estimates err high where the input is opaque.
+	// imagePatchSize / imageMaxPatches / imagePatchMultiplierPct are OpenAI's
+	// patch-based image cost (32px patches, at most 1536, times a per-model
+	// multiplier of up to 2.46 for gpt-4.1-nano).
+	imagePatchSize          = 32
+	imageMaxPatches         = 1536
+	imagePatchMultiplierPct = 246
+	// imageCeilingTokens is charged for an image of unknown size: the
+	// largest patch-based cost, above the tile formula's 1445 maximum.
+	imageCeilingTokens = (imageMaxPatches*imagePatchMultiplierPct + 99) / 100
+	// documentTokenBytes: compressed PDF content streams carry about one
+	// token per two bytes of text at most; fonts and images count too, which
+	// errs high.
+	documentTokenBytes = 2
+	// documentPageTokens is added per page for the page image OpenAI and
+	// Anthropic send alongside the text (Anthropic's ~1.15 MP cap ≈ 1600).
+	documentPageTokens = 1600
 )
 
 // EstimateTokensFromChars approximates a token count from a character count.
@@ -164,6 +185,11 @@ func EstimateImageTokens(m *MediaPayload) int {
 	if !ok {
 		return defaultImageTokens
 	}
+	return tileImageTokens(w, h)
+}
+
+// tileImageTokens is OpenAI's high-detail tile cost of a w x h image.
+func tileImageTokens(w, h int) int {
 	// Fit within 2048x2048, then scale the shortest side to 768.
 	if w > imageMaxEdge || h > imageMaxEdge {
 		scale := float64(imageMaxEdge) / float64(max(w, h))
@@ -225,6 +251,37 @@ func EstimatePromptTokens(req *ChatRequest) int {
 	if req == nil || (req.System == "" && len(req.Messages) == 0 && len(req.Tools) == 0) {
 		return 0
 	}
+	return promptEstimator{}.estimate(req)
+}
+
+// EstimateTokenPackagePromptTokens is the prompt estimate a token package
+// request is held and, when the upstream reports no prompt, billed: it errs
+// high where the input is opaque (images of unknown size, documents) and also
+// counts every other request field that reaches the upstream as input.
+func EstimateTokenPackagePromptTokens(req *ChatRequest) int {
+	if req == nil {
+		return 0
+	}
+	e := promptEstimator{conservative: true}
+	tokens := e.estimate(req)
+	for _, t := range req.Tools {
+		tokens += EstimateTextTokens(string(t.Raw))
+	}
+	tokens += EstimateTextTokens(string(req.ResponseFormat))
+	if req.ToolChoice != nil {
+		if raw, err := json.Marshal(req.ToolChoice); err == nil {
+			tokens += EstimateTextTokens(string(raw))
+		}
+	}
+	for k, v := range req.Extra {
+		tokens += EstimateTextTokens(k) + EstimateTextTokens(string(v))
+	}
+	return tokens
+}
+
+type promptEstimator struct{ conservative bool }
+
+func (e promptEstimator) estimate(req *ChatRequest) int {
 	tokens := replyPrimingOverhead
 	if req.System != "" {
 		tokens += perMessageOverhead + EstimateTextTokens(req.System)
@@ -232,7 +289,7 @@ func EstimatePromptTokens(req *ChatRequest) int {
 	for _, m := range req.Messages {
 		tokens += perMessageOverhead
 		for _, part := range m.Content {
-			tokens += estimatePartTokens(part)
+			tokens += e.part(part)
 		}
 	}
 	for _, t := range req.Tools {
@@ -242,12 +299,18 @@ func EstimatePromptTokens(req *ChatRequest) int {
 	return tokens
 }
 
-func estimatePartTokens(part ContentPart) int {
+func (e promptEstimator) part(part ContentPart) int {
 	tokens := 0
 	switch part.Type {
 	case PartImage:
+		if e.conservative {
+			return conservativeImageTokens(part.Media)
+		}
 		return EstimateImageTokens(part.Media)
 	case PartDocument:
+		if e.conservative {
+			return conservativeDocumentTokens(part.Media)
+		}
 		return EstimateDocumentTokens(part.Media)
 	}
 	tokens += EstimateTextTokens(part.Text)
@@ -257,8 +320,61 @@ func estimatePartTokens(part ContentPart) int {
 	if part.ToolResult != nil {
 		tokens += EstimateTextTokens(part.ToolResult.Content)
 		for _, p := range part.ToolResult.Parts {
-			tokens += estimatePartTokens(p)
+			tokens += e.part(p)
 		}
 	}
 	return tokens
+}
+
+// conservativeImageTokens is the higher of the tile and patch costs for a
+// known size, and the patch ceiling when the size cannot be read.
+func conservativeImageTokens(m *MediaPayload) int {
+	if m == nil {
+		return 0
+	}
+	w, h, ok := imageDimensions(m)
+	if !ok {
+		return imageCeilingTokens
+	}
+	patches := min(((w+imagePatchSize-1)/imagePatchSize)*((h+imagePatchSize-1)/imagePatchSize), imageMaxPatches)
+	return max(tileImageTokens(w, h), (patches*imagePatchMultiplierPct+99)/100)
+}
+
+// pdfPageMarker matches a page object's type entry, not the /Pages tree.
+var pdfPageMarker = regexp.MustCompile(`/Type\s{0,8}/Page[^s]`)
+
+// conservativeDocumentTokens charges a document's decoded size at
+// documentTokenBytes plus a page image per page object found. Pages inside
+// compressed object streams are not seen; the size term still counts them.
+func conservativeDocumentTokens(m *MediaPayload) int {
+	if m == nil || m.Data == "" {
+		return 0
+	}
+	data := m.Data
+	if i := strings.Index(data, ";base64,"); i >= 0 {
+		data = data[i+len(";base64,"):]
+	}
+	const tail = 32
+	dec := base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))
+	buf := make([]byte, tail+32*1024)
+	carry, decoded, pages := 0, 0, 0
+	for {
+		n, err := dec.Read(buf[carry:])
+		decoded += n
+		window := buf[:carry+n]
+		for _, loc := range pdfPageMarker.FindAllIndex(window, -1) {
+			if loc[1] > carry {
+				pages++
+			}
+		}
+		carry = copy(buf, window[max(0, len(window)-tail):])
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			decoded = max(decoded, len(data)*3/4)
+			break
+		}
+	}
+	return decoded/documentTokenBytes + pages*documentPageTokens
 }
