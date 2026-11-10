@@ -365,6 +365,15 @@ func (AnthropicCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 			}
 		}
 	}
+	// A token package's output cap is what its hold covers: fit the
+	// thinking budget under it instead of raising max_tokens.
+	hardCap := req.Metadata.TokenMetered && explicitMaxTokens
+	if thinkingBudget > 0 && thinkingBudget >= maxTokens && hardCap {
+		thinkingBudget = maxTokens - 1024
+		if thinkingBudget < antMinThinkingBudget {
+			thinkingBudget = 0
+		}
+	}
 	if thinkingBudget > 0 {
 		if thinkingBudget >= maxTokens {
 			// Raise max_tokens to preserve thinking depth (up to ceiling)
@@ -425,12 +434,16 @@ func (AnthropicCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 		if thinking != nil && thinking["type"] == "enabled" {
 			if thinkingBudget <= 0 {
 				thinkingBudget = antMinThinkingBudget
-				if thinkingBudget >= maxTokens {
+				if thinkingBudget >= maxTokens && !hardCap {
 					maxTokens = min(thinkingBudget+antThinkingAnswerReserve, ceiling)
 				}
 				out.MaxTokens = maxTokens
 			}
-			thinking["budget_tokens"] = thinkingBudget
+			if thinkingBudget < maxTokens {
+				thinking["budget_tokens"] = thinkingBudget
+			} else {
+				thinking = nil // only under a token cap too small for any budget
+			}
 		}
 		if thinking != nil {
 			thinkingEnabled = true
