@@ -69,7 +69,7 @@ func TestLoadDefaults(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	repo := newSettingsRepo(t)
-	want := Settings{Enabled: true, AllowedModels: []string{"gpt-6-sol"}}
+	want := Settings{Enabled: true, AllowedModels: []string{"gpt-6-sol"}, PlanID: DefaultPlanID}
 	require.NoError(t, Save(ctx, repo, want))
 	got, err := Load(ctx, repo)
 	require.NoError(t, err)
@@ -78,4 +78,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 
 func TestSaveRejectsEmptyModels(t *testing.T) {
 	require.Error(t, Save(context.Background(), newSettingsRepo(t), Settings{Enabled: true}))
+}
+
+func TestLoadDefaultsPlanID(t *testing.T) {
+	s, err := Load(context.Background(), newSettingsRepo(t))
+	require.NoError(t, err)
+	require.Equal(t, DefaultPlanID, s.PlanID)
 }

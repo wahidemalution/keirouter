@@ -16,6 +16,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/store"
+	"github.com/mydisha/keirouter/backend/internal/tokenpkg"
 )
 
 const (
@@ -226,8 +227,15 @@ func (s *Server) handlePortalPlans(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list plans")
 		return
 	}
+	tokenPlanID := tokenpkg.DefaultPlanID
+	if ts, err := tokenpkg.Load(r.Context(), s.db.Settings()); err == nil {
+		tokenPlanID = ts.PlanID
+	}
 	out := make([]map[string]any, 0, len(plans))
 	for _, p := range plans {
+		if p.ID == tokenPlanID {
+			continue
+		}
 		out = append(out, map[string]any{
 			"id": p.ID, "name": p.Name, "description": p.Description,
 			"limit_usd":      float64(p.LimitMicros) / 1_000_000,

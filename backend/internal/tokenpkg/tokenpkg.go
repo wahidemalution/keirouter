@@ -19,6 +19,10 @@ const SettingsKey = "token_packages_settings"
 // changes the list.
 var DefaultModels = []string{"gpt-6-sol", "gpt-6-terra", "gpt-6-luna"}
 
+// DefaultPlanID is the seeded plan whose RPM and concurrency limits apply to
+// every token package key.
+const DefaultPlanID = "plan-token-packages"
+
 // ErrNoActivePackage is returned when a days package is bought without a
 // running subscription to extend.
 var ErrNoActivePackage = errors.New("tokenpkg: no active package")
@@ -29,11 +33,12 @@ var errUnknownKind = errors.New("tokenpkg: unknown package kind")
 type Settings struct {
 	Enabled       bool     `json:"enabled"`
 	AllowedModels []string `json:"allowed_models"`
+	PlanID        string   `json:"plan_id"`
 }
 
 // Load returns the saved settings, or the defaults when none are saved.
 func Load(ctx context.Context, settings *store.SettingsRepo) (Settings, error) {
-	def := Settings{AllowedModels: append([]string(nil), DefaultModels...)}
+	def := Settings{AllowedModels: append([]string(nil), DefaultModels...), PlanID: DefaultPlanID}
 	raw, err := settings.Get(ctx, SettingsKey)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && raw == "") {
 		return def, nil
@@ -47,6 +52,9 @@ func Load(ctx context.Context, settings *store.SettingsRepo) (Settings, error) {
 	}
 	if len(s.AllowedModels) == 0 {
 		s.AllowedModels = def.AllowedModels
+	}
+	if s.PlanID == "" {
+		s.PlanID = DefaultPlanID
 	}
 	return s, nil
 }

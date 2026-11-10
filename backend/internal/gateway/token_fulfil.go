@@ -95,7 +95,7 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		if err != nil {
 			return false, err
 		}
-		if sub, bud, err = s.ensureTokenKeyOnTx(ctx, tx, order.GoogleSub, user.Email, settings.AllowedModels); err != nil {
+		if sub, bud, err = s.ensureTokenKeyOnTx(ctx, tx, order.GoogleSub, user.Email, settings); err != nil {
 			return false, err
 		}
 	}
@@ -158,11 +158,12 @@ func newTokenBudget(keyID string, now time.Time) store.Budget {
 // ensureTokenKeyOnTx creates a user's token key: the key, its token-only
 // budget, its model access and the subscription holding the sealed key. The
 // subscription starts expired; the caller sets the real expiry.
-func (s *Server) ensureTokenKeyOnTx(ctx context.Context, tx *sql.Tx, sub, email string, models []string) (store.TokenSubscription, store.Budget, error) {
+func (s *Server) ensureTokenKeyOnTx(ctx context.Context, tx *sql.Tx, sub, email string, settings tokenpkg.Settings) (store.TokenSubscription, store.Budget, error) {
 	issued, err := s.identity.Generate(store.DefaultTenantID, "", "token:"+email)
 	if err != nil {
 		return store.TokenSubscription{}, store.Budget{}, err
 	}
+	issued.Record.PlanID = settings.PlanID
 	if err := s.identity.Keys().CreateOnTx(ctx, tx, issued.Record); err != nil {
 		return store.TokenSubscription{}, store.Budget{}, err
 	}
@@ -171,7 +172,7 @@ func (s *Server) ensureTokenKeyOnTx(ctx context.Context, tx *sql.Tx, sub, email 
 	if err := s.budgets.CreateOnTx(ctx, tx, bud); err != nil {
 		return store.TokenSubscription{}, store.Budget{}, err
 	}
-	if err := s.identity.Keys().SetAllowedModelsOnTx(ctx, tx, issued.Record.ID, models); err != nil {
+	if err := s.identity.Keys().SetAllowedModelsOnTx(ctx, tx, issued.Record.ID, settings.AllowedModels); err != nil {
 		return store.TokenSubscription{}, store.Budget{}, err
 	}
 	sealed := crypto.Sealed{}
