@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -317,4 +320,53 @@ func TestPAYGRecordingUnchanged(t *testing.T) {
 		require.Zero(t, row.Completion)
 		require.Equal(t, "none", row.Source)
 	})
+}
+
+// streamOptionsUpstream records whether a stream request asked for usage.
+type streamOptionsUpstream struct {
+	mu   sync.Mutex
+	seen []bool
+}
+
+func (s *streamOptionsUpstream) handler(w http.ResponseWriter, r *http.Request) {
+	raw, _ := io.ReadAll(r.Body)
+	var body struct {
+		StreamOptions *struct {
+			IncludeUsage bool `json:"include_usage"`
+		} `json:"stream_options"`
+	}
+	_ = json.Unmarshal(raw, &body)
+	s.mu.Lock()
+	s.seen = append(s.seen, body.StreamOptions != nil && body.StreamOptions.IncludeUsage)
+	s.mu.Unlock()
+	sseUpstream(w, r)
+}
+
+func TestTokenStreamRequestsUpstreamUsage(t *testing.T) {
+	for _, c := range streamPaths {
+		t.Run(c.name, func(t *testing.T) {
+			up := &streamOptionsUpstream{}
+			// A third-party OpenAI-compatible upstream, which gets no
+			// stream_options unless asked (first-party OpenAI always does).
+			h := newE2E(t, up.handler, func(o *e2eOptions) { o.provider = "groq" })
+			tokenKey, _ := e2eTokenKey(t, h)
+			ctx := context.Background()
+			chain, err := h.gateway.chains.Get(ctx, "chain-sol")
+			require.NoError(t, err)
+			chain.Steps[0].Provider = "groq"
+			require.NoError(t, h.gateway.chains.Update(ctx, chain))
+
+			resp := h.post(t, c.path, c.body, tokenKey)
+			body := readAllString(t, resp)
+			require.Equal(t, http.StatusOK, resp.StatusCode, body)
+			resp = h.post(t, c.path, c.body, h.apiKey)
+			body = readAllString(t, resp)
+			require.Equal(t, http.StatusOK, resp.StatusCode, body)
+
+			up.mu.Lock()
+			defer up.mu.Unlock()
+			require.Equal(t, []bool{true, false}, up.seen,
+				"a token key asks the upstream for its usage event; PAYG does not")
+		})
+	}
 }

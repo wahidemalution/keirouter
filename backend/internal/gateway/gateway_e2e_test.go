@@ -42,6 +42,8 @@ type e2eHarness struct {
 type e2eOptions struct {
 	cfg     config.Config
 	limiter *limits.Memory
+	// provider is the seeded account's provider; "openai" when empty.
+	provider string
 }
 
 func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOptions)) *e2eHarness {
@@ -71,10 +73,13 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	v := vault.New(sealer)
 
 	// Seed an account for the "openai" provider pointing at the fake upstream.
+	if o.provider == "" {
+		o.provider = "openai"
+	}
 	acc := store.Account{
 		ID:        "acc-test",
 		TenantID:  store.DefaultTenantID,
-		Provider:  "openai",
+		Provider:  o.provider,
 		Label:     "test",
 		AuthKind:  store.AuthAPIKey,
 		Priority:  10,

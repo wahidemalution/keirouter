@@ -2426,7 +2426,9 @@ func (p *Pipeline) cacheStore(ctx context.Context, vec []float32, resp *core.Cha
 // upstream routing controls so retries of the same attempt keep them.
 func cloneForTarget(req *core.ChatRequest, target dispatch.Target) *core.ChatRequest {
 	clone := cloneForAttempt(req, target.Model)
-	clone.UpstreamUsage = target.BillUpstreamCost
+	// A token package is debited the upstream's usage, so ask for it even
+	// where a third-party OpenAI-compatible stream would leave it out.
+	clone.UpstreamUsage = target.BillUpstreamCost || req.Metadata.TokenMetered
 	if target.UpstreamProviders != "" {
 		clone.UpstreamProviders = strings.Split(target.UpstreamProviders, ",")
 	}
