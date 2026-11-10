@@ -73,11 +73,9 @@ const (
 	defaultUnaryHeaderTimeout = 120 * time.Second
 )
 
-// errResponseHeaderTimeout marks a request whose upstream headers did not
-// arrive within the configured budget. It wraps context.DeadlineExceeded so
-// the dispatcher treats it like any other self-imposed deadline: fall back,
-// but do not cool the account down (the provider may be slow, not broken).
-var errResponseHeaderTimeout = fmt.Errorf("upstream response headers not received in time: %w", context.DeadlineExceeded)
+// errResponseHeaderTimeout is core.ErrResponseHeaderTimeout, so the pipeline
+// can tell a header timeout apart.
+var errResponseHeaderTimeout = core.ErrResponseHeaderTimeout
 
 func newDialer() *net.Dialer {
 	return &net.Dialer{Timeout: dialTimeout, KeepAlive: tcpKeepAlive}

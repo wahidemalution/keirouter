@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -37,6 +38,12 @@ func WithResponseHeaderTimeout(ctx context.Context, d time.Duration) context.Con
 	}
 	return context.WithValue(ctx, responseHeaderTimeoutKey{}, d)
 }
+
+// ErrResponseHeaderTimeout marks a request whose upstream headers did not
+// arrive within the configured budget. It wraps context.DeadlineExceeded so
+// the dispatcher treats it like any other self-imposed deadline: fall back,
+// but do not cool the account down (the provider may be slow, not broken).
+var ErrResponseHeaderTimeout = fmt.Errorf("upstream response headers not received in time: %w", context.DeadlineExceeded)
 
 // ResponseHeaderTimeoutFromContext returns the header timeout carried by ctx,
 // or 0 when none was set.

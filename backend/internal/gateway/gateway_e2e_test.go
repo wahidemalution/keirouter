@@ -47,7 +47,16 @@ type e2eOptions struct {
 	// requestTimeout and stallTimeout set the pipeline's timeouts; zero keeps
 	// the defaults.
 	requestTimeout, stallTimeout time.Duration
+	// headerTimeout is the stream response-header timeout; zero keeps 60s.
+	headerTimeout time.Duration
 }
+
+// e2eTimeouts serves headerTimeout; zero values fall back to the pipeline's.
+type e2eTimeouts struct{ header time.Duration }
+
+func (e2eTimeouts) StreamStallTimeout() time.Duration      { return 0 }
+func (t e2eTimeouts) ResponseHeaderTimeout() time.Duration { return t.header }
+func (e2eTimeouts) RequestTimeout() time.Duration          { return 0 }
 
 func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOptions)) *e2eHarness {
 	t.Helper()
@@ -107,6 +116,9 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	bud := budget.New(db.Budgets(), db.Usage())
 	pipeDeps := pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud,
 		RequestTimeout: o.requestTimeout, StreamStallTimeout: o.stallTimeout}
+	if o.headerTimeout > 0 {
+		pipeDeps.TimeoutReader = e2eTimeouts{header: o.headerTimeout}
+	}
 	gwDeps := Deps{
 		Config:   o.cfg,
 		DB:       db,

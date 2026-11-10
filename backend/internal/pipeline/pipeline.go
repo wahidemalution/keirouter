@@ -963,7 +963,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 				if rawErr != nil {
 					cancelUpstream()
 					pe := providerErrorForAttempt(rawErr, attempt)
-					if ctx.Err() != nil {
+					if ctx.Err() != nil || errors.Is(pe, core.ErrResponseHeaderTimeout) {
 						if usage, ok := tokenAbandonedAttemptUsage(attemptReq, attempt); ok {
 							pe.AttemptUsage = &usage
 							return nil, pe, false, attempt, time.Since(started), fellBack
@@ -1100,7 +1100,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		if callErr != nil {
 			cancelUpstream()
 			pe := providerErrorForAttempt(callErr, attempt)
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || errors.Is(pe, core.ErrResponseHeaderTimeout) {
 				if usage, ok := tokenAbandonedAttemptUsage(attemptReq, attempt); ok {
 					pe.AttemptUsage = &usage
 					return nil, pe, false, attempt, time.Since(started), fellBack
@@ -1756,14 +1756,19 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opt
 // asking for more than one choice.
 const CodeNNotSupported = "n_not_supported_for_token_package"
 
+// CodePreviousResponseNotSupported is the client error code for a
+// token-metered request chained to server-side state.
+const CodePreviousResponseNotSupported = "previous_response_id_not_supported_for_token_package"
+
 // tokenMeteredDroppedParams are passthrough parameters a token package
-// request may not send upstream: they buy output (audio, predicted output)
-// or hosted search that the token hold does not cover.
-var tokenMeteredDroppedParams = []string{"prediction", "audio", "modalities", "web_search_options"}
+// request may not send upstream: they buy output (audio, predicted output),
+// hosted search or a pricier tier the token hold does not cover, or keep
+// server-side state (store).
+var tokenMeteredDroppedParams = []string{"prediction", "audio", "modalities", "web_search_options", "service_tier", "store"}
 
 // limitTokenMeteredParams refuses n > 1, which multiplies the output past
-// the hold, and drops the parameters in tokenMeteredDroppedParams and
-// previous_response_id, whose server-side context the estimate cannot see.
+// the hold, and previous_response_id, whose server-side context the estimate
+// cannot see, and drops the parameters in tokenMeteredDroppedParams.
 func limitTokenMeteredParams(req *core.ChatRequest) error {
 	if raw, ok := req.Extra["n"]; ok {
 		var n float64
@@ -1775,10 +1780,17 @@ func limitTokenMeteredParams(req *core.ChatRequest) error {
 			}
 		}
 	}
+	if req.PreviousResponseID != "" {
+		return &core.ProviderError{
+			Kind:    core.ErrBadRequest,
+			Code:    CodePreviousResponseNotSupported,
+			Message: "Paket token tidak mendukung previous_response_id: kirim riwayat percakapan lengkap di input.",
+		}
+	}
 	for _, k := range tokenMeteredDroppedParams {
 		delete(req.Extra, k)
 	}
-	req.PreviousResponseID = ""
+	req.Metadata.ServiceTier = ""
 	return nil
 }
 
@@ -2288,8 +2300,9 @@ func tokenUnaryUsageEstimate(req *core.ChatRequest, resp *core.ChatResponse) cor
 }
 
 // tokenAdmissionCharge is the usage a token-metered attempt rejected during
-// stream admission is billed: the output the upstream reported, or the cut
-// charge when the client left. charged is false when the attempt is free.
+// stream admission is billed: the cut charge when the client left or
+// admission timed out, else the output the upstream reported. charged is
+// false when the attempt is free.
 func tokenAdmissionCharge(req *core.ChatRequest, pe *core.ProviderError) (core.Usage, bool) {
 	if !req.Metadata.TokenMetered {
 		return core.Usage{}, false
@@ -2298,14 +2311,24 @@ func tokenAdmissionCharge(req *core.ChatRequest, pe *core.ProviderError) (core.U
 	if pe.AttemptUsage != nil {
 		reported = *pe.AttemptUsage
 	}
-	if reportedOutput(reported) || core.IsClientDisconnect(pe) || errors.Is(pe, errAdmissionTimeout) {
-		return tokenCutStreamUsage(req, reported, 0), true
+	if core.IsClientDisconnect(pe) || errors.Is(pe, errAdmissionTimeout) {
+		// The stream never finished: its reported count may be partial.
+		cut := reported
+		cut.CompletionTokens = 0
+		cut = tokenCutStreamUsage(req, cut, 0)
+		cut.CompletionTokens = max(cut.CompletionTokens, reported.CompletionTokens)
+		cut.TotalTokens = cut.PromptTokens + cut.CompletionTokens
+		return cut, true
+	}
+	if reportedOutput(reported) {
+		return reported, true
 	}
 	return core.Usage{}, false
 }
 
 // tokenAbandonedAttemptUsage is the charge for a token-metered attempt the
-// gateway gave up on (deadline, client cancel) without a response: once the
+// gateway gave up on (deadline, header timeout, client cancel) without a
+// response: once the
 // request reached the upstream it may be generating, so it is billed as a
 // cut stream. Not sent, it is free.
 func tokenAbandonedAttemptUsage(req *core.ChatRequest, attempt dispatch.Attempt) (core.Usage, bool) {

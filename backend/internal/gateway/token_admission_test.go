@@ -297,3 +297,66 @@ func TestPAYGStreamCancelBeforeHeadersUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// countingHeaderlessUpstream holds the response headers until the gateway
+// gives up, counting calls.
+func countingHeaderlessUpstream(calls *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_, _ = io.ReadAll(r.Body)
+		<-r.Context().Done()
+	}
+}
+
+// A stream whose upstream holds its headers past the header timeout was sent
+// and may be reasoning: a token key is charged the cut-stream amount, once,
+// with no fallback.
+func TestTokenStreamHeaderTimeoutCharged(t *testing.T) {
+	for _, c := range streamPaths {
+		t.Run(c.name, func(t *testing.T) {
+			var calls atomic.Int32
+			h := newE2E(t, countingHeaderlessUpstream(&calls), func(o *e2eOptions) { o.headerTimeout = 300 * time.Millisecond })
+			h.budget.SetTokenHoldTail(0)
+			tokenKey, keyID := e2eTokenKey(t, h)
+			addKeyBudget(t, h, keyID, 0, 1_000_000)
+			addFallbackStep(t, h)
+
+			_ = readAllString(t, h.post(t, c.path, c.body, tokenKey))
+
+			row := lastUsageRow(t, h, keyID)
+			require.Equal(t, 4000, row.Completion, "charged the output cap (status %s)", row.Status)
+			require.Positive(t, row.Prompt)
+			require.EqualValues(t, 1, calls.Load(), "no free retry after a charged timeout")
+			require.Eventually(t, func() bool { return heldTokens(t, h, keyID) == 0 },
+				3*time.Second, 20*time.Millisecond)
+			require.Equal(t, int64(row.Prompt+row.Completion), recordedTokens(t, h, keyID))
+		})
+	}
+}
+
+func TestPAYGStreamHeaderTimeoutUnchanged(t *testing.T) {
+	var calls atomic.Int32
+	h := newE2E(t, countingHeaderlessUpstream(&calls), func(o *e2eOptions) { o.headerTimeout = 300 * time.Millisecond })
+	_, _ = e2eTokenKey(t, h)
+	keyID := paygKeyID(t, h)
+	addFallbackStep(t, h)
+
+	_ = readAllString(t, h.post(t, streamPaths[1].path, streamPaths[1].body, h.apiKey))
+
+	row := lastUsageRow(t, h, keyID)
+	require.Zero(t, row.Prompt)
+	require.Zero(t, row.Completion)
+	require.EqualValues(t, 2, calls.Load(), "PAYG still falls back")
+}
+
+func TestTokenResponsesPreviousResponseIDRefused(t *testing.T) {
+	var calls atomic.Int32
+	h := newE2E(t, reasoningOnlyLengthSSE(&calls))
+	tokenKey, _ := e2eTokenKey(t, h)
+
+	resp := h.post(t, "/v1/responses", `{"model":"gpt-6-sol","input":"hi","previous_response_id":"resp_1"}`, tokenKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	require.Contains(t, body, "previous_response_id_not_supported_for_token_package")
+	require.Zero(t, calls.Load())
+}
