@@ -26,6 +26,12 @@ const PACKAGES_QK = ["portal-token-packages"] as const;
 const ORDERS_QK = ["portal-token-orders"] as const;
 const CONFIRM_POLL_MS = 60_000;
 
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(d);
+}
+
 function formatIDR(n: number): string {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
 }
@@ -141,7 +147,7 @@ export function PortalTokensPage() {
   const [resetSignal, setResetSignal] = useState(0);
 
   const [shown, setShown] = useState(false);
-  const reveal = useMutation({ mutationFn: revealPortalTokenKey });
+  const reveal = useMutation({ mutationFn: revealPortalTokenKey, onSuccess: () => setShown(true) });
 
   const buy = useMutation({
     mutationFn: (packageId: string) =>
@@ -151,6 +157,7 @@ export function PortalTokensPage() {
         turnstile_token: turnstileToken || undefined,
       }),
     onSuccess: (o) => {
+      setTurnstileToken("");
       const link = safeHttpUrl(o.payment_link_url);
       if (link) {
         window.location.href = link;
@@ -205,18 +212,29 @@ export function PortalTokensPage() {
   const base = tokenPkgs.reduce<TokenPackageOffer | undefined>((a, p) => (!a || p.tokens < a.tokens ? p : a), undefined);
   const picked = [...tokenPkgs, ...daysPkgs].find((p) => p.id === pickedId) ?? null;
   const remaining = Math.max(0, st.limit_tokens - st.used_tokens);
-  const remainingPct = st.limit_tokens > 0 ? Math.min(100, (remaining / st.limit_tokens) * 100) : 0;
   const orderList = orders.data ?? [];
 
   const toggleKey = () => {
     if (shown) {
       setShown(false);
+      reveal.reset();
       return;
     }
-    setShown(true);
-    if (!reveal.data) reveal.mutate();
+    reveal.mutate();
   };
-  const keyValue = shown && reveal.data ? reveal.data : st.key_display;
+  const revealedKey = shown ? reveal.data : undefined;
+  const keyToggle = (
+    <button
+      type="button"
+      onClick={toggleKey}
+      disabled={reveal.isPending}
+      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+      title={shown ? "Hide" : "Show"}
+      aria-label={shown ? "Hide token key" : "Show token key"}
+    >
+      {shown ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+    </button>
+  );
 
   return (
     <div className="space-y-6">
@@ -253,42 +271,35 @@ export function PortalTokensPage() {
         ) : (
           <>
             <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
-              <div className="min-w-0">
-                <p className="text-[12.5px] text-fg-muted">Tokens remaining</p>
-                <p className="mt-0.5 text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">{formatTokens(remaining)}</p>
-                <div
-                  role="progressbar"
-                  aria-label="Tokens remaining of the current limit"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(remainingPct)}
-                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-subtle"
-                >
-                  <div className="h-full rounded-full bg-accent-500" style={{ width: `${remainingPct}%` }} />
+              {st.active ? (
+                <>
+                  <div className="min-w-0">
+                    <p className="text-[12.5px] text-fg-muted">Tokens remaining</p>
+                    <p className="mt-0.5 text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">{formatTokens(remaining)}</p>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[12.5px] text-fg-muted">Expires</p>
+                    <p className="mt-0.5 text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">{formatDate(st.expires_at)}</p>
+                  </div>
+                </>
+              ) : (
+                <div className="min-w-0 sm:col-span-2">
+                  <p className="text-[13px] text-fg">
+                    This package expired on <span className="tabular-nums">{formatDate(st.expires_at)}</span>. Tokens left
+                    at expiry are forfeited. Buy a new package to use the key again.
+                  </p>
                 </div>
-                <p className="mt-1.5 text-[12px] text-fg-muted">of {formatTokens(st.limit_tokens)} limit</p>
-              </div>
-              <div className="min-w-0">
-                <p className="text-[12.5px] text-fg-muted">{st.active ? "Expires" : "Expired"}</p>
-                <p className="mt-0.5 text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">
-                  {formatDateTime(st.expires_at).slice(0, 10)}
-                </p>
-                <p className="mt-1.5 text-[12px] tabular-nums text-fg-muted">{formatDateTime(st.expires_at).slice(11)}</p>
-              </div>
+              )}
             </div>
             <div className="space-y-2 border-t border-line p-4 sm:p-5">
-              <IdField value={keyValue}>
-                <button
-                  type="button"
-                  onClick={toggleKey}
-                  disabled={reveal.isPending}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-                  title={shown ? "Hide" : "Show"}
-                  aria-label={shown ? "Hide token key" : "Show token key"}
-                >
-                  {shown ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
-                </button>
-              </IdField>
+              {revealedKey ? (
+                <IdField value={revealedKey}>{keyToggle}</IdField>
+              ) : (
+                <div className="flex items-center gap-1 rounded-lg border border-line bg-subtle py-1 pl-3 pr-1">
+                  <code className="min-w-0 flex-1 break-all py-1 font-mono text-[13px] text-fg">{st.key_display}</code>
+                  {keyToggle}
+                </div>
+              )}
               {reveal.isError && <p role="alert" className="text-[12.5px] text-bad">{(reveal.error as Error).message}</p>}
             </div>
           </>
@@ -370,7 +381,7 @@ export function PortalTokensPage() {
               <Button
                 className="mt-4 w-full"
                 onClick={() => picked && buy.mutate(picked.id)}
-                disabled={!picked || buy.isPending || (!!siteKey && !turnstileToken)}
+                disabled={!picked || buy.isPending || buy.isSuccess || (!!siteKey && !turnstileToken)}
               >
                 <CreditCard aria-hidden="true" />
                 {buy.isPending ? "Starting payment…" : "Buy package"}
