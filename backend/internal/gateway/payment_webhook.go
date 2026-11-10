@@ -97,6 +97,14 @@ func (s *Server) handleSumopodWebhook(w http.ResponseWriter, r *http.Request) {
 			}
 			break
 		}
+		if order.Product == store.ProductToken {
+			if _, terr := s.markTokenOrderPaid(r.Context(), order, store.PaymentCompleted, "webhook", ""); terr != nil {
+				s.log.Error("webhook: token fulfilment failed", "order", order.ID, "err", terr)
+				writeError(w, http.StatusInternalServerError, "failed to apply token payment")
+				return
+			}
+			break
+		}
 		if _, _, _, cerr := s.creditPaymentOrder(r.Context(), order, store.PaymentCompleted, "webhook", ""); cerr != nil {
 			s.log.Error("webhook: credit failed", "order", order.ID, "err", cerr)
 			writeError(w, http.StatusInternalServerError, "failed to apply credit")

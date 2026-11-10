@@ -29,8 +29,8 @@ func (s *Server) creditPaymentOrder(ctx context.Context, order store.PaymentOrde
 		return order, store.Budget{}, false, nil
 	}
 	reason = latePaymentReason(order.Status, reason)
-	if order.Product == store.ProductHosting {
-		return store.PaymentOrder{}, store.Budget{}, false, fmt.Errorf("payment: order %s is a hosting order, not credit", order.ID)
+	if p := productOrCredit(order.Product); p != store.ProductCredit {
+		return store.PaymentOrder{}, store.Budget{}, false, fmt.Errorf("payment: order %s is a %s order, not credit", order.ID, p)
 	}
 	if order.CreditMicros <= 0 {
 		return store.PaymentOrder{}, store.Budget{}, false, fmt.Errorf("payment: order %s has non-positive credit %d", order.ID, order.CreditMicros)

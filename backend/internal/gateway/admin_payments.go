@@ -48,22 +48,33 @@ func (s *Server) adminPaymentSummary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	var totalIDR, totalCredit int64
+	var totalIDR, totalCredit, tokenIDR int64
 	counts := map[string]int{}
+	tokenCounts := map[string]int{}
 	for _, o := range orders {
-		if productOrCredit(o.Product) != store.ProductCredit {
-			continue // hosting revenue is reported on the Hosting finance page
+		paid := o.Status == store.PaymentCompleted || o.Status == store.PaymentManual
+		switch productOrCredit(o.Product) {
+		case store.ProductCredit:
+			counts[string(o.Status)]++
+			if paid {
+				totalIDR += o.AmountIDR
+				totalCredit += o.CreditMicros
+			}
+		case store.ProductToken:
+			// Kept apart so token sales never read as PAYG credit sold.
+			tokenCounts[string(o.Status)]++
+			if paid {
+				tokenIDR += o.AmountIDR
+			}
 		}
-		counts[string(o.Status)]++
-		if o.Status == store.PaymentCompleted || o.Status == store.PaymentManual {
-			totalIDR += o.AmountIDR
-			totalCredit += o.CreditMicros
-		}
+		// hosting revenue is reported on the Hosting finance page
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total_idr":        totalIDR,
-		"total_credit_usd": float64(totalCredit) / 1_000_000,
-		"count_by_status":  counts,
+		"total_idr":             totalIDR,
+		"total_credit_usd":      float64(totalCredit) / 1_000_000,
+		"count_by_status":       counts,
+		"token_total_idr":       tokenIDR,
+		"token_count_by_status": tokenCounts,
 	})
 }
 
@@ -141,6 +152,28 @@ func (s *Server) adminApprovePaymentOrder(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusOK, s.orderView(updated))
 		return
 	}
+	if order.Product == store.ProductToken {
+		applied, terr := s.markTokenOrderPaid(r.Context(), order, store.PaymentManual, "dashboard", reason)
+		if terr != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, terr, "internal server error"))
+			return
+		}
+		updated, gerr := s.db.PaymentOrders().Get(r.Context(), order.ID)
+		if gerr != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, gerr, "internal server error"))
+			return
+		}
+		if !applied {
+			if strings.HasPrefix(updated.Reason, "refund_required: ") {
+				writeError(w, http.StatusConflict, "package could not be applied; refund the payment ("+updated.Reason+")")
+				return
+			}
+			writeError(w, http.StatusConflict, "order was already handled")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.orderView(updated))
+		return
+	}
 	updated, budget, applied, err := s.creditPaymentOrder(r.Context(), order, store.PaymentManual, "dashboard", reason)
 	if err != nil {
 		if errors.Is(err, ErrKeyDisabled) {
@@ -159,9 +192,10 @@ func (s *Server) adminApprovePaymentOrder(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, view)
 }
 
-// adminCancelPaymentOrder cancels an unpaid credit order so the user can start
-// a new payment before the old link expires. SumoPod has no cancel call: if
-// the user still pays the old link, the webhook credits the order as usual.
+// adminCancelPaymentOrder cancels an unpaid credit or token order so the user
+// can start a new payment before the old link expires. SumoPod has no cancel
+// call: if the user still pays the old link, the webhook settles the order as
+// usual.
 func (s *Server) adminCancelPaymentOrder(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body struct {
@@ -184,8 +218,8 @@ func (s *Server) adminCancelPaymentOrder(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	if productOrCredit(order.Product) != store.ProductCredit {
-		writeError(w, http.StatusConflict, "only credit top-up orders can be cancelled")
+	if p := productOrCredit(order.Product); p != store.ProductCredit && p != store.ProductToken {
+		writeError(w, http.StatusConflict, "only credit top-up and token package orders can be cancelled")
 		return
 	}
 	if order.Status != store.PaymentPending {
