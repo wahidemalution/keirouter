@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -80,12 +81,7 @@ func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	bs, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, sub.KeyID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
-	}
-	_, used, err := s.db.Usage().SpendAndTokens(ctx, store.ScopeAPIKey, sub.KeyID, budget.PeriodStart("total", now))
+	used, limit, err := s.tokenUsage(ctx, sub.KeyID, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
@@ -102,11 +98,26 @@ func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request)
 	out["active"] = now.Before(sub.ExpiresAt)
 	out["expires_at"] = sub.ExpiresAt.UTC().Format(time.RFC3339)
 	out["used_tokens"] = used
-	if len(bs) > 0 {
-		out["limit_tokens"] = bs[0].LimitTokens
-	}
+	out["limit_tokens"] = limit
 	out["key_display"] = key.Display
 	writeJSON(w, http.StatusOK, out)
+}
+
+// tokenUsage returns the tokens a key has used over its whole history and
+// its current token limit (0 when it has no budget).
+func (s *Server) tokenUsage(ctx context.Context, keyID string, now time.Time) (used, limit int64, err error) {
+	bs, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, keyID)
+	if err != nil {
+		return 0, 0, err
+	}
+	_, used, err = s.db.Usage().SpendAndTokens(ctx, store.ScopeAPIKey, keyID, budget.PeriodStart("total", now))
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(bs) > 0 {
+		limit = bs[0].LimitTokens
+	}
+	return used, limit, nil
 }
 
 // handlePortalTokenKeyReveal returns the plaintext of the caller's token key.

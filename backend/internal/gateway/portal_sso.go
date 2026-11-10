@@ -444,6 +444,13 @@ func (s *Server) adminUpdatePortalSettings(w http.ResponseWriter, r *http.Reques
 	if !decodeJSON(w, r, &body) {
 		return
 	}
+	if reserved, err := s.isTokenPlan(r.Context(), body.DefaultPlanID); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	} else if reserved {
+		writeError(w, http.StatusBadRequest, tokenPlanReservedMsg)
+		return
+	}
 	if body.DefaultPlanID != "" {
 		if _, err := s.db.Plans().Get(r.Context(), body.DefaultPlanID); err != nil {
 			writeError(w, http.StatusBadRequest, "plan not found")
@@ -495,6 +502,13 @@ func (s *Server) adminSetPortalUserPlan(w http.ResponseWriter, r *http.Request) 
 		PlanID string `json:"plan_id"`
 	}
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if reserved, err := s.isTokenPlan(r.Context(), body.PlanID); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	} else if reserved {
+		writeError(w, http.StatusBadRequest, tokenPlanReservedMsg)
 		return
 	}
 	var plan *store.Plan

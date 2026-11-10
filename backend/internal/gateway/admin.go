@@ -94,6 +94,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	s.mountFinance(r)
 	s.mountHosting(r)
 	s.mountHostingOps(r)
+	s.mountTokenPackages(r)
 
 	r.Get("/budgets", s.adminListBudgets)
 	r.Get("/budgets/status", s.adminBudgetStatus)
@@ -579,6 +580,14 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.BudgetLimitTokens != nil && *body.BudgetLimitTokens < 0 {
 		writeError(w, http.StatusBadRequest, "budget_limit_tokens must not be negative")
+		return
+	}
+
+	if reserved, err := s.isTokenPlan(r.Context(), body.PlanID); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	} else if reserved {
+		writeError(w, http.StatusBadRequest, tokenPlanReservedMsg)
 		return
 	}
 
@@ -2544,6 +2553,13 @@ func sameStringSet(a, b []string) bool {
 
 func (s *Server) adminDeletePlan(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if reserved, err := s.isTokenPlan(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	} else if reserved {
+		writeError(w, http.StatusConflict, "the token package plan cannot be deleted")
+		return
+	}
 	keyCount, err := s.db.Plans().CountKeys(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
