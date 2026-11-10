@@ -42,6 +42,11 @@ func e2eTokenKey(t *testing.T, h *e2eHarness) (string, string) {
 		GoogleSub: "sub-e2e", KeyID: issued.Record.ID, ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now,
 	}))
 	require.NoError(t, tx.Commit())
+	require.NoError(t, s.db.Budgets().Create(ctx, store.Budget{
+		ID: e2eTokenBudgetID(issued.Record.ID), TenantID: store.DefaultTenantID, ScopeKind: store.ScopeAPIKey,
+		ScopeID: issued.Record.ID, LimitTokens: 1_000_000_000, Period: "total", HardCutoff: true,
+		CreatedAt: now, UpdatedAt: now,
+	}))
 	require.NoError(t, s.chains.Create(ctx, store.Chain{
 		ID: "chain-sol", TenantID: store.DefaultTenantID, Name: "gpt-6-sol", Strategy: "fallback",
 		Steps:     []store.ChainStep{{ID: "step-sol", Position: 0, Provider: "openai", Model: "gpt-4o"}},
@@ -49,6 +54,10 @@ func e2eTokenKey(t *testing.T, h *e2eHarness) (string, string) {
 	}))
 	return issued.Plaintext, issued.Record.ID
 }
+
+// e2eTokenBudgetID names the token budget e2eTokenKey gives its key; token
+// keys without one are refused.
+func e2eTokenBudgetID(keyID string) string { return "tokbud-" + keyID }
 
 func (h *e2eHarness) get(t *testing.T, path, auth string) *http.Response {
 	t.Helper()

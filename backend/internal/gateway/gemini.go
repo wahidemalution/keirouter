@@ -52,6 +52,19 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
 		return
 	}
+	if action == "countTokens" {
+		tokenState, err := s.tokenKeyState(r.Context(), key)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "limit resolution failed")
+			return
+		}
+		// A token package key's countTokens is answered locally, as
+		// /v1/messages/count_tokens is: no upstream call, nothing metered.
+		if tokenState.isToken {
+			writeJSON(w, http.StatusOK, map[string]any{"totalTokens": estimateInputTokens(req)})
+			return
+		}
+	}
 	// The Gemini body carries no model; it comes from the URL path.
 	req.Model = model
 	req.Stream = stream

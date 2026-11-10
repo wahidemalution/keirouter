@@ -130,6 +130,73 @@ func TestTokenOutputCapClamped(t *testing.T) {
 	}
 }
 
+func TestTokenOutputCapRefusesMultipleChoices(t *testing.T) {
+	up := &capturingUpstream{}
+	h := newE2E(t, up.handler())
+	tokenKey, _ := e2eTokenKey(t, h)
+
+	resp := h.post(t, "/v1/chat/completions", `{"model":"gpt-6-sol","n":4,"max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`, tokenKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+	require.Contains(t, body, "n_not_supported_for_token_package")
+	require.Zero(t, up.calls.Load(), "a refused request never reaches the upstream")
+
+	resp = h.post(t, "/v1/chat/completions", `{"model":"gpt-6-sol","n":1,"prediction":{"type":"content","content":"x"},"messages":[{"role":"user","content":"hi"}]}`, tokenKey)
+	body = readAllString(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	up.mu.Lock()
+	_, hasPrediction := up.last["prediction"]
+	up.mu.Unlock()
+	require.False(t, hasPrediction, "output-buying passthrough params are dropped")
+}
+
+func TestPAYGMultipleChoicesUnaffected(t *testing.T) {
+	up := &capturingUpstream{}
+	h := newE2E(t, up.handler())
+	resp := h.post(t, "/v1/chat/completions", `{"model":"openai/gpt-4o","n":4,"messages":[{"role":"user","content":"hi"}]}`, h.apiKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	up.mu.Lock()
+	defer up.mu.Unlock()
+	require.JSONEq(t, "4", string(up.last["n"]))
+}
+
+func TestTokenKeyWithoutTokenBudgetRefused(t *testing.T) {
+	up := &capturingUpstream{}
+	h := newE2E(t, up.handler())
+	tokenKey, keyID := e2eTokenKey(t, h)
+	resp := h.post(t, "/v1/chat/completions", tokenChatBody, tokenKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+
+	require.NoError(t, h.gateway.db.Budgets().Delete(context.Background(), e2eTokenBudgetID(keyID)))
+	h.budget.InvalidateBudgetCache()
+	calls := up.calls.Load()
+	resp = h.post(t, "/v1/chat/completions", tokenChatBody, tokenKey)
+	body = readAllString(t, resp)
+	require.Equal(t, http.StatusPaymentRequired, resp.StatusCode, body)
+	require.Contains(t, body, "insufficient_tokens")
+	require.Equal(t, calls, up.calls.Load())
+}
+
+func TestTokenGeminiCountTokensAnsweredLocally(t *testing.T) {
+	up := &capturingUpstream{}
+	h := newE2E(t, up.handler())
+	tokenKey, keyID := e2eTokenKey(t, h)
+	resp := h.post(t, "/v1beta/models/gpt-6-sol:countTokens", `{"contents":[{"parts":[{"text":"hello there"}]}]}`, tokenKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	var out struct {
+		TotalTokens int `json:"totalTokens"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &out))
+	require.Positive(t, out.TotalTokens)
+	require.Zero(t, up.calls.Load(), "no upstream call")
+	_, tokens, err := h.gateway.db.Usage().SpendAndTokens(context.Background(), store.ScopeAPIKey, keyID, time.Time{})
+	require.NoError(t, err)
+	require.Zero(t, tokens, "nothing metered")
+}
+
 func TestTokenKeyInsufficientTokensResponse(t *testing.T) {
 	for _, f := range tokenFamilies {
 		t.Run(f.name, func(t *testing.T) {
@@ -267,8 +334,13 @@ func heldTokens(t *testing.T, h *e2eHarness, keyID string) int64 {
 	t.Helper()
 	dec, err := h.budget.Check(context.Background(), budget.Scope{APIKeyID: keyID})
 	require.NoError(t, err)
-	require.Len(t, dec.BudgetUsage, 1)
-	return dec.BudgetUsage[0].ReservedTokens
+	for _, bu := range dec.BudgetUsage {
+		if bu.Budget.ID == "bud-"+keyID {
+			return bu.ReservedTokens
+		}
+	}
+	t.Fatalf("budget bud-%s not found", keyID)
+	return 0
 }
 
 func TestTokenHoldReleasedAfterRequest(t *testing.T) {
@@ -302,6 +374,49 @@ func TestTokenHoldReleasedAfterRequest(t *testing.T) {
 			_ = readAllString(t, resp)
 			require.Eventually(t, func() bool { return heldTokens(t, h, keyID) == 0 },
 				3*time.Second, 20*time.Millisecond, "the request's token hold is released")
+		})
+	}
+}
+
+// hangingSSEUpstream sends one chunk, then holds the stream open until the
+// client goes away.
+func hangingSSEUpstream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprintf(w, "%s\n\n", `data: {"id":"s1","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"hi"}}]}`)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+	<-r.Context().Done()
+}
+
+func TestTokenHoldReleasedOnClientCancel(t *testing.T) {
+	for _, c := range []struct{ name, path, body string }{
+		{"direct", "/v1/chat/completions", `{"model":"gpt-6-sol","stream":true,"max_tokens":4000,"messages":[{"role":"user","content":"hi"}]}`},
+		{"translated", "/v1/messages", `{"model":"gpt-6-sol","stream":true,"max_tokens":4000,"messages":[{"role":"user","content":"hi"}]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newE2E(t, hangingSSEUpstream)
+			h.budget.SetTokenHoldTail(200 * time.Millisecond)
+			tokenKey, keyID := e2eTokenKey(t, h)
+			addKeyBudget(t, h, keyID, 0, 1_000_000)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.server.URL+c.path, strings.NewReader(c.body))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+tokenKey)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			buf := make([]byte, 1)
+			_, err = resp.Body.Read(buf)
+			require.NoError(t, err, "the stream started")
+			require.Positive(t, heldTokens(t, h, keyID), "the stream holds tokens while it runs")
+			cancel()
+			_ = resp.Body.Close()
+
+			require.Eventually(t, func() bool { return heldTokens(t, h, keyID) == 0 },
+				5*time.Second, 20*time.Millisecond, "the cancelled stream's hold is released")
 		})
 	}
 }
