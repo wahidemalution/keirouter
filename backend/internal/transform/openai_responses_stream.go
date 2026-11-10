@@ -48,6 +48,9 @@ type respStreamEvent struct {
 		Error *struct {
 			Message string `json:"message"`
 		} `json:"error"`
+		IncompleteDetails *struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
 	} `json:"response"`
 	Error *struct {
 		Message string `json:"message"`
@@ -106,9 +109,18 @@ func (OpenAIResponsesCodec) ParseStreamLine(line []byte, _ string) ([]core.Strea
 			ToolCall: &core.ToolCall{Arguments: json.RawMessage(ev.Delta)},
 		}}, nil
 
-	case "response.completed":
+	case "response.completed", "response.incomplete":
+		finish := core.FinishStop
+		if ev.Type == "response.incomplete" {
+			// A response cut at max_output_tokens still reports its usage.
+			finish = core.FinishLength
+			if ev.Response != nil && ev.Response.IncompleteDetails != nil &&
+				ev.Response.IncompleteDetails.Reason == "content_filter" {
+				finish = core.FinishFilter
+			}
+		}
 		var chunks []core.StreamChunk
-		chunks = append(chunks, core.StreamChunk{Type: core.ChunkFinish, FinishReason: core.FinishStop})
+		chunks = append(chunks, core.StreamChunk{Type: core.ChunkFinish, FinishReason: finish})
 		if ev.Response != nil && ev.Response.Usage != nil {
 			u := ev.Response.Usage
 			chunks = append(chunks, core.StreamChunk{

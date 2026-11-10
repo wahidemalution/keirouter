@@ -2706,6 +2706,20 @@ type sseUsageEnvelope struct {
 			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+	// Response carries a Responses API usage, nested in its terminal
+	// response.completed / response.incomplete event.
+	Response *struct {
+		Usage *struct {
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			InputTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"input_tokens_details"`
+			OutputTokensDetails struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"output_tokens_details"`
+		} `json:"usage"`
+	} `json:"response"`
 	UsageMetadata *struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`
@@ -2773,6 +2787,15 @@ func extractUsageFromSSEData(data []byte) *core.Usage {
 		if env.Message.Usage.InputTokens > 0 || u.CachedTokens > 0 || u.CacheWriteTokens > 0 {
 			u.PromptTokens = env.Message.Usage.InputTokens + u.CachedTokens + u.CacheWriteTokens
 		}
+	}
+	// Responses input_tokens already include the cached ones, and
+	// output_tokens the reasoning ones.
+	if env.Response != nil && env.Response.Usage != nil {
+		ru := env.Response.Usage
+		u.PromptTokens = ru.InputTokens
+		u.CompletionTokens = ru.OutputTokens
+		u.CachedTokens = ru.InputTokensDetails.CachedTokens
+		u.ReasoningTokens = ru.OutputTokensDetails.ReasoningTokens
 	}
 	// Gemini streams usageMetadata instead of an OpenAI-style usage object.
 	if env.UsageMetadata != nil {
