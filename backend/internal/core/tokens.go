@@ -66,6 +66,9 @@ const (
 	// documentPageTokens is added per page for the page image OpenAI and
 	// Anthropic send alongside the text (Anthropic's ~1.15 MP cap ≈ 1600).
 	documentPageTokens = 1600
+	// documentURLPages is the page allowance for a document sent by URL,
+	// whose size cannot be read.
+	documentURLPages = 50
 )
 
 // EstimateTokensFromChars approximates a token count from a character count.
@@ -347,7 +350,13 @@ var pdfPageMarker = regexp.MustCompile(`/Type\s{0,8}/Page[^s]`)
 // documentTokenBytes plus a page image per page object found. Pages inside
 // compressed object streams are not seen; the size term still counts them.
 func conservativeDocumentTokens(m *MediaPayload) int {
-	if m == nil || m.Data == "" {
+	if m == nil {
+		return 0
+	}
+	if m.Data == "" {
+		if m.URL != "" {
+			return documentURLPages * documentPageTokens
+		}
 		return 0
 	}
 	data := m.Data

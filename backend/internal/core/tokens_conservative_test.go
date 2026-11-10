@@ -88,3 +88,11 @@ func TestTokenPackageEstimateCountsEveryPage(t *testing.T) {
 	got := conservativeDocumentTokens(&MediaPayload{Data: base64.StdEncoding.EncodeToString([]byte(pdf))})
 	require.Equal(t, len(pdf)/documentTokenBytes+want*documentPageTokens, got)
 }
+
+// A document sent by URL has no bytes to size: it gets a fixed allowance.
+func TestTokenPackageEstimateURLDocument(t *testing.T) {
+	part := ContentPart{Type: PartDocument, Media: &MediaPayload{MIMEType: "application/pdf", URL: "https://example.com/a.pdf"}}
+	require.Equal(t, EstimateTokenPackagePromptTokens(promptWith())+documentURLPages*documentPageTokens,
+		EstimateTokenPackagePromptTokens(promptWith(part)))
+	require.Equal(t, EstimatePromptTokens(promptWith()), EstimatePromptTokens(promptWith(part)), "PAYG unchanged")
+}
