@@ -185,6 +185,24 @@ func (r *BudgetRepo) SetLimitOnTx(ctx context.Context, tx *sql.Tx, id string, ne
 	return before, newLimitMicros, nil
 }
 
+// SetTokenLimitOnTx sets a budget's token limit inside an existing transaction,
+// leaving limit_micros untouched. A negative limit is rejected with
+// ErrInvalidLimit before any write.
+func (r *BudgetRepo) SetTokenLimitOnTx(ctx context.Context, tx *sql.Tx, id string, limitTokens int64) error {
+	if limitTokens < 0 {
+		return ErrInvalidLimit
+	}
+	q := r.db.rebind(`UPDATE budgets SET limit_tokens = ?, updated_at = ? WHERE id = ?`)
+	res, err := tx.ExecContext(ctx, q, limitTokens, formatTime(time.Now()), id)
+	if err != nil {
+		return fmt.Errorf("store: set budget token limit: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // SetPeriodOnTx sets a budget's reset period inside an existing transaction.
 // Payment crediting uses it to convert a key's existing periodic budget to a
 // non-resetting "total" budget before purchased credit is added, so the credit

@@ -455,12 +455,15 @@ type PaymentOrder struct {
 	CouponCode    string
 	BaseAmountIDR int64
 	BonusDays     int
+	// TokenPackageID is the package a ProductToken order buys.
+	TokenPackageID string
 }
 
 // Payment order products.
 const (
 	ProductCredit  = "credit"
 	ProductHosting = "hosting"
+	ProductToken   = "token"
 )
 
 // AuditEntry is one append-only audit record. Field names follow the
