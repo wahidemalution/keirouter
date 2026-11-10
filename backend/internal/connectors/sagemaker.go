@@ -83,6 +83,8 @@ func (c *SageMaker) invokeURL(creds core.Credentials, endpoint string, stream bo
 func (c *SageMaker) render(req *core.ChatRequest, creds core.Credentials, stream bool) ([]byte, error) {
 	r := *req
 	r.Stream = stream
+	// stream_options is spliced in below; the codec must not add it too.
+	r.UpstreamUsage = false
 	// The URL addresses the endpoint; containers that validate the body's
 	// model (vLLM, SGLang) need their served model name instead.
 	if name := extraValue(creds, "sagemaker_model_name"); name != "" {

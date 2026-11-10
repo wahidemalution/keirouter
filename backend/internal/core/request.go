@@ -191,4 +191,7 @@ type RequestMetadata struct {
 	// TokenMetered marks a token package request, whose recorded tokens are
 	// what the package is debited.
 	TokenMetered bool
+	// UpstreamUsageDropped marks a token stream attempt retried without
+	// asking the upstream for usage, after it rejected stream_options.
+	UpstreamUsageDropped bool
 }

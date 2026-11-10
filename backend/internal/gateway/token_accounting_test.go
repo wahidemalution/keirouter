@@ -504,6 +504,59 @@ func TestPAYGStreamCancelDuringAdmissionUnchanged(t *testing.T) {
 	require.Zero(t, row.Completion)
 }
 
+// TestTokenStreamRetriedWithoutStreamOptions: an upstream that refuses
+// stream_options with a 400 gets one retry without it; the stream then has
+// no usage, so it is charged conservatively.
+func TestTokenStreamRetriedWithoutStreamOptions(t *testing.T) {
+	for _, c := range streamPaths {
+		t.Run(c.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var seen []bool
+			upstream := func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				has := strings.Contains(string(raw), `"stream_options"`)
+				mu.Lock()
+				seen = append(seen, has)
+				mu.Unlock()
+				if has {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":{"message":"Unrecognized request argument supplied: stream_options","type":"invalid_request_error"}}`)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				for _, l := range []string{
+					`data: {"id":"s1","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"hello there"}}]}`,
+					`data: {"id":"s1","model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+					`data: [DONE]`,
+				} {
+					fmt.Fprintf(w, "%s\n\n", l)
+				}
+			}
+			h := newE2E(t, upstream, func(o *e2eOptions) { o.provider = "groq" })
+			tokenKey, keyID := e2eTokenKey(t, h)
+			addKeyBudget(t, h, keyID, 0, 1_000_000)
+			ctx := context.Background()
+			chain, err := h.gateway.chains.Get(ctx, "chain-sol")
+			require.NoError(t, err)
+			chain.Steps[0].Provider = "groq"
+			require.NoError(t, h.gateway.chains.Update(ctx, chain))
+
+			resp := h.post(t, c.path, c.body, tokenKey)
+			body := readAllString(t, resp)
+			require.Equal(t, http.StatusOK, resp.StatusCode, body)
+			require.Contains(t, body, "hello there")
+
+			mu.Lock()
+			require.Equal(t, []bool{true, false}, seen, "one retry, without stream_options")
+			mu.Unlock()
+			row := lastUsageRow(t, h, keyID)
+			require.Equal(t, "success", row.Status)
+			require.Equal(t, 4000, row.Completion, "no usage could be asked for: charged the cap")
+		})
+	}
+}
+
 // longHangingSSEUpstream streams 700 characters, then holds the stream open.
 func longHangingSSEUpstream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")

@@ -942,6 +942,14 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 					callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
 					body, _, rawErr = ds.StreamRaw(callCtx, retryReq, attempt.Creds, streamCfg)
 				}
+				usageDropped := false
+				if rawErr != nil && retryWithoutStreamUsage(rawErr, attemptReq, attempt) {
+					cancelUpstream()
+					attemptReq = withoutStreamUsage(attemptReq)
+					usageDropped = true
+					callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
+					body, _, rawErr = ds.StreamRaw(callCtx, attemptReq, attempt.Creds, streamCfg)
+				}
 				if rawErr != nil {
 					cancelUpstream()
 					pe := providerErrorForAttempt(rawErr, attempt)
@@ -994,6 +1002,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 				)
 				wrapped := &teeReadCloser{r: streamBody, w: io.MultiWriter(&capture, firstByte)}
 				meta := req.Metadata
+				meta.UpstreamUsageDropped = usageDropped
 				acc := attempt
 				saveCopy := save
 				budgetScope := scope
@@ -1012,7 +1021,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 							if streamErr == nil && !scan.finished && !hadOutput && usageTokens(scan.usage) == 0 {
 								streamErr = noOutputError(acc)
 							}
-							usage = tokenDirectStreamUsage(req, scan, streamErr)
+							usage = tokenDirectStreamUsage(req, scan, streamErr, meta.UpstreamUsageDropped)
 						} else {
 							usage = capturedStreamUsage(req, capture.Bytes())
 						}
@@ -1063,6 +1072,14 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 			capability.StripImages(retryReq)
 			callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
 			upstream, callErr = attempt.Conn.Stream(callCtx, retryReq, attempt.Creds, streamCfg)
+		}
+		usageDropped := false
+		if callErr != nil && retryWithoutStreamUsage(callErr, attemptReq, attempt) {
+			cancelUpstream()
+			attemptReq = withoutStreamUsage(attemptReq)
+			usageDropped = true
+			callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
+			upstream, callErr = attempt.Conn.Stream(callCtx, attemptReq, attempt.Creds, streamCfg)
 		}
 		if callErr != nil {
 			cancelUpstream()
@@ -1154,6 +1171,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		// blocking the client consumer.
 		out := make(chan core.StreamChunk, 16)
 		meta := req.Metadata
+		meta.UpstreamUsageDropped = usageDropped
 		acc := attempt
 		go p.pumpStream(ctx, req, upstream, out, meta, acc, started, requestStarted,
 			&ttft, save, scope, release, fellBack, cancelUpstream)
@@ -1382,7 +1400,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 				// Always synthesize an auditable estimate when the provider omits
 				// usage. Only emit it to the client when include_usage was requested.
 				if req.Metadata.TokenMetered {
-					usage = tokenStreamEndUsage(req, usage, completionChars, truncated)
+					usage = tokenStreamEndUsage(req, usage, completionChars, truncated || meta.UpstreamUsageDropped)
 				} else if !sawUsage {
 					usage = estimateStreamUsage(req, completionChars)
 				}
@@ -2287,12 +2305,12 @@ func scanDirectStream(raw []byte) directStreamScan {
 }
 
 // tokenDirectStreamUsage is the usage recorded for a token-metered direct
-// stream.
-func tokenDirectStreamUsage(req *core.ChatRequest, scan directStreamScan, streamErr error) core.Usage {
+// stream. usageDropped marks an attempt retried without asking for usage.
+func tokenDirectStreamUsage(req *core.ChatRequest, scan directStreamScan, streamErr error, usageDropped bool) core.Usage {
 	if streamErr != nil {
 		return failedStreamUsage(req, scan.usage, scan.chars, scan.hadOutput(), errors.Is(streamErr, context.Canceled))
 	}
-	return tokenStreamEndUsage(req, scan.usage, scan.chars, !scan.finished)
+	return tokenStreamEndUsage(req, scan.usage, scan.chars, !scan.finished || usageDropped)
 }
 
 // jsonMembers renders "key":value pairs both compact and with a space after
@@ -2544,6 +2562,21 @@ func cloneForTarget(req *core.ChatRequest, target dispatch.Target) *core.ChatReq
 		clone.UpstreamProviderOrder = strings.Split(target.UpstreamProviderOrder, ",")
 	}
 	return clone
+}
+
+// retryWithoutStreamUsage reports whether a token stream attempt rejected as
+// a bad request should be retried once without stream_options, which some
+// OpenAI-compatible upstreams refuse with a 400.
+func retryWithoutStreamUsage(err error, req *core.ChatRequest, attempt dispatch.Attempt) bool {
+	pe := core.AsProviderError(err)
+	return pe != nil && pe.Kind == core.ErrBadRequest && req.Metadata.TokenMetered && req.UpstreamUsage &&
+		!attempt.Target.BillUpstreamCost && attempt.Conn.Dialect() == core.DialectOpenAI
+}
+
+func withoutStreamUsage(req *core.ChatRequest) *core.ChatRequest {
+	r := *req
+	r.UpstreamUsage = false
+	return &r
 }
 
 // toolNameRestorer maps provider-sanitized tool names (Gemini rewrites
