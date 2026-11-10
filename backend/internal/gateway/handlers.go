@@ -262,12 +262,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 }
 
 func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.EffectiveLimits, error) {
-	if key.PlanID != "" {
-		plan, err := s.db.Plans().Get(ctx, key.PlanID)
-		if err != nil {
-			return limits.EffectiveLimits{}, err
-		}
-		tokenState, err := s.tokenKeyState(ctx, key)
+	tokenState, err := s.tokenKeyState(ctx, key)
+	if err != nil {
+		return limits.EffectiveLimits{}, err
+	}
+	planID := key.PlanID
+	if planID == "" && tokenState.isToken {
+		// A token key whose plan id was cleared keeps the token plan's limits.
+		planID = tokenState.planID
+	}
+	if planID != "" {
+		plan, err := s.db.Plans().Get(ctx, planID)
 		if err != nil {
 			return limits.EffectiveLimits{}, err
 		}
@@ -279,9 +284,10 @@ func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.
 		}, nil
 	}
 	return limits.EffectiveLimits{
-		RPM:         s.cfg.Limits.DefaultRPM,
-		TPM:         s.cfg.Limits.DefaultTPM,
-		Concurrency: s.cfg.Limits.DefaultConcurrency,
+		RPM:           s.cfg.Limits.DefaultRPM,
+		TPM:           s.cfg.Limits.DefaultTPM,
+		Concurrency:   s.cfg.Limits.DefaultConcurrency,
+		AlwaysEnforce: tokenState.isToken,
 	}, nil
 }
 
