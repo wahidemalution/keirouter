@@ -259,10 +259,15 @@ func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.
 		if err != nil {
 			return limits.EffectiveLimits{}, err
 		}
+		tokenState, err := s.tokenKeyState(ctx, key)
+		if err != nil {
+			return limits.EffectiveLimits{}, err
+		}
 		return limits.EffectiveLimits{
-			RPM:         plan.RPMLimit,
-			TPM:         plan.TPMLimit,
-			Concurrency: plan.ConcurrencyLimit,
+			RPM:           plan.RPMLimit,
+			TPM:           plan.TPMLimit,
+			Concurrency:   plan.ConcurrencyLimit,
+			AlwaysEnforce: tokenState.isToken,
 		}, nil
 	}
 	return limits.EffectiveLimits{
@@ -1300,6 +1305,13 @@ func isClientDisconnect(err error) bool {
 // use by name (bare or "chain:") grants every step it resolves to, since the
 // key's grant is for the chain as a whole rather than its individual steps.
 func (s *Server) filterAllowedTargets(ctx context.Context, keyID, planID, requestedModel string, isChain bool, targets []dispatch.Target) ([]dispatch.Target, error) {
+	tokenState, err := s.tokenKeyState(ctx, store.APIKey{ID: keyID, PlanID: planID})
+	if err != nil {
+		return nil, err
+	}
+	if tokenState.isToken {
+		return s.filterTokenTargets(ctx, tokenState.planID, requestedModel, isChain, targets)
+	}
 	keys := s.identity.Keys()
 	// Effective models: per-key override wins, otherwise the key follows its
 	// plan's models live (so plan edits propagate without per-key writes).
@@ -1328,6 +1340,31 @@ func (s *Server) filterAllowedTargets(ctx context.Context, keyID, planID, reques
 		}
 	}
 	return filtered, nil
+}
+
+// filterTokenTargets admits a token package key only to a chain named, exactly
+// and ignoring case, in the token plan's allowed models. provider/model and
+// aliases pick their own upstream, so they are refused; per-key overrides and
+// wildcards are not consulted.
+func (s *Server) filterTokenTargets(ctx context.Context, tokenPlanID, requestedModel string, isChain bool, targets []dispatch.Target) ([]dispatch.Target, error) {
+	if !isChain {
+		return nil, nil
+	}
+	plan, err := s.db.Plans().Get(ctx, tokenPlanID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	name, _ := strings.CutPrefix(strings.TrimSpace(requestedModel), "chain:")
+	name = strings.TrimSpace(name)
+	for _, m := range store.GetPlanAllowedModels(plan) {
+		if strings.EqualFold(strings.TrimSpace(m), name) {
+			return targets, nil
+		}
+	}
+	return nil, nil
 }
 
 // modelMatchesAny reports whether model matches any pattern in allowed.

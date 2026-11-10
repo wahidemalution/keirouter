@@ -97,6 +97,12 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	affinityKey := requestAffinityKey(r, req)
 	req.Metadata.ContextAffinityKey = affinityKey
 
+	effectiveLimits, err := s.effectiveLimits(r.Context(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "limit resolution failed")
+		return
+	}
+
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,
 		PlanOpts: s.endpointPlanOptions(r.Context(), resolved.PlanOpts, resolved.Targets, affinityKey),
@@ -106,6 +112,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		Headroom: s.headroomConfig(),
 		Ponytail: s.ponytailConfig(),
 		Skills:   s.skillsConfig(r, key, req.Model, resolved.Targets),
+		Limits:   effectiveLimits,
 	}
 
 	if req.Stream {

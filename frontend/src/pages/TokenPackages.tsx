@@ -135,9 +135,9 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
   const rpmNum = Number(rpm);
   const concNum = Number(concurrency);
   const modelsError = touched && modelList.length === 0 ? "Enter at least one model." : null;
-  const rpmError = touched && (rpm.trim() === "" || !Number.isInteger(rpmNum) || rpmNum < 0) ? "Enter 0 (unlimited) or more." : null;
+  const rpmError = touched && (rpm.trim() === "" || !Number.isInteger(rpmNum) || rpmNum < 1) ? "Enter 1 or more." : null;
   const concError =
-    touched && (concurrency.trim() === "" || !Number.isInteger(concNum) || concNum < 0) ? "Enter 0 (unlimited) or more." : null;
+    touched && (concurrency.trim() === "" || !Number.isInteger(concNum) || concNum < 1) ? "Enter 1 or more." : null;
 
   const save = useMutation({
     mutationFn: () =>
@@ -155,10 +155,10 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
       modelList.length > 0 &&
       rpm.trim() !== "" &&
       Number.isInteger(rpmNum) &&
-      rpmNum >= 0 &&
+      rpmNum >= 1 &&
       concurrency.trim() !== "" &&
       Number.isInteger(concNum) &&
-      concNum >= 0;
+      concNum >= 1;
     if (!ok || save.isPending) return;
     save.mutate();
   };
@@ -185,19 +185,19 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
         <Textarea value={models} onChange={(e) => setModels(e.target.value)} rows={3} spellCheck={false} className="font-mono" />
       </Field>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Requests per minute" error={rpmError} hint={rpmError ? undefined : "0 = unlimited. Applies per key."} required>
-          <Input type="number" inputMode="numeric" min="0" step="1" value={rpm} onChange={(e) => setRpm(e.target.value)} className="tabular-nums" />
+        <Field label="Requests per minute" error={rpmError} hint={rpmError ? undefined : "Applies per key."} required>
+          <Input type="number" inputMode="numeric" min="1" step="1" value={rpm} onChange={(e) => setRpm(e.target.value)} className="tabular-nums" />
         </Field>
         <Field
           label="Concurrent requests"
           error={concError}
-          hint={concError ? undefined : "0 = unlimited. Requests running at the same time per key."}
+          hint={concError ? undefined : "Requests running at the same time per key."}
           required
         >
           <Input
             type="number"
             inputMode="numeric"
-            min="0"
+            min="1"
             step="1"
             value={concurrency}
             onChange={(e) => setConcurrency(e.target.value)}

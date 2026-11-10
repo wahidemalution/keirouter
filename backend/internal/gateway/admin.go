@@ -773,9 +773,29 @@ func (s *Server) adminDeleteKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "the bansos key is managed from the Bansos page")
 		return
 	}
+	// Deleting a portal user's PAYG key cascades away the binding and its token
+	// subscription; the token key's cached expiry must not outlive them.
+	var orphanTokenKey string
+	if u, err := s.db.PortalUsers().GetByKey(r.Context(), id); err == nil {
+		tsub, err := s.db.TokenSubscriptions().GetBySub(r.Context(), u.GoogleSub)
+		switch {
+		case err == nil:
+			orphanTokenKey = tsub.KeyID
+		case !errors.Is(err, store.ErrNotFound):
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
 	if err := s.identity.Delete(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
+	}
+	s.invalidateTokenSub(id)
+	if orphanTokenKey != "" {
+		s.invalidateTokenSub(orphanTokenKey)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -796,6 +816,10 @@ func (s *Server) adminUpdateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Disabled == nil && body.AllowedModels == nil {
 		writeError(w, http.StatusBadRequest, "disabled or allowed_models field is required")
+		return
+	}
+	// A per-key list would replace the token plan's whitelist.
+	if body.AllowedModels != nil && s.refuseTokenKey(r.Context(), w, id, "a token package key follows the token plan's models") {
 		return
 	}
 	if body.Disabled != nil {
@@ -2486,6 +2510,15 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 	oldModels := store.GetPlanAllowedModels(existing)
 	if body.AllowedModels != nil {
 		existing.AllowedModels = store.SetPlanAllowedModels(body.AllowedModels)
+	}
+	if reserved, err := s.isTokenPlan(r.Context(), existing.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	} else if reserved {
+		if msg := tokenPlanInvalid(existing); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 	existing.UpdatedAt = time.Now()
 

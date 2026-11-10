@@ -93,7 +93,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 	}
 	tr.base.Key = key.Name
 
-	expired, err := s.tokenKeyExpired(r.Context(), key)
+	tokenState, err := s.tokenKeyState(r.Context(), key)
 	if err != nil {
 		s.log.Error("token subscription lookup failed", "err", err)
 		tr.reject(http.StatusInternalServerError, "Authentication lookup failed", err.Error(),
@@ -101,7 +101,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 		writeError(w, http.StatusInternalServerError, "authentication error")
 		return
 	}
-	if expired {
+	if tokenState.expired() {
 		tr.reject(http.StatusForbidden, "Rejected · token package expired",
 			fmt.Sprintf("Key: %s\nIP: %s", key.Name, extractIP(r)),
 			"The token package behind this key has expired. Buy a new package to reactivate it.")
@@ -110,6 +110,21 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 				"message": "Paket token kadaluarsa",
 				"type":    errorType(http.StatusForbidden),
 				"code":    "token_package_expired",
+			},
+		})
+		return
+	}
+	// Media, embeddings, search and the like are not metered in tokens, so a
+	// token package key is held to the text endpoints its budget can count.
+	if tokenState.isToken && !tokenEndpointAllowed(r.Method, r.URL.Path) {
+		tr.reject(http.StatusForbidden, "Rejected · endpoint not in token package",
+			fmt.Sprintf("Key: %s\nEndpoint: %s %s", key.Name, r.Method, r.URL.Path),
+			"Token package keys may call only chat completions, messages, responses and Gemini generateContent.")
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": map[string]any{
+				"message": "Endpoint ini tidak tersedia untuk paket token",
+				"type":    errorType(http.StatusForbidden),
+				"code":    "endpoint_not_allowed_for_token_package",
 			},
 		})
 		return

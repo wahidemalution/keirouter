@@ -41,13 +41,39 @@ func (s *Server) isTokenPlan(ctx context.Context, planID string) (bool, error) {
 
 const tokenPlanReservedMsg = "this plan is reserved for token packages"
 
+// tokenPlanInvalid explains why plan cannot serve as the token plan, or
+// returns "". An empty model list or a zero limit means unrestricted.
+func tokenPlanInvalid(plan store.Plan) string {
+	models := 0
+	for _, m := range store.GetPlanAllowedModels(plan) {
+		if strings.TrimSpace(m) != "" {
+			models++
+		}
+	}
+	switch {
+	case models == 0:
+		return "allowed_models must not be empty for the token package plan"
+	case plan.RPMLimit < 1:
+		return "rpm_limit must be at least 1 for the token package plan"
+	case plan.ConcurrencyLimit < 1:
+		return "concurrency_limit must be at least 1 for the token package plan"
+	}
+	return ""
+}
+
 // refuseTokenKeyCredit writes 409 and reports true when keyID is a token
 // package key: those keys carry a token budget and never PAYG credit.
 func (s *Server) refuseTokenKeyCredit(ctx context.Context, w http.ResponseWriter, keyID string) bool {
+	return s.refuseTokenKey(ctx, w, keyID, "credit cannot be added to a token package key")
+}
+
+// refuseTokenKey writes 409 with msg and reports true when keyID is a token
+// package key.
+func (s *Server) refuseTokenKey(ctx context.Context, w http.ResponseWriter, keyID, msg string) bool {
 	_, err := s.db.TokenSubscriptions().GetByKey(ctx, keyID)
 	switch {
 	case err == nil:
-		writeError(w, http.StatusConflict, "credit cannot be added to a token package key")
+		writeError(w, http.StatusConflict, msg)
 		return true
 	case errors.Is(err, store.ErrNotFound):
 		return false
@@ -261,20 +287,16 @@ func (s *Server) adminPutTokenSettings(w http.ResponseWriter, r *http.Request) {
 		plan.AllowedModels = store.SetPlanAllowedModels(models)
 	}
 	if body.RPMLimit != nil {
-		if *body.RPMLimit < 0 {
-			writeError(w, http.StatusBadRequest, "rpm_limit must not be negative")
-			return
-		}
 		plan.RPMLimit = *body.RPMLimit
 	}
 	if body.ConcurrencyLimit != nil {
-		if *body.ConcurrencyLimit < 0 {
-			writeError(w, http.StatusBadRequest, "concurrency_limit must not be negative")
-			return
-		}
 		plan.ConcurrencyLimit = *body.ConcurrencyLimit
 	}
 	if body.AllowedModels != nil || body.RPMLimit != nil || body.ConcurrencyLimit != nil {
+		if msg := tokenPlanInvalid(plan); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 		plan.UpdatedAt = time.Now()
 		if err := s.db.Plans().Update(ctx, plan); err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
