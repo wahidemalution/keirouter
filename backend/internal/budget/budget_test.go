@@ -88,6 +88,18 @@ func TestMinKeyBalanceGate(t *testing.T) {
 	}
 }
 
+func TestMinKeyBalanceGateSkipsTokenOnlyBudget(t *testing.T) {
+	eng, db := newTestEngine(t)
+	createBudget(t, db, store.Budget{
+		ID:          "b-key-tokens",
+		ScopeKind:   store.ScopeAPIKey,
+		ScopeID:     "key-tokens",
+		LimitTokens: 10_000_000,
+		HardCutoff:  true,
+	})
+	require.NoError(t, eng.Reserve(context.Background(), Scope{APIKeyID: "key-tokens"}, 1))
+}
+
 func TestNoBudgetMeansUnlimited(t *testing.T) {
 	eng, _ := newTestEngine(t)
 	dec, err := eng.Check(context.Background(), Scope{APIKeyID: "key-no-budget"})

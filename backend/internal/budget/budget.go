@@ -323,10 +323,11 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 	// Minimum-balance gate: an API key must hold at least minKeyBalanceMicros
 	// to make a metered (debiting) request. This stops abuse of near-zero
 	// starter credit. Read-only checks that never reserve (e.g. the media
-	// endpoint) are intentionally unaffected. Applies only to API-key budgets.
+	// endpoint) are intentionally unaffected. Applies only to API-key budgets
+	// with a USD limit: a token-only budget has no balance to gate.
 	for _, bu := range dec.BudgetUsage {
 		if bu.Budget.ScopeKind == store.ScopeAPIKey && bu.Budget.HardCutoff &&
-			bu.Budget.LimitMicros < minKeyBalanceMicros {
+			bu.Budget.LimitMicros > 0 && bu.Budget.LimitMicros < minKeyBalanceMicros {
 			return &core.ProviderError{
 				Kind:    core.ErrBudgetBlocked,
 				Message: fmt.Sprintf("minimum API key balance is $%.2f", float64(minKeyBalanceMicros)/1_000_000),
