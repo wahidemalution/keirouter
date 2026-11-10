@@ -433,6 +433,7 @@ func (s *Server) routes() chi.Router {
 	r.Get("/portal/auth/status", s.handlePortalStatus)
 	r.Get("/portal/plans", s.handlePortalPlans)
 	r.Get("/portal/payment/config", s.handlePortalPaymentConfig)
+	r.Get("/portal/token/packages", s.handlePortalTokenPackages)
 	r.Group(func(r chi.Router) {
 		r.Use(s.portalSessionMiddleware)
 		r.Post("/portal/auth/claim", s.handlePortalClaim)
@@ -455,6 +456,10 @@ func (s *Server) routes() chi.Router {
 		r.Post("/portal/api/hosting/orders", s.handlePortalCreateHostingOrder)
 		r.Get("/portal/api/hosting/instances/{id}/password", s.handlePortalHostingPassword)
 		r.Post("/portal/api/hosting/coupons/check", s.handlePortalCheckHostingCoupon)
+		r.Get("/portal/api/token", s.handlePortalTokenStatus)
+		r.Post("/portal/api/token/key/reveal", s.handlePortalTokenKeyReveal)
+		r.Post("/portal/api/token/orders", s.handlePortalCreateTokenOrder)
+		r.Get("/portal/api/token/orders", s.handlePortalListTokenOrders)
 		r.Post("/portal/auth/logout", s.handlePortalLogout)
 	})
 

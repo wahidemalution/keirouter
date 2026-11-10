@@ -95,6 +95,14 @@ func (s *Server) handlePortalCreateOrder(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusConflict, "api key is not usable")
 		return
 	}
+	// Token keys never carry PAYG credit.
+	if _, terr := s.db.TokenSubscriptions().GetByKey(r.Context(), keyID); terr == nil {
+		writeError(w, http.StatusConflict, "credit cannot be added to a token package key")
+		return
+	} else if !errors.Is(terr, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, terr, "internal server error"))
+		return
+	}
 
 	p := s.cfg.Payment
 	amountIDR := body.AmountIDR
@@ -225,23 +233,31 @@ func (s *Server) lockCreditOrders(keyID string) func() {
 }
 
 // creditLinkOpen reports whether a credit order's payment link can still be
-// paid: pending, with a link, and before its expiry. Without a parseable
-// expiry it falls back to the configured link lifetime from creation.
+// paid.
 func (s *Server) creditLinkOpen(o store.PaymentOrder, now time.Time) bool {
+	return productOrCredit(o.Product) == store.ProductCredit && s.paymentLinkOpen(o, now)
+}
+
+// paymentLinkOpen reports whether an order's payment link can still be paid:
+// pending, with a link, and before its expiry. Without a parseable expiry it
+// falls back to the configured link lifetime from creation.
+func (s *Server) paymentLinkOpen(o store.PaymentOrder, now time.Time) bool {
 	if o.Status != store.PaymentPending || o.PaymentLinkURL == "" {
-		return false
-	}
-	if productOrCredit(o.Product) != store.ProductCredit {
 		return false
 	}
 	if t, err := time.Parse(time.RFC3339, o.ExpiresAt); err == nil {
 		return now.Before(t)
 	}
-	hours := s.cfg.Payment.ExpiresInHours
-	if hours <= 0 {
-		hours = 24
-	}
+	hours := paymentLinkHours(s.cfg.Payment.ExpiresInHours)
 	return !o.CreatedAt.IsZero() && now.Before(o.CreatedAt.Add(time.Duration(hours)*time.Hour))
+}
+
+// paymentLinkHours is the configured link lifetime, 24h when unset.
+func paymentLinkHours(configured int) int {
+	if configured <= 0 {
+		return 24
+	}
+	return configured
 }
 
 // openCreditOrder returns the newest credit order whose link is still open.
