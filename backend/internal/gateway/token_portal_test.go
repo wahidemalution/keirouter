@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,35 +18,15 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/tokenpkg"
 )
 
-// fakeSumopod counts CreatePayment calls and keeps their descriptions.
-type fakeSumopod struct {
-	atomic.Int32
-	mu    sync.Mutex
-	descs []string
-}
-
-func (f *fakeSumopod) descriptions() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.descs...)
-}
-
 // tokenPortalServer is a payment portal server selling token packages with
-// tp-20m, tp-100m and tp-days-15 enabled.
-func tokenPortalServer(t *testing.T) (*Server, string, *fakeSumopod) {
+// tp-20m, tp-100m and tp-days-15 enabled. The returned counter counts
+// SumoPod CreatePayment calls.
+func tokenPortalServer(t *testing.T) (*Server, string, *atomic.Int32) {
 	t.Helper()
 	s, tok := paymentPortalTestServer(t)
 	ctx := t.Context()
-	calls := &fakeSumopod{}
+	calls := &atomic.Int32{}
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req payment.CreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-		calls.mu.Lock()
-		calls.descs = append(calls.descs, req.Description)
-		calls.mu.Unlock()
 		n := calls.Add(1)
 		writeJSON(w, http.StatusOK, payment.CreateResponse{
 			PaymentID: "pay-" + strconv.Itoa(int(n)), PaymentLinkURL: "https://pay.example/" + strconv.Itoa(int(n)),
@@ -234,7 +213,6 @@ func TestPortalTokenOrderCreatesPayment(t *testing.T) {
 	require.NotEqual(t, id, out["id"])
 	require.EqualValues(t, 59000, out["amount_idr"])
 	require.EqualValues(t, 2, calls.Load())
-	require.Equal(t, []string{"Paket Token 100M Token", "Paket Token 20M Token"}, calls.descriptions())
 
 	// A credit order's idempotency key cannot be replayed as a token order.
 	require.NoError(t, s.db.PaymentOrders().Create(ctx, store.PaymentOrder{

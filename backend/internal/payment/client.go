@@ -45,7 +45,6 @@ type CreateRequest struct {
 	SuccessReturnURL      string `json:"success_return_url"`
 	CancelReturnURL       string `json:"cancel_return_url"`
 	PaymentMethodTypeCode string `json:"payment_method_type_code"`
-	Description           string `json:"description,omitempty"`
 }
 
 // CreateResponse is the parsed SumoPod create-payment response.

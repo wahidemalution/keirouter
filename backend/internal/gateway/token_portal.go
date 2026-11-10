@@ -251,7 +251,6 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 		SuccessReturnURL:      base + "/portal/token?status=success",
 		CancelReturnURL:       base + "/portal/token?status=cancel",
 		PaymentMethodTypeCode: p.PaymentMethodTypeCode,
-		Description:           "Paket Token " + pkg.Name,
 	})
 	if err != nil {
 		s.log.Error("token: create payment failed", "err", err)
