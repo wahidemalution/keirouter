@@ -93,6 +93,28 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 	}
 	tr.base.Key = key.Name
 
+	expired, err := s.tokenKeyExpired(r.Context(), key.ID)
+	if err != nil {
+		s.log.Error("token subscription lookup failed", "err", err)
+		tr.reject(http.StatusInternalServerError, "Authentication lookup failed", err.Error(),
+			"KeiRouter could not check the key against its database. Check database health.")
+		writeError(w, http.StatusInternalServerError, "authentication error")
+		return
+	}
+	if expired {
+		tr.reject(http.StatusForbidden, "Rejected · token package expired",
+			fmt.Sprintf("Key: %s\nIP: %s", key.Name, extractIP(r)),
+			"The token package behind this key has expired. Buy a new package to reactivate it.")
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": map[string]any{
+				"message": "Paket token kadaluarsa",
+				"type":    errorType(http.StatusForbidden),
+				"code":    "token_package_expired",
+			},
+		})
+		return
+	}
+
 	// Bansos anti-resale notice for endpoints with no text content
 	// (embeddings, images, audio, video). The key-id gate is exact-match so a
 	// regular user key can never receive this header.

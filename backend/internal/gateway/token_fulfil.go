@@ -190,6 +190,3 @@ func (s *Server) ensureTokenKeyOnTx(ctx context.Context, tx *sql.Tx, sub, email 
 	}
 	return ts, bud, nil
 }
-
-// invalidateTokenSub is a no-op until Task 4 adds the subscription cache.
-func (s *Server) invalidateTokenSub(keyID string) {}

@@ -99,6 +99,7 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	pipeDeps := pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud}
 	gwDeps := Deps{
 		Config:   o.cfg,
+		DB:       db,
 		Identity: idSvc,
 		Pipeline: nil,
 		Chains:   db.Chains(),

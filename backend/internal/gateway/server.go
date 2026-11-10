@@ -92,6 +92,7 @@ type Server struct {
 	cfManager        *cloudflare.Manager
 	tsManager        *tailscale.Manager
 	usageHub         *usagehub.Hub
+	tokenSubs        tokenSubCache
 	timeoutNotifier  *TimeoutNotifier
 	proxyNotifier    *ProxyNotifier
 	rateLimiter      RateLimitController

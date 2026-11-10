@@ -97,6 +97,7 @@ func newModelDiscoveryTestGateway(t *testing.T, accounts []store.Account) (*Serv
 
 	gw := New(Deps{
 		Config:   config.Default(),
+		DB:       db,
 		Identity: idSvc,
 		Chains:   db.Chains(),
 		Accounts: db.Accounts(),
