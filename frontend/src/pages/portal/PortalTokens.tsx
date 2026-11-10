@@ -158,11 +158,13 @@ export function PortalTokensPage() {
       }),
     onSuccess: (o) => {
       setTurnstileToken("");
+      setResetSignal((n) => n + 1);
       const link = safeHttpUrl(o.payment_link_url);
       if (link) {
         window.location.href = link;
       } else {
         toast.error("Invalid payment link");
+        buy.reset();
       }
     },
     onError: (e: Error) => {
@@ -178,6 +180,19 @@ export function PortalTokensPage() {
       toast.error("Payment failed", e.message);
     },
   });
+
+  // Back from the payment page restores this page from the bfcache with the
+  // buy mutation still in its success state.
+  const { reset: resetBuy } = buy;
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      resetBuy();
+      setResetSignal((n) => n + 1);
+    };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, [resetBuy]);
 
   if (portalLoading) return <Spinner />;
   if (!portalStatus) return <ErrorCard message="Failed to load portal status" />;
