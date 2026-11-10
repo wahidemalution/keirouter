@@ -3672,3 +3672,80 @@ export function connectGuardrailLogStream(
 }
 
 export { APIError };
+
+// ─── Token packages ─────────────────────────────────────────────────────────
+
+export interface TokenPackageOffer {
+  id: string;
+  name: string;
+  kind: "tokens" | "days";
+  tokens: number;
+  days: number;
+  price_idr: number;
+  featured: boolean;
+}
+
+export interface PortalTokenPackages {
+  on_sale: boolean;
+  packages: TokenPackageOffer[];
+}
+
+export interface PortalTokenStatus {
+  active: boolean;
+  exists: boolean;
+  /** RFC3339, or "" without a package. */
+  expires_at: string;
+  /** All-time usage of the key; remaining is limit_tokens - used_tokens. */
+  used_tokens: number;
+  limit_tokens: number;
+  key_display: string;
+  models: string[];
+}
+
+export interface PortalTokenOrder {
+  id: string;
+  package_name: string;
+  amount_idr: number;
+  status: PaymentOrder["status"];
+  created_at: string;
+  /** Zero-time or empty until paid. */
+  paid_at?: string | null;
+}
+
+async function portalTokenJSON<T>(path: string, init: RequestInit | undefined, fallback: string): Promise<T> {
+  const resp = await fetch(path, init);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new PortalAPIError(resp.status, data.error?.message || data.error || fallback, data.error?.code);
+  return data;
+}
+
+/** Public package list; on_sale is false when token packages are closed. */
+export function getPortalTokenPackages(): Promise<PortalTokenPackages> {
+  return portalTokenJSON("/portal/token/packages", undefined, "Failed to load packages");
+}
+
+export function getPortalTokenStatus(): Promise<PortalTokenStatus> {
+  return portalTokenJSON("/portal/api/token", undefined, "Failed to load token package");
+}
+
+/** Plaintext of the token key. */
+export async function revealPortalTokenKey(): Promise<string> {
+  const data = await portalTokenJSON<{ key: string }>("/portal/api/token/key/reveal", { method: "POST" }, "Failed to reveal key");
+  return data.key;
+}
+
+export function createPortalTokenOrder(input: {
+  package_id: string;
+  idempotency_key: string;
+  turnstile_token?: string;
+}): Promise<{ id: string; status: PaymentOrder["status"]; payment_link_url: string; amount_idr: number }> {
+  return portalTokenJSON(
+    "/portal/api/token/orders",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    "Failed to create payment",
+  );
+}
+
+export function listPortalTokenOrders(): Promise<PortalTokenOrder[]> {
+  return portalTokenJSON("/portal/api/token/orders", undefined, "Failed to load orders");
+}
