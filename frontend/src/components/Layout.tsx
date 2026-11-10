@@ -136,7 +136,7 @@ const navGroups: NavGroup[] = [
     items: [
       { to: "/portal-users", label: "Portal users", icon: Users, preload: "/portal-users" },
       { to: "/plans", label: "Plans & budgets", icon: ReceiptText, preload: "/plans" },
-      { to: "/token-packages", label: "Paket Token", icon: Package, preload: "/token-packages" },
+      { to: "/token-packages", label: "Token Packages", icon: Package, preload: "/token-packages" },
       { to: "/bansos", label: "Bansos", icon: Gift, preload: "/bansos" },
       { to: "/finance", label: "Finance", icon: Wallet, preload: "/finance" },
     ],
@@ -184,7 +184,7 @@ const TITLE_BY_PATH: Record<string, string> = {
   "/plans": "Plans & budgets",
   "/budgets": "Plans & budgets",
   "/portal-users": "Portal users",
-  "/token-packages": "Paket Token",
+  "/token-packages": "Token Packages",
   "/finance": "Finance",
   "/finance/hosting": "Hosting finance",
   "/finance/costs": "Operating costs",

@@ -39,7 +39,6 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
   const [cancelling, setCancelling] = useState<PaymentOrderAdmin | null>(null);
 
   const ordersQuery = useQuery({ queryKey: ["payment-orders"], queryFn: api.paymentOrders, refetchInterval: REFETCH_MS });
-  const summaryQuery = useQuery({ queryKey: ["payment-summary"], queryFn: api.paymentSummary, refetchInterval: REFETCH_MS });
 
   const approve = useMutation({
     mutationFn: ({ id, reason }: { id: string; reason: string }) => api.approvePaymentOrder(id, reason),
@@ -48,7 +47,7 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
       const token = (order?.product ?? approving?.product) === "token";
       toast.success(
         "Payment approved",
-        hosting ? "The instance can now be created on the Hosting page." : token ? "Paket token dipasang ke key pelanggan." : "Credit added to the user's key.",
+        hosting ? "The instance can now be created on the Hosting page." : token ? "The token package was applied to the user's key." : "Credit added to the user's key.",
       );
       if (token) qc.invalidateQueries({ queryKey: ["token-subscriptions"] });
       if (hosting) qc.invalidateQueries({ queryKey: ["hosting-instances"] });
@@ -77,7 +76,7 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
 
   const allOrders = ordersQuery.data?.orders;
   const orders = useMemo(() => (product ? (allOrders ?? []).filter((o) => o.product === product) : (allOrders ?? [])), [allOrders, product]);
-  const pending = product ? orders.filter((o) => o.status === "pending").length : (summaryQuery.data?.count_by_status?.pending ?? 0);
+  const pending = orders.filter((o) => o.status === "pending").length;
   const { paged, page, pages, setPage, total } = useClientPagination(orders, 10);
 
   const close = () => {
@@ -88,10 +87,10 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
   return (
     <Panel
       icon={ShoppingCart}
-      title={product === "token" ? "Order paket token" : "Portal orders"}
+      title={product === "token" ? "Token package orders" : "Portal orders"}
       subtitle={
         product === "token"
-          ? "Pembelian paket token lewat payment gateway, dengan persetujuan manual."
+          ? "Token package purchases through the payment gateway, with manual approval."
           : "User credit top-ups through the payment gateway, with manual approval."
       }
       action={pending > 0 ? <Badge tone="warning">{pending} pending</Badge> : undefined}
@@ -110,8 +109,8 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
         <EmptyState
           icon={ShoppingCart}
           size="sm"
-          title={product === "token" ? "Belum ada order paket token" : "No payments yet"}
-          hint={product === "token" ? "Order muncul di sini begitu pelanggan memulai pembayaran paket token." : "Portal top-ups show up here as soon as a user starts a payment."}
+          title={product === "token" ? "No token package orders yet" : "No payments yet"}
+          hint={product === "token" ? "Orders show up here as soon as a customer starts a token package payment." : "Portal top-ups show up here as soon as a user starts a payment."}
         />
       ) : (
         <>
@@ -182,7 +181,7 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
               {approving.product === "hosting"
                 ? `Mark the ${idr(approving.amount_idr)} hosting order from ${approving.user_email || approving.key_id} as paid. The instance can then be created on the Hosting page.`
                 : approving.product === "token"
-                  ? `Tandai order paket token ${idr(approving.amount_idr)} dari ${approving.user_email || approving.key_id} sebagai lunas. Paket langsung dipasang ke key pelanggan.`
+                  ? `Mark the ${idr(approving.amount_idr)} token package order from ${approving.user_email || approving.key_id} as paid. The package is applied to their key right away.`
                   : `Add ${usd(approving.credit_usd)} credit to ${approving.user_email || approving.key_id}.`}{" "}
               This can't be reversed automatically.
             </p>

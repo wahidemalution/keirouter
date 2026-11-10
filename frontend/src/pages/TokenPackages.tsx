@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Loader2, Package, Pencil, Plus, Power, Settings2, ShoppingCart, Trash2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, type TokenPackage, type TokenPackageInput, type TokenPackageKind, type TokenSettings, type TokenSubscription } from "../lib/api";
+import { formatTokens } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ui/confirm-dialog";
@@ -26,7 +27,7 @@ import {
 import { PortalOrders } from "./payments/PortalOrders";
 import { Panel, REFETCH_MS, TH, THEAD, dateID, errorText, idr } from "./payments/shared";
 
-const TABS = ["paket", "pelanggan", "order"] as const;
+const TABS = ["packages", "subscribers", "orders"] as const;
 type Tab = (typeof TABS)[number];
 const TABS_ID = "token-package-tabs";
 
@@ -35,20 +36,10 @@ const QK_SETTINGS = ["token-settings"] as const;
 const QK_SUBSCRIPTIONS = ["token-subscriptions"] as const;
 
 const DESCRIPTION: Record<Tab, string> = {
-  paket: "Paket token GPT-6 yang dijual di portal: harga, jumlah token, masa aktif, dan batas pemakaian.",
-  pelanggan: "Pemilik key paket token: sisa token, masa aktif, dan tombol untuk menonaktifkan key.",
-  order: "Pembayaran paket token dari portal. Setujui manual jika gateway melewatkan pembayaran.",
+  packages: "GPT-6 token packages sold in the portal: price, token amount, validity and rate limits.",
+  subscribers: "Owners of token package keys: remaining tokens, expiry, and a switch to disable a key.",
+  orders: "Token package payments from the portal. Approve one manually if the gateway missed it.",
 };
-
-const nf = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
-
-/** 100000000 becomes "100 jt", 1000000000 becomes "1 M" (miliar). */
-function tokenLabel(n: number): string {
-  if (n >= 1e9) return `${nf.format(n / 1e9)} M`;
-  if (n >= 1e6) return `${nf.format(n / 1e6)} jt`;
-  if (n >= 1e3) return `${nf.format(n / 1e3)} rb`;
-  return nf.format(n);
-}
 
 /** Price of one million tokens; days packages have no token count to divide by. */
 function pricePerMillion(p: Pick<TokenPackage, "kind" | "tokens" | "price_idr">): string {
@@ -71,28 +62,28 @@ function packageInput(p: TokenPackage, patch: Partial<TokenPackageInput> = {}): 
 }
 
 export function TokenPackagesPage() {
-  const [tab, setTab] = useState<Tab>("paket");
+  const [tab, setTab] = useState<Tab>("packages");
   return (
     <div className="space-y-6">
-      <PageHeader title="Paket Token" description={DESCRIPTION[tab]} />
+      <PageHeader title="Token Packages" description={DESCRIPTION[tab]} />
       <TabBar
         idPrefix={TABS_ID}
-        label="Bagian Paket Token"
+        label="Token package sections"
         active={tab}
         onChange={setTab}
         tabs={[
-          { value: "paket", label: "Paket", icon: Package },
-          { value: "pelanggan", label: "Pelanggan", icon: Users },
-          { value: "order", label: "Order", icon: ShoppingCart },
+          { value: "packages", label: "Packages", icon: Package },
+          { value: "subscribers", label: "Subscribers", icon: Users },
+          { value: "orders", label: "Orders", icon: ShoppingCart },
         ]}
       />
       <TabPanel idPrefix={TABS_ID} value={tab} className="space-y-6">
-        {tab === "paket" ? (
+        {tab === "packages" ? (
           <>
             <SettingsPanel />
             <PackagesPanel />
           </>
-        ) : tab === "pelanggan" ? (
+        ) : tab === "subscribers" ? (
           <SubscribersPanel />
         ) : (
           <PortalOrders product="token" />
@@ -102,24 +93,24 @@ export function TokenPackagesPage() {
   );
 }
 
-// ─── Pengaturan produk ──────────────────────────────────────────────────────
+// ─── Product settings ───────────────────────────────────────────────────────
 
 function SettingsPanel() {
   const settings = useQuery({ queryKey: QK_SETTINGS, queryFn: api.getTokenSettings });
   return (
     <Panel
       icon={Settings2}
-      title="Pengaturan produk"
-      subtitle="Saklar penjualan, model yang boleh dipakai key paket token, dan batas kecepatan."
+      title="Product settings"
+      subtitle="Sale switch, the models token package keys may call, and rate limits."
     >
       {settings.isLoading ? (
-        <LoadingRegion label="Memuat pengaturan paket token" className="space-y-3 p-4">
+        <LoadingRegion label="Loading token package settings" className="space-y-3 p-4">
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-20 w-full" />
         </LoadingRegion>
       ) : settings.isError || !settings.data ? (
         <div className="p-4">
-          <ErrorBanner message={`Pengaturan tidak bisa dimuat. ${errorText(settings.error)}`} />
+          <ErrorBanner message={`Couldn't load settings. ${errorText(settings.error)}`} />
         </div>
       ) : (
         <SettingsForm initial={settings.data} />
@@ -143,16 +134,16 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
     .filter(Boolean);
   const rpmNum = Number(rpm);
   const concNum = Number(concurrency);
-  const modelsError = touched && modelList.length === 0 ? "Isi minimal satu model." : null;
-  const rpmError = touched && (rpm.trim() === "" || !Number.isInteger(rpmNum) || rpmNum < 0) ? "Isi 0 (tanpa batas) atau lebih." : null;
+  const modelsError = touched && modelList.length === 0 ? "Enter at least one model." : null;
+  const rpmError = touched && (rpm.trim() === "" || !Number.isInteger(rpmNum) || rpmNum < 0) ? "Enter 0 (unlimited) or more." : null;
   const concError =
-    touched && (concurrency.trim() === "" || !Number.isInteger(concNum) || concNum < 0) ? "Isi 0 (tanpa batas) atau lebih." : null;
+    touched && (concurrency.trim() === "" || !Number.isInteger(concNum) || concNum < 0) ? "Enter 0 (unlimited) or more." : null;
 
   const save = useMutation({
     mutationFn: () =>
       api.saveTokenSettings({ enabled, allowed_models: modelList, rpm_limit: rpmNum, concurrency_limit: concNum }),
     onSuccess: (saved) => {
-      toast.success("Pengaturan disimpan");
+      toast.success("Settings saved");
       qc.setQueryData(QK_SETTINGS, saved);
     },
   });
@@ -177,30 +168,30 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <p id="token-sale-switch" className="text-[13px] font-medium text-fg">
-            Penjualan dibuka
+            Sales open
           </p>
           <p className="text-[12px] text-fg-muted">
-            Saat mati, portal tidak menerima order paket token baru. Key yang sudah terbit tetap jalan sampai habis atau kedaluwarsa.
+            When off, the portal stops taking new token package orders. Keys already issued keep working until they run out or expire.
           </p>
         </div>
         <Toggle checked={enabled} onChange={setEnabled} aria-labelledby="token-sale-switch" />
       </div>
       <Field
-        label="Model yang diizinkan"
+        label="Allowed models"
         error={modelsError}
-        hint={modelsError ? undefined : "Satu model per baris. Key paket token hanya bisa memanggil model di daftar ini."}
+        hint={modelsError ? undefined : "One model per line. Token package keys can only call models on this list."}
         required
       >
         <Textarea value={models} onChange={(e) => setModels(e.target.value)} rows={3} spellCheck={false} className="font-mono" />
       </Field>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Batas permintaan per menit" error={rpmError} hint={rpmError ? undefined : "0 = tanpa batas. Berlaku per key."} required>
+        <Field label="Requests per minute" error={rpmError} hint={rpmError ? undefined : "0 = unlimited. Applies per key."} required>
           <Input type="number" inputMode="numeric" min="0" step="1" value={rpm} onChange={(e) => setRpm(e.target.value)} className="tabular-nums" />
         </Field>
         <Field
-          label="Batas permintaan bersamaan"
+          label="Concurrent requests"
           error={concError}
-          hint={concError ? undefined : "0 = tanpa batas. Jumlah permintaan yang berjalan sekaligus per key."}
+          hint={concError ? undefined : "0 = unlimited. Requests running at the same time per key."}
           required
         >
           <Input
@@ -214,18 +205,18 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
           />
         </Field>
       </div>
-      {save.isError && <ErrorBanner message={`Pengaturan gagal disimpan. ${errorText(save.error)}`} />}
+      {save.isError && <ErrorBanner message={`Couldn't save settings. ${errorText(save.error)}`} />}
       <div className="flex justify-end">
         <Button type="submit" disabled={save.isPending}>
           {save.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}
-          Simpan pengaturan
+          Save settings
         </Button>
       </div>
     </form>
   );
 }
 
-// ─── Daftar paket ───────────────────────────────────────────────────────────
+// ─── Package list ───────────────────────────────────────────────────────────
 
 function PackagesPanel() {
   const qc = useQueryClient();
@@ -238,27 +229,27 @@ function PackagesPanel() {
     mutationFn: ({ pkg, enabled }: { pkg: TokenPackage; enabled: boolean }) =>
       api.updateTokenPackage(pkg.id, packageInput(pkg, { enabled })),
     onSuccess: (saved) => {
-      toast.success(saved.enabled ? "Paket dijual" : "Paket disembunyikan", saved.name);
+      toast.success(saved.enabled ? "Package on sale" : "Package hidden", saved.name);
       qc.invalidateQueries({ queryKey: QK_PACKAGES });
     },
-    onError: (e) => toast.error("Status paket gagal diubah", errorText(e)),
+    onError: (e) => toast.error("Couldn't change package status", errorText(e)),
   });
 
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteTokenPackage(id),
     onSuccess: () => {
-      toast.success("Paket dihapus");
+      toast.success("Package deleted");
       qc.invalidateQueries({ queryKey: QK_PACKAGES });
     },
-    onError: (e) => toast.error("Paket gagal dihapus", errorText(e)),
+    onError: (e) => toast.error("Couldn't delete package", errorText(e)),
   });
 
   const onDelete = async (p: TokenPackage) => {
     const ok = await confirm({
-      title: `Hapus paket ${p.name}?`,
-      description: "Paket hilang dari portal. Key yang sudah dibeli dan riwayat order tidak berubah.",
-      confirmLabel: "Hapus paket",
-      cancelLabel: "Batal",
+      title: `Delete package ${p.name}?`,
+      description: "The package disappears from the portal. Keys already bought and order history are unchanged.",
+      confirmLabel: "Delete package",
+      cancelLabel: "Cancel",
       tone: "danger",
     });
     if (ok) remove.mutate(p.id);
@@ -269,42 +260,42 @@ function PackagesPanel() {
   return (
     <Panel
       icon={Package}
-      title="Daftar paket"
-      subtitle="Urutan di portal mengikuti kolom Urutan, angka kecil tampil lebih dulu."
+      title="Package list"
+      subtitle="The portal orders packages by the Sort column, lowest first."
       action={
         <Button onClick={() => setEditing("new")}>
           <Plus aria-hidden="true" />
-          Tambah paket
+          Add package
         </Button>
       }
     >
       {packages.isLoading ? (
-        <LoadingRegion label="Memuat daftar paket" className="space-y-2 p-4">
+        <LoadingRegion label="Loading packages" className="space-y-2 p-4">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-10 w-full" />
           ))}
         </LoadingRegion>
       ) : packages.isError ? (
         <div className="p-4">
-          <ErrorBanner message={`Daftar paket tidak bisa dimuat. ${errorText(packages.error)}`} />
+          <ErrorBanner message={`Couldn't load packages. ${errorText(packages.error)}`} />
         </div>
       ) : list.length === 0 ? (
-        <EmptyState icon={Package} size="sm" title="Belum ada paket" hint="Tambah paket pertama agar pelanggan bisa membeli token di portal." />
+        <EmptyState icon={Package} size="sm" title="No packages yet" hint="Add the first package so customers can buy tokens in the portal." />
       ) : (
-        <div className="overflow-x-auto" role="region" aria-label="Tabel paket token" tabIndex={0}>
+        <div className="overflow-x-auto" role="region" aria-label="Token packages table" tabIndex={0}>
           <table className="w-full min-w-[880px] text-[13px]">
             <thead>
               <tr className={THEAD}>
-                <th scope="col" className={TH}>Nama</th>
-                <th scope="col" className={TH}>Jenis</th>
-                <th scope="col" className={cn(TH, "text-right")}>Token</th>
-                <th scope="col" className={cn(TH, "text-right")}>Masa aktif</th>
-                <th scope="col" className={cn(TH, "text-right")}>Harga</th>
-                <th scope="col" className={cn(TH, "text-right")}>Per 1 jt token</th>
-                <th scope="col" className={cn(TH, "text-right")}>Urutan</th>
-                <th scope="col" className={TH}>Dijual</th>
+                <th scope="col" className={TH}>Name</th>
+                <th scope="col" className={TH}>Type</th>
+                <th scope="col" className={cn(TH, "text-right")}>Tokens</th>
+                <th scope="col" className={cn(TH, "text-right")}>Validity</th>
+                <th scope="col" className={cn(TH, "text-right")}>Price</th>
+                <th scope="col" className={cn(TH, "text-right")}>Per 1M tokens</th>
+                <th scope="col" className={cn(TH, "text-right")}>Sort</th>
+                <th scope="col" className={TH}>On sale</th>
                 <th scope="col" className={cn(TH, "text-right")}>
-                  <span className="sr-only">Aksi</span>
+                  <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>
@@ -317,12 +308,12 @@ function PackagesPanel() {
                     <td className="px-4 py-2.5">
                       <span className="flex flex-wrap items-center gap-1.5 font-medium text-fg">
                         {p.name}
-                        {p.featured && <Badge tone="accent">Unggulan</Badge>}
+                        {p.featured && <Badge tone="accent">Featured</Badge>}
                       </span>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-fg-muted">{p.kind === "tokens" ? "Kuota token" : "Harian"}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">{p.kind === "tokens" ? tokenLabel(p.tokens) : "-"}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">{p.days} hari</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-fg-muted">{p.kind === "tokens" ? "Token quota" : "Daily"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">{p.kind === "tokens" ? formatTokens(p.tokens) : "-"}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">{p.days} days</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">{idr(p.price_idr)}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-fg-muted">{pricePerMillion(p)}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-fg-muted">{p.sort}</td>
@@ -331,15 +322,15 @@ function PackagesPanel() {
                         checked={p.enabled}
                         disabled={toggling}
                         onChange={(enabled) => setEnabled.mutate({ pkg: p, enabled })}
-                        aria-label={`${p.enabled ? "Sembunyikan" : "Jual"} paket ${p.name}`}
+                        aria-label={`${p.enabled ? "Hide" : "Sell"} package ${p.name}`}
                       />
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" onClick={() => setEditing(p)} title="Ubah paket" aria-label={`Ubah ${p.name}`}>
+                        <Button variant="ghost" onClick={() => setEditing(p)} title="Edit package" aria-label={`Edit ${p.name}`}>
                           <Pencil aria-hidden="true" />
                         </Button>
-                        <Button variant="ghost" onClick={() => onDelete(p)} disabled={deleting} title="Hapus paket" aria-label={`Hapus ${p.name}`}>
+                        <Button variant="ghost" onClick={() => onDelete(p)} disabled={deleting} title="Delete package" aria-label={`Delete ${p.name}`}>
                           {deleting ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
                         </Button>
                       </div>
@@ -373,16 +364,16 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
   const daysNum = Number(days);
   const priceNum = Number(price);
   const sortNum = Number(sort);
-  const nameError = touched && !name.trim() ? "Nama paket wajib diisi." : null;
-  const tokensError = touched && kind === "tokens" && !(millionsNum > 0) ? "Isi jumlah token lebih dari 0." : null;
-  const daysError = touched && (!Number.isInteger(daysNum) || daysNum < 1) ? "Isi bilangan bulat minimal 1." : null;
-  const priceError = touched && (!Number.isInteger(priceNum) || priceNum <= 0) ? "Isi harga dalam Rupiah, lebih dari 0." : null;
-  const sortError = touched && (sort.trim() === "" || !Number.isInteger(sortNum)) ? "Isi bilangan bulat." : null;
+  const nameError = touched && !name.trim() ? "Package name is required." : null;
+  const tokensError = touched && kind === "tokens" && !(millionsNum > 0) ? "Enter a token amount above 0." : null;
+  const daysError = touched && (!Number.isInteger(daysNum) || daysNum < 1) ? "Enter a whole number, 1 or more." : null;
+  const priceError = touched && (!Number.isInteger(priceNum) || priceNum <= 0) ? "Enter a price in Rupiah above 0." : null;
+  const sortError = touched && (sort.trim() === "" || !Number.isInteger(sortNum)) ? "Enter a whole number." : null;
 
   const save = useMutation({
     mutationFn: (body: TokenPackageInput) => (pkg ? api.updateTokenPackage(pkg.id, body) : api.createTokenPackage(body)),
     onSuccess: (saved) => {
-      toast.success(pkg ? "Paket diperbarui" : "Paket ditambahkan", saved.name);
+      toast.success(pkg ? "Package updated" : "Package added", saved.name);
       qc.invalidateQueries({ queryKey: QK_PACKAGES });
       onClose();
     },
@@ -417,24 +408,24 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
     kind === "tokens" && millionsNum > 0 && priceNum > 0 ? pricePerMillion({ kind, tokens: millionsNum * 1e6, price_idr: priceNum }) : null;
 
   return (
-    <Modal open onClose={save.isPending ? () => {} : onClose} title={pkg ? `Ubah paket ${pkg.name}` : "Tambah paket"} subtitle="Paket token GPT-6">
+    <Modal open onClose={save.isPending ? () => {} : onClose} title={pkg ? `Edit package ${pkg.name}` : "Add package"} subtitle="GPT-6 token package">
       <form onSubmit={onSubmit} noValidate>
         <div className="space-y-4 px-5 py-4">
-          <Field label="Nama paket" error={nameError} required>
+          <Field label="Package name" error={nameError} required>
             <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} autoComplete="off" autoFocus />
           </Field>
           <Field
-            label="Jenis"
-            hint={kind === "tokens" ? "Pelanggan membeli sejumlah token yang berlaku selama masa aktif." : "Pelanggan membeli akses selama masa aktif, tanpa kuota token."}
+            label="Type"
+            hint={kind === "tokens" ? "Customers buy a token amount that is valid for the validity period." : "Customers buy access for the validity period, with no token quota."}
           >
             <Select value={kind} onChange={(e) => setKind(e.target.value as TokenPackageKind)}>
-              <option value="tokens">Kuota token</option>
-              <option value="days">Harian</option>
+              <option value="tokens">Token quota</option>
+              <option value="days">Daily</option>
             </Select>
           </Field>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {kind === "tokens" && (
-              <Field label="Jumlah token (juta)" error={tokensError} hint={tokensError ? undefined : "100 berarti 100 jt token."} required>
+              <Field label="Tokens (millions)" error={tokensError} hint={tokensError ? undefined : "100 means 100M tokens."} required>
                 <Input
                   type="number"
                   inputMode="decimal"
@@ -446,50 +437,50 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
                 />
               </Field>
             )}
-            <Field label="Masa aktif (hari)" error={daysError} required>
+            <Field label="Validity (days)" error={daysError} required>
               <Input type="number" inputMode="numeric" min="1" step="1" value={days} onChange={(e) => setDays(e.target.value)} className="tabular-nums" />
             </Field>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field
-              label="Harga (Rp)"
+              label="Price (IDR)"
               error={priceError}
-              hint={priceError ? undefined : perMillion ? `${perMillion} per 1 jt token` : priceNum > 0 ? idr(priceNum) : undefined}
+              hint={priceError ? undefined : perMillion ? `${perMillion} per 1M tokens` : priceNum > 0 ? idr(priceNum) : undefined}
               required
             >
               <Input type="number" inputMode="numeric" min="1" step="1" value={price} onChange={(e) => setPrice(e.target.value)} className="tabular-nums" />
             </Field>
-            <Field label="Urutan" error={sortError} hint={sortError ? undefined : "Angka kecil tampil lebih dulu."}>
+            <Field label="Sort" error={sortError} hint={sortError ? undefined : "Lowest shows first."}>
               <Input type="number" inputMode="numeric" step="1" value={sort} onChange={(e) => setSort(e.target.value)} className="tabular-nums" />
             </Field>
           </div>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p id="pkg-enabled" className="text-[13px] font-medium text-fg">
-                Dijual
+                On sale
               </p>
-              <p className="text-[12px] text-fg-muted">Jika mati, paket tidak tampil di portal.</p>
+              <p className="text-[12px] text-fg-muted">When off, the package is hidden from the portal.</p>
             </div>
             <Toggle checked={enabled} onChange={setEnabled} aria-labelledby="pkg-enabled" />
           </div>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p id="pkg-featured" className="text-[13px] font-medium text-fg">
-                Tandai unggulan
+                Mark as featured
               </p>
-              <p className="text-[12px] text-fg-muted">Paket diberi label Unggulan di portal.</p>
+              <p className="text-[12px] text-fg-muted">The portal shows a Featured label on this package.</p>
             </div>
             <Toggle checked={featured} onChange={setFeatured} aria-labelledby="pkg-featured" />
           </div>
-          {save.isError && <ErrorBanner message={`Paket gagal disimpan. ${errorText(save.error)}`} />}
+          {save.isError && <ErrorBanner message={`Couldn't save package. ${errorText(save.error)}`} />}
         </div>
         <ModalFooter>
           <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
-            Batal
+            Cancel
           </Button>
           <Button type="submit" disabled={save.isPending}>
             {save.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}
-            {pkg ? "Simpan" : "Tambah"}
+            {pkg ? "Save" : "Add"}
           </Button>
         </ModalFooter>
       </form>
@@ -497,12 +488,12 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
   );
 }
 
-// ─── Pelanggan ──────────────────────────────────────────────────────────────
+// ─── Subscribers ────────────────────────────────────────────────────────────
 
 function subscriptionStatus(s: TokenSubscription): { label: string; tone: "success" | "danger" | "neutral" } {
-  if (s.disabled) return { label: "Key dinonaktifkan", tone: "danger" };
-  if (!s.active) return { label: "Tidak aktif", tone: "neutral" };
-  return { label: "Aktif", tone: "success" };
+  if (s.disabled) return { label: "Key disabled", tone: "danger" };
+  if (!s.active) return { label: "Inactive", tone: "neutral" };
+  return { label: "Active", tone: "success" };
 }
 
 function SubscribersPanel() {
@@ -515,40 +506,40 @@ function SubscribersPanel() {
   const toggle = useMutation({
     mutationFn: (sub: string) => api.toggleTokenKey(sub),
     onSuccess: (res) => {
-      toast.success(res.disabled ? "Key dinonaktifkan" : "Key diaktifkan lagi");
+      toast.success(res.disabled ? "Key disabled" : "Key enabled again");
       qc.invalidateQueries({ queryKey: QK_SUBSCRIPTIONS });
     },
-    onError: (e) => toast.error("Status key gagal diubah", errorText(e)),
+    onError: (e) => toast.error("Couldn't change key status", errorText(e)),
   });
 
   const list = subs.data ?? [];
 
   return (
-    <Panel icon={Users} title="Pelanggan paket token" subtitle="Sisa token dihitung dari batas paket dikurangi pemakaian sejak key terbit.">
+    <Panel icon={Users} title="Token package subscribers" subtitle="Remaining tokens are the package limit minus usage since the key was issued.">
       {subs.isLoading ? (
-        <LoadingRegion label="Memuat pelanggan" className="space-y-2 p-4">
+        <LoadingRegion label="Loading subscribers" className="space-y-2 p-4">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-10 w-full" />
           ))}
         </LoadingRegion>
       ) : subs.isError && !subs.data ? (
         <div className="p-4">
-          <ErrorBanner message={`Daftar pelanggan tidak bisa dimuat. ${errorText(subs.error)}`} />
+          <ErrorBanner message={`Couldn't load subscribers. ${errorText(subs.error)}`} />
         </div>
       ) : list.length === 0 ? (
-        <EmptyState icon={Users} size="sm" title="Belum ada pelanggan" hint="Pemilik key paket token muncul di sini setelah pembayaran pertama selesai." />
+        <EmptyState icon={Users} size="sm" title="No subscribers yet" hint="Token package key owners show up here after their first payment completes." />
       ) : (
-        <div className="overflow-x-auto" role="region" aria-label="Tabel pelanggan paket token" tabIndex={0}>
+        <div className="overflow-x-auto" role="region" aria-label="Token package subscribers table" tabIndex={0}>
           <table className="w-full min-w-[800px] text-[13px]">
             <thead>
               <tr className={THEAD}>
-                <th scope="col" className={TH}>Pelanggan</th>
+                <th scope="col" className={TH}>Subscriber</th>
                 <th scope="col" className={TH}>Key</th>
-                <th scope="col" className={cn(TH, "text-right")}>Sisa token</th>
-                <th scope="col" className={TH}>Berlaku sampai</th>
+                <th scope="col" className={cn(TH, "text-right")}>Tokens left</th>
+                <th scope="col" className={TH}>Valid until</th>
                 <th scope="col" className={TH}>Status</th>
                 <th scope="col" className={cn(TH, "text-right")}>
-                  <span className="sr-only">Aksi</span>
+                  <span className="sr-only">Actions</span>
                 </th>
               </tr>
             </thead>
@@ -562,7 +553,7 @@ function SubscribersPanel() {
                     <td className="px-4 py-2.5 text-fg">{s.email || s.google_sub}</td>
                     <td className="px-4 py-2.5 font-mono text-[12px] text-fg-muted">{s.key_display || s.key_id}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
-                      <span className="font-semibold">{tokenLabel(remaining)}</span>
+                      <span className="font-semibold">{formatTokens(remaining)}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(s.expires_at, true)}</td>
                     <td className="px-4 py-2.5">
@@ -574,10 +565,11 @@ function SubscribersPanel() {
                           variant={s.disabled ? "ghost" : "danger"}
                           onClick={() => toggle.mutate(s.google_sub)}
                           disabled={toggle.isPending}
-                          title={s.disabled ? "Aktifkan key lagi" : "Nonaktifkan key"}
+                          title={s.disabled ? "Enable key again" : "Disable key"}
+                          aria-label={`${s.disabled ? "Enable" : "Disable"} key for ${s.email || s.google_sub}`}
                         >
                           {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Power aria-hidden="true" />}
-                          {s.disabled ? "Aktifkan" : "Nonaktifkan"}
+                          {s.disabled ? "Enable" : "Disable"}
                         </Button>
                       </div>
                     </td>
