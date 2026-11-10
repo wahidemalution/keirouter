@@ -428,7 +428,8 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, est Estimate) (Reserv
 	if est.TokenMetered {
 		// Remaining is read under the lock that adds the hold: the recorded
 		// tokens come from Check, the in-flight ones from the map right now.
-		remaining := int64(-1)
+		var remaining int64
+		limited := false
 		for _, bu := range dec.BudgetUsage {
 			b := bu.Budget
 			if !b.HardCutoff || b.LimitTokens <= 0 {
@@ -438,26 +439,29 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, est Estimate) (Reserv
 			if r, ok := e.reservations[reservationKey(b.ScopeKind, b.ScopeID)]; ok {
 				left -= r.tokens
 			}
-			if remaining < 0 || left < remaining {
+			if !limited || left < remaining {
 				remaining = left
 			}
+			limited = true
 		}
-		if remaining >= 0 {
-			outputCap = min(est.MaxOutputTokens, remaining-est.PromptTokens)
-			if outputCap < 1 {
-				return Reservation{}, insufficientTokens(max(remaining, 0))
+		if !limited {
+			// A token-metered key without a token limit is never unlimited.
+			return Reservation{}, insufficientTokens(0)
+		}
+		outputCap = min(est.MaxOutputTokens, remaining-est.PromptTokens)
+		if outputCap < 1 {
+			return Reservation{}, insufficientTokens(max(remaining, 0))
+		}
+		held := est.PromptTokens + outputCap
+		for _, bu := range dec.BudgetUsage {
+			b := bu.Budget
+			if !b.HardCutoff || b.LimitTokens <= 0 {
+				continue
 			}
-			held := est.PromptTokens + outputCap
-			for _, bu := range dec.BudgetUsage {
-				b := bu.Budget
-				if !b.HardCutoff || b.LimitTokens <= 0 {
-					continue
-				}
-				key := reservationKey(b.ScopeKind, b.ScopeID)
-				a := amounts[key]
-				a.tokens = held
-				amounts[key] = a
-			}
+			key := reservationKey(b.ScopeKind, b.ScopeID)
+			a := amounts[key]
+			a.tokens = held
+			amounts[key] = a
 		}
 	}
 

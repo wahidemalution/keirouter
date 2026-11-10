@@ -184,4 +184,8 @@ type RequestMetadata struct {
 	// BudgetHold is the request's budget reservation id, released when the
 	// request is metered or fails. Zero when nothing is held.
 	BudgetHold uint64
+	// BudgetPromptTokens and BudgetHeldTokens are a token-metered request's
+	// prompt estimate and the tokens its hold covers (prompt + output cap).
+	BudgetPromptTokens int64
+	BudgetHeldTokens   int64
 }

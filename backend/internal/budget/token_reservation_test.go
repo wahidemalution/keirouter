@@ -3,7 +3,6 @@ package budget
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,27 +30,29 @@ func reservedTokens(e *Engine, keyID string) int64 {
 func raceReservations(t *testing.T, e *Engine, scope Scope, n int, prompt, maxOut int64) (granted int64, ok int32) {
 	t.Helper()
 	var wg sync.WaitGroup
-	var total atomic.Int64
-	var admitted atomic.Int32
+	results := make([]Reservation, n)
+	errs := make([]error, n)
 	start := make(chan struct{})
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
-			res, err := e.Reserve(context.Background(), scope, tokenEstimate(prompt, maxOut))
-			if err != nil {
-				require.Equal(t, CodeInsufficientTokens, core.AsProviderError(err).Code)
-				return
-			}
-			require.Positive(t, res.OutputCap)
-			total.Add(prompt + res.OutputCap)
-			admitted.Add(1)
+			results[i], errs[i] = e.Reserve(context.Background(), scope, tokenEstimate(prompt, maxOut))
 		}()
 	}
 	close(start)
 	wg.Wait()
-	return total.Load(), admitted.Load()
+	for i := range n {
+		if errs[i] != nil {
+			require.Equal(t, CodeInsufficientTokens, core.AsProviderError(errs[i]).Code)
+			continue
+		}
+		require.Positive(t, results[i].OutputCap)
+		granted += prompt + results[i].OutputCap
+		ok++
+	}
+	return granted, ok
 }
 
 func TestTokenReservationBlocksConcurrentOvershoot(t *testing.T) {
@@ -201,4 +202,18 @@ func TestMinKeyBalanceGateTokenBudgetWithSmallUSDLimit(t *testing.T) {
 		LimitTokens: 10_000_000, LimitMicros: 10_000, HardCutoff: true})
 	_, err := eng.Reserve(context.Background(), Scope{APIKeyID: "key-mixed"}, Estimate{Micros: 1})
 	require.Error(t, err, "only token-only budgets skip the minimum balance")
+}
+
+func TestTokenMeteredWithoutTokenBudgetRefused(t *testing.T) {
+	eng, db := newTestEngine(t)
+	ctx := context.Background()
+	_, err := eng.Reserve(ctx, Scope{APIKeyID: "key-none"}, tokenEstimate(10, 100))
+	require.Error(t, err, "no budget at all")
+	require.Equal(t, CodeInsufficientTokens, core.AsProviderError(err).Code)
+
+	createBudget(t, db, store.Budget{ID: "b-usd", ScopeKind: store.ScopeAPIKey, ScopeID: "key-usd",
+		LimitMicros: 5_000_000, HardCutoff: true})
+	_, err = eng.Reserve(ctx, Scope{APIKeyID: "key-usd"}, tokenEstimate(10, 100))
+	require.Error(t, err, "a USD budget is no token limit")
+	require.Equal(t, CodeInsufficientTokens, core.AsProviderError(err).Code)
 }

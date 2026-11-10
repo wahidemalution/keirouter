@@ -412,11 +412,24 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			lastErr = requestTimeoutError(lastAttempt, reqTimeout, lastErr)
 			break
 		}
+		// A token-metered retry may only spend what the hold has left after
+		// the attempts before it; when that is no output at all, stop.
+		attemptCap, ok := retryOutputCap(req.Metadata, priorAttemptUsage)
+		if !ok {
+			break
+		}
+		cloneAttempt := func() *core.ChatRequest {
+			r := cloneForTarget(attemptBaseReq, attempt.Target)
+			if attemptCap > 0 {
+				clampOutputTokens(r, attemptCap)
+			}
+			return r
+		}
 		lastAttempt = attempt
 		started := time.Now()
 		p.log.Debug("attempt start", "i", i, "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
-		attemptReq := cloneForTarget(attemptBaseReq, attempt.Target)
+		attemptReq := cloneAttempt()
 		attempt.Creds = withTargetHeaders(attempt)
 		attempt.Upstream = core.NewUpstreamMeta()
 		attemptCtx := core.WithUpstreamMeta(upstreamCtx, attempt.Upstream)
@@ -442,7 +455,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		cancelTimeout() // cancel immediately to avoid timer goroutine leak
 		if callErr != nil && ctx.Err() == nil && isUnsupportedCloudflareImageError(callErr, attempt.Target.Provider, attempt.Target.Model, attemptReq) {
 			p.log.Debug("retrying Cloudflare request without images", "model", attempt.Target.Model)
-			retryReq := cloneForTarget(attemptBaseReq, attempt.Target)
+			retryReq := cloneAttempt()
 			capability.StripImages(retryReq)
 			retryCtx, retryCancel := withRequestDeadline(core.WithProxy(attemptCtx, attempt.Creds))
 			resp, callErr = attempt.Conn.Chat(retryCtx, retryReq, attempt.Creds)
@@ -461,7 +474,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			p.log.Debug("provider requires streaming, retrying via Stream()",
 				"provider", attempt.Target.Provider, "model", attempt.Target.Model)
 			streamCtx, streamCancel := withRequestDeadline(core.WithProxy(attemptCtx, attempt.Creds))
-			streamReq := cloneForTarget(attemptBaseReq, attempt.Target)
+			streamReq := cloneAttempt()
 			stream, sErr := attempt.Conn.Stream(streamCtx, streamReq, attempt.Creds, core.StreamConfig{})
 			if sErr == nil {
 				sResp, drainErr := drainStream(stream, req.Model)
@@ -1643,6 +1656,9 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opt
 	}
 	var est budget.Estimate
 	if opts.TokenMetered {
+		if err := limitTokenMeteredParams(req); err != nil {
+			return err
+		}
 		want := int64(tokenOutputCeiling)
 		if req.MaxTokens != nil && *req.MaxTokens > 0 {
 			want = int64(*req.MaxTokens)
@@ -1660,6 +1676,36 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opt
 	req.Metadata.BudgetHold = res.ID
 	if res.OutputCap > 0 {
 		clampOutputTokens(req, res.OutputCap)
+		req.Metadata.BudgetPromptTokens = est.PromptTokens
+		req.Metadata.BudgetHeldTokens = est.PromptTokens + res.OutputCap
+	}
+	return nil
+}
+
+// CodeNNotSupported is the client error code for a token-metered request
+// asking for more than one choice.
+const CodeNNotSupported = "n_not_supported_for_token_package"
+
+// tokenMeteredDroppedParams are passthrough parameters a token package
+// request may not send upstream: they buy output (audio, predicted output)
+// or hosted search that the token hold does not cover.
+var tokenMeteredDroppedParams = []string{"prediction", "audio", "modalities", "web_search_options"}
+
+// limitTokenMeteredParams refuses n > 1, which multiplies the output past
+// the hold, and drops the parameters in tokenMeteredDroppedParams.
+func limitTokenMeteredParams(req *core.ChatRequest) error {
+	if raw, ok := req.Extra["n"]; ok {
+		var n float64
+		if json.Unmarshal(raw, &n) != nil || n > 1 {
+			return &core.ProviderError{
+				Kind:    core.ErrBadRequest,
+				Code:    CodeNNotSupported,
+				Message: "Paket token hanya mendukung satu jawaban per permintaan: hapus parameter n atau isi n=1.",
+			}
+		}
+	}
+	for _, k := range tokenMeteredDroppedParams {
+		delete(req.Extra, k)
 	}
 	return nil
 }
@@ -1673,8 +1719,23 @@ func clampOutputTokens(req *core.ChatRequest, limit int64) {
 		req.MaxTokens = &n
 	}
 	if req.Reasoning != nil && req.Reasoning.MaxTokens > n {
-		req.Reasoning.MaxTokens = n
+		r := *req.Reasoning // may be shared with the attempt's base request
+		r.MaxTokens = n
+		req.Reasoning = &r
 	}
+}
+
+// retryOutputCap is the output cap for an attempt of a token-metered request
+// after earlier attempts used prior: what the hold has left once they and a
+// fresh prompt are paid for. Zero means no clamp beyond the first one; ok is
+// false when nothing is left.
+func retryOutputCap(md core.RequestMetadata, prior core.Usage) (int64, bool) {
+	used := usageTokens(prior)
+	if md.BudgetHeldTokens <= 0 || used <= 0 {
+		return 0, true
+	}
+	left := md.BudgetHeldTokens - used - md.BudgetPromptTokens
+	return left, left >= 1
 }
 
 func budgetScopeFor(md core.RequestMetadata) budget.Scope {
