@@ -37,7 +37,7 @@ func admissionTimeout(stall time.Duration, t dispatch.Target) time.Duration {
 // inside the pipeline lets the attempt planner fall back before the gateway has
 // written response headers or bytes to the client.
 func admitStream(ctx context.Context, in <-chan core.StreamChunk, timeout time.Duration, provider, model string) (<-chan core.StreamChunk, error) {
-	return admitStreamNotify(ctx, in, timeout, provider, model, nil, 0)
+	return admitStreamNotify(ctx, in, timeout, provider, model, nil, 0, false)
 }
 
 // streamPendingNotifyAfter is how long an admitted-but-silent attempt may go
@@ -51,8 +51,11 @@ const streamPendingNotifyAfter = 20 * time.Second
 // has arrived after pendingAfter, onPending is invoked exactly once so the
 // caller can commit headers and keep the client connection alive while the
 // upstream is still thinking. A nil onPending disables the notification.
+//
+// For a token-metered request, output the upstream reported in a usage frame
+// counts as charged, and a rejection carries that usage as AttemptUsage.
 func admitStreamNotify(ctx context.Context, in <-chan core.StreamChunk, timeout time.Duration, provider, model string,
-	onPending func(), pendingAfter time.Duration) (<-chan core.StreamChunk, error) {
+	onPending func(), pendingAfter time.Duration, tokenMetered bool) (<-chan core.StreamChunk, error) {
 	if timeout <= 0 {
 		timeout = defaultStreamAdmissionTimeout
 	}
@@ -68,42 +71,48 @@ func admitStreamNotify(ctx context.Context, in <-chan core.StreamChunk, timeout 
 	}
 
 	prefix := make([]core.StreamChunk, 0, 4)
+	reject := func(err error) (<-chan core.StreamChunk, error) {
+		if tokenMetered {
+			return nil, withReportedUsage(err, prefix)
+		}
+		return nil, err
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return reject(ctx.Err())
 		case <-pendingC:
 			pendingC = nil
 			onPending()
 		case <-timer.C:
-			return nil, &core.ProviderError{
+			return reject(&core.ProviderError{
 				Kind:     core.ErrTimeout,
 				Scope:    core.FailureScopeRequest,
 				Provider: provider,
 				Model:    model,
 				Message:  "stream admission timeout: no model output received for " + timeout.String(),
-			}
+			})
 		case chunk, ok := <-in:
 			if !ok {
-				return nil, &core.ProviderError{
+				return reject(&core.ProviderError{
 					Kind:     core.ErrUpstream,
 					Scope:    core.FailureScopeRequest,
 					Provider: provider,
 					Model:    model,
 					Message:  "provider stream ended before producing model output",
-				}
+				})
 			}
 			if chunk.Type == core.ChunkError {
 				if chunk.Err != nil {
-					return nil, chunk.Err
+					return reject(chunk.Err)
 				}
-				return nil, &core.ProviderError{
+				return reject(&core.ProviderError{
 					Kind:     core.ErrUpstream,
 					Scope:    core.FailureScopeRequest,
 					Provider: provider,
 					Model:    model,
 					Message:  "provider stream failed before producing model output",
-				}
+				})
 			}
 			prefix = append(prefix, chunk)
 			if meaningfulAdmissionChunk(chunk) {
@@ -116,16 +125,16 @@ func admitStreamNotify(ctx context.Context, in <-chan core.StreamChunk, timeout 
 				// path, instead of a free fallback the operator pays for.
 				// The usage frame carrying the cost trails the finish frame.
 				prefix = append(prefix, collectTrailing(ctx, in, trailingUsageGrace)...)
-				if upstreamCharged(prefix) {
+				if upstreamCharged(prefix) || (tokenMetered && reportedOutput(prefixUsage(prefix))) {
 					return replayAdmittedStream(ctx, prefix, in), nil
 				}
-				return nil, &core.ProviderError{
+				return reject(&core.ProviderError{
 					Kind:     core.ErrUpstream,
 					Scope:    core.FailureScopeRequest,
 					Provider: provider,
 					Model:    model,
 					Message:  fmt.Sprintf("provider stream finished without model output (%s)", chunk.FinishReason),
-				}
+				})
 			}
 		}
 	}
@@ -165,6 +174,29 @@ func upstreamCharged(chunks []core.StreamChunk) bool {
 		}
 	}
 	return false
+}
+
+// prefixUsage merges the usage frames seen during admission.
+func prefixUsage(chunks []core.StreamChunk) core.Usage {
+	var u core.Usage
+	for _, c := range chunks {
+		if c.Type == core.ChunkUsage && c.Usage != nil {
+			u = mergeUsage(u, *c.Usage)
+		}
+	}
+	return u
+}
+
+// withReportedUsage attaches the output the upstream reported before a
+// rejection, so the attempt is billed instead of being a free fallback.
+func withReportedUsage(err error, prefix []core.StreamChunk) error {
+	u := prefixUsage(prefix)
+	if !reportedOutput(u) {
+		return err
+	}
+	pe := *core.AsProviderError(err)
+	pe.AttemptUsage = &u
+	return &pe
 }
 
 func meaningfulAdmissionChunk(chunk core.StreamChunk) bool {

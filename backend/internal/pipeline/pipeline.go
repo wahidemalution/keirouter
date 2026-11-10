@@ -790,7 +790,7 @@ func (p *Pipeline) stream(ctx context.Context, req *core.ChatRequest, opts Optio
 
 		pe := providerErrorForAttempt(sErr, lastAttempt)
 		wait, shouldRetry := streamRateLimitWait(pe, rlRetries, waitBudget)
-		if !shouldRetry {
+		if !shouldRetry || pe.AttemptUsage != nil {
 			release(limits.Refund)
 			var usage core.Usage
 			if pe.AttemptUsage != nil {
@@ -1118,15 +1118,17 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		}
 
 		upstream, callErr = admitStreamNotify(callCtx, upstream, admissionTimeout(p.resolvedStallTimeout(), attempt.Target), attempt.Target.Provider, attempt.Target.Model,
-			opts.OnStreamPending, streamPendingNotifyAfter)
+			opts.OnStreamPending, streamPendingNotifyAfter, req.Metadata.TokenMetered)
 		if callErr != nil {
 			cancelUpstream()
 			pe := providerErrorForAttempt(callErr, attempt)
-			if req.Metadata.TokenMetered && errors.Is(callErr, context.Canceled) {
-				// The upstream accepted the request and may have been
-				// reasoning for minutes before the client left: charge the
-				// attempt as a cut stream. stream() records it.
-				usage := tokenCutStreamUsage(req, core.Usage{}, 0)
+			if usage, charged := tokenAdmissionCharge(req, pe); charged {
+				// The upstream accepted the request and generated (or may
+				// have been reasoning for minutes): this attempt is billed,
+				// never retried for free. stream() records it.
+				if !core.IsClientDisconnect(pe) {
+					p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
+				}
 				pe.AttemptUsage = &usage
 				return nil, pe, false, attempt, time.Since(started), fellBack
 			}
@@ -2262,6 +2264,23 @@ func tokenUnaryUsageEstimate(req *core.ChatRequest, resp *core.ChatResponse) cor
 		}
 	}
 	return tokenEstimate(req, (chars*2+6)/7)
+}
+
+// tokenAdmissionCharge is the usage a token-metered attempt rejected during
+// stream admission is billed: the output the upstream reported, or the cut
+// charge when the client left. charged is false when the attempt is free.
+func tokenAdmissionCharge(req *core.ChatRequest, pe *core.ProviderError) (core.Usage, bool) {
+	if !req.Metadata.TokenMetered {
+		return core.Usage{}, false
+	}
+	var reported core.Usage
+	if pe.AttemptUsage != nil {
+		reported = *pe.AttemptUsage
+	}
+	if reportedOutput(reported) || core.IsClientDisconnect(pe) {
+		return tokenCutStreamUsage(req, reported, 0), true
+	}
+	return core.Usage{}, false
 }
 
 // reportedOutput reports whether usage carries the provider's real output

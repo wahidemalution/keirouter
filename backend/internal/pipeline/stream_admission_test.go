@@ -369,3 +369,42 @@ func TestPipelineSetsAsideNoProviderWhenSurplusNamesNone(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, []string{"inferhub", "openrouter"}, fh.Filter("m", []string{"inferhub", "openrouter"}))
 }
+
+func TestAdmitStreamAdmitsReportedOutputForTokenRequests(t *testing.T) {
+	usage := core.Usage{PromptTokens: 5, CompletionTokens: 50}
+	in := streamOf(
+		core.StreamChunk{Type: core.ChunkFinish, FinishReason: core.FinishLength},
+		core.StreamChunk{Type: core.ChunkUsage, Usage: &usage},
+	)
+	out, err := admitStreamNotify(context.Background(), in, time.Second, "openai", "m", nil, 0, true)
+	require.NoError(t, err)
+	n := 0
+	for range out {
+		n++
+	}
+	require.Equal(t, 2, n)
+}
+
+func TestAdmitStreamTokenRejectionCarriesReportedUsage(t *testing.T) {
+	usage := core.Usage{PromptTokens: 5, CompletionTokens: 50}
+	in := streamOf(
+		core.StreamChunk{Type: core.ChunkUsage, Usage: &usage},
+		core.StreamChunk{Type: core.ChunkError, Err: &core.ProviderError{Kind: core.ErrUpstream, Message: "boom"}},
+	)
+	_, err := admitStreamNotify(context.Background(), in, time.Second, "openai", "m", nil, 0, true)
+	var pe *core.ProviderError
+	require.ErrorAs(t, err, &pe)
+	require.NotNil(t, pe.AttemptUsage)
+	require.Equal(t, 50, pe.AttemptUsage.CompletionTokens)
+
+	// A placeholder output count is not reported output.
+	pending := core.Usage{PromptTokens: 5, CompletionTokens: 1, OutputPending: true}
+	in = streamOf(
+		core.StreamChunk{Type: core.ChunkUsage, Usage: &pending},
+		core.StreamChunk{Type: core.ChunkFinish, FinishReason: core.FinishLength},
+	)
+	out, err := admitStreamNotify(context.Background(), in, time.Second, "openai", "m", nil, 0, true)
+	require.Nil(t, out)
+	require.ErrorAs(t, err, &pe)
+	require.Nil(t, pe.AttemptUsage)
+}
