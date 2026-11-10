@@ -112,6 +112,10 @@ type ProviderError struct {
 	// AttemptUsage captures tokens consumed by a completed attempt that is being
 	// retried for response integrity. The pipeline adds it to terminal usage.
 	AttemptUsage *Usage
+	// Code is a stable client-facing error code set by gateway-local
+	// rejections. When set, Message is written by KeiRouter itself and is
+	// safe to show the client.
+	Code string
 	// Cause is the wrapped underlying error.
 	Cause error
 }

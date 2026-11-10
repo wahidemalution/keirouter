@@ -228,6 +228,10 @@ type Options struct {
 	Skills skills.Config
 	// Limits carries already-resolved per-key rate limits. Zero values mean unlimited.
 	Limits limits.EffectiveLimits
+	// TokenMetered marks a token package key: the request's prompt and
+	// output cap are held against the key's token budget before dispatch, and
+	// its output is capped to what remains.
+	TokenMetered bool
 	// OnStreamPending, when set, is invoked once if a streaming attempt is
 	// connected but has produced no output for streamPendingNotifyAfter. The
 	// gateway uses it to commit response headers and start heartbeats so the
@@ -256,9 +260,11 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
 		return nil, err
 	}
+	// Covers exits that neither confirm nor release; a no-op after either.
+	defer p.budgetRelease(budgetScopeFor(req.Metadata))
 	release, err := p.acquireLimit(ctx, req, opts)
 	if err != nil {
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeFor(req.Metadata)
 		p.budgetRelease(scope)
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
 		return nil, err
@@ -274,7 +280,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	// non-fallbackable — different providers won't change a safety decision.
 	if gres := p.guardrails.Inbound(ctx, req); gres.Action == guardrails.ActionBlock {
 		p.log.Debug("guardrails blocked inbound", "reason", gres.Reason)
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeFor(req.Metadata)
 		p.budgetRelease(scope)
 		err := &core.ProviderError{Kind: core.ErrPolicyBlocked, Message: gres.Reason}
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
@@ -290,7 +296,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	if hit, ok := p.cacheLookup(ctx, vec); ok {
 		p.log.Debug("cache hit, skipping upstream")
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeFor(req.Metadata)
 		p.budgetRelease(scope)
 		attempt := attemptForTargets(opts.Targets)
 		if hit.Model != "" {
@@ -331,7 +337,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	p.log.Debug("dispatcher planned", "attempts", len(attempts), "required", required)
 
-	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+	scope := budgetScopeFor(req.Metadata)
 	var lastErr error
 	var lastAttempt dispatch.Attempt
 	var lastLatency time.Duration
@@ -703,6 +709,16 @@ func streamRateLimitWait(pe *core.ProviderError, retries int, budget time.Durati
 // fallbackable, the pipeline may re-plan after a short wait. Explicit upstream
 // reset times and account-wide Kiro limits are returned immediately.
 func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Options) (*StreamResult, error) {
+	sr, err := p.stream(ctx, req, opts)
+	if err != nil {
+		// Covers error exits that neither confirm nor release; a no-op after
+		// either. A returned stream settles its hold when it completes.
+		p.budgetRelease(budgetScopeFor(req.Metadata))
+	}
+	return sr, err
+}
+
+func (p *Pipeline) stream(ctx context.Context, req *core.ChatRequest, opts Options) (*StreamResult, error) {
 	requestStarted := time.Now()
 	if err := p.preflight(ctx, req, opts); err != nil {
 		p.log.Debug("stream preflight rejected", "err", err)
@@ -711,7 +727,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	}
 	release, err := p.acquireLimit(ctx, req, opts)
 	if err != nil {
-		scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+		scope := budgetScopeFor(req.Metadata)
 		p.budgetRelease(scope)
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
 		return nil, err
@@ -734,7 +750,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	// dispatch guard. Strippable modalities (vision, audio) are soft-degraded
 	// by modality stripping in the attempt loop below.
 	required := capability.HardRequired(req)
-	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
+	scope := budgetScopeFor(req.Metadata)
 	attempts, err := p.planWithCooldownRetry(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
 		p.log.Debug("stream dispatcher plan failed", "err", err)
@@ -788,7 +804,9 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		}
 		// Re-reserve budget if it was released by streamExec (not-fallbackable path).
 		if budgetReleased {
-			if rerr := p.budget.Reserve(ctx, scope, 0); rerr != nil {
+			rerr := p.reserveBudget(ctx, req, opts)
+			scope = budgetScopeFor(req.Metadata)
+			if rerr != nil {
 				release(limits.Refund)
 				status, errorKind := terminalStatusAndKind(rerr)
 				p.recordOutcomeWithTTFT(context.WithoutCancel(ctx), req.Metadata, lastAttempt, core.Usage{},
@@ -1610,17 +1628,57 @@ func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Op
 			req.Metadata.ServiceTier = tier
 		}
 	}
-	if p.budget != nil {
-		scope := budget.Scope{
-			TenantID:  req.Metadata.TenantID,
-			ProjectID: req.Metadata.ProjectID,
-			APIKeyID:  req.Metadata.APIKeyID,
+	return p.reserveBudget(ctx, req, opts)
+}
+
+// tokenOutputCeiling is the output cap given to a token-metered request that
+// names none.
+const tokenOutputCeiling = 32768
+
+// reserveBudget holds the request's budget and records the hold on its
+// metadata. A token-metered request's output is clamped to the granted cap.
+func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opts Options) error {
+	if p.budget == nil {
+		return nil
+	}
+	var est budget.Estimate
+	if opts.TokenMetered {
+		want := int64(tokenOutputCeiling)
+		if req.MaxTokens != nil && *req.MaxTokens > 0 {
+			want = int64(*req.MaxTokens)
 		}
-		if err := p.budget.Reserve(ctx, scope, 0); err != nil {
-			return err
+		est = budget.Estimate{
+			TokenMetered:    true,
+			PromptTokens:    int64(core.EstimatePromptTokens(req)),
+			MaxOutputTokens: want,
 		}
 	}
+	res, err := p.budget.Reserve(ctx, budgetScopeFor(req.Metadata), est)
+	if err != nil {
+		return err
+	}
+	req.Metadata.BudgetHold = res.ID
+	if res.OutputCap > 0 {
+		clampOutputTokens(req, res.OutputCap)
+	}
 	return nil
+}
+
+// clampOutputTokens caps the request's output, and any thinking budget inside
+// it, at limit. Every client dialect parses its output field into MaxTokens
+// and every upstream renders it from there.
+func clampOutputTokens(req *core.ChatRequest, limit int64) {
+	n := int(limit)
+	if req.MaxTokens == nil || *req.MaxTokens <= 0 || *req.MaxTokens > n {
+		req.MaxTokens = &n
+	}
+	if req.Reasoning != nil && req.Reasoning.MaxTokens > n {
+		req.Reasoning.MaxTokens = n
+	}
+}
+
+func budgetScopeFor(md core.RequestMetadata) budget.Scope {
+	return budget.Scope{TenantID: md.TenantID, ProjectID: md.ProjectID, APIKeyID: md.APIKeyID, Hold: md.BudgetHold}
 }
 
 // budgetConfirm releases the reservation after successful metering.

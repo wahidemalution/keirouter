@@ -181,4 +181,7 @@ type RequestMetadata struct {
 	// the usage row. Attached by the guardrails engine when a policy applies;
 	// nil when guardrails never evaluated the request.
 	Guardrail *GuardrailOutcome
+	// BudgetHold is the request's budget reservation id, released when the
+	// request is metered or fails. Zero when nothing is held.
+	BudgetHold uint64
 }

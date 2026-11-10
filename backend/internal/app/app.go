@@ -191,6 +191,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		mtr.AddRecordObserver(auditRec.ObserveUsage)
 	}
 	bud := budget.New(db.Budgets(), db.Usage())
+	bud.SetTokenHoldTail(tokenHoldTail(cfg.Meter))
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
 	// Refresh expiring OAuth access tokens just-in-time before each upstream
 	// call, persisting the rotated tokens.
@@ -1135,4 +1136,18 @@ func buildModelPrices(ctx context.Context, db *store.DB, log *slog.Logger) map[s
 		}
 	}
 	return out
+}
+
+// tokenHoldTail is how long a metered request keeps its token hold: until
+// the async usage writer has flushed its row, with room for a slow batch.
+// A synchronous meter writes the row before the hold is confirmed.
+func tokenHoldTail(m config.MeterConfig) time.Duration {
+	if !m.Async {
+		return 0
+	}
+	interval := m.FlushInterval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	return interval + 2*time.Second
 }

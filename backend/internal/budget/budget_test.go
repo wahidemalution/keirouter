@@ -78,7 +78,7 @@ func TestMinKeyBalanceGate(t *testing.T) {
 				scope.TenantID = tc.scopeID
 			}
 
-			err := eng.Reserve(ctx, scope, 1)
+			_, err := eng.Reserve(ctx, scope, Estimate{Micros: 1})
 			if !tc.wantAllowed {
 				require.Error(t, err)
 			} else {
@@ -97,7 +97,8 @@ func TestMinKeyBalanceGateSkipsTokenOnlyBudget(t *testing.T) {
 		LimitTokens: 10_000_000,
 		HardCutoff:  true,
 	})
-	require.NoError(t, eng.Reserve(context.Background(), Scope{APIKeyID: "key-tokens"}, 1))
+	_, err := eng.Reserve(context.Background(), Scope{APIKeyID: "key-tokens"}, Estimate{Micros: 1})
+	require.NoError(t, err)
 }
 
 func TestMinKeyBalanceGateBlocksZeroLimitBudget(t *testing.T) {
@@ -108,7 +109,8 @@ func TestMinKeyBalanceGateBlocksZeroLimitBudget(t *testing.T) {
 		ScopeID:    "key-zero",
 		HardCutoff: true,
 	})
-	require.Error(t, eng.Reserve(context.Background(), Scope{APIKeyID: "key-zero"}, 1))
+	_, err := eng.Reserve(context.Background(), Scope{APIKeyID: "key-zero"}, Estimate{Micros: 1})
+	require.Error(t, err)
 }
 
 func TestNoBudgetMeansUnlimited(t *testing.T) {

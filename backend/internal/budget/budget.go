@@ -24,7 +24,27 @@ import (
 // the budget check before any usage is recorded.
 type reservation struct {
 	micros int64
+	tokens int64
 }
+
+// hold is one request's share of the reservations, so finishing one request
+// releases exactly what it reserved.
+type hold struct {
+	amounts   map[string]reservation // by reservation key
+	created   time.Time
+	confirmed bool
+}
+
+// CodeInsufficientTokens is the client error code for a token-metered request
+// that does not fit in what remains of its token budget.
+const CodeInsufficientTokens = "insufficient_tokens"
+
+// defaultTokenHoldTail covers the async usage writer's default 1s flush.
+const defaultTokenHoldTail = 3 * time.Second
+
+// holdMaxAge drops a hold that was never confirmed or released, so a leaked
+// hold cannot block a key for good.
+const holdMaxAge = 2 * time.Hour
 
 // budgetCacheEntry caches a ListByScope result with an expiry time.
 type budgetCacheEntry struct {
@@ -77,6 +97,12 @@ type Engine struct {
 	// scope ID. Prevents concurrent requests from overshooting hard limits.
 	mu           sync.RWMutex
 	reservations map[string]*reservation // key: scopeID
+	holds        map[uint64]*hold
+	nextHold     uint64
+	lastSweep    time.Time
+	// tokenHoldTail keeps a confirmed request's token hold until its usage
+	// row is visible to Check.
+	tokenHoldTail time.Duration
 
 	// budgetCache caches ListByScope results to avoid a DB round-trip on every
 	// request. Keyed by "scope_kind:scope_id". Invalidated on budget mutations.
@@ -87,12 +113,22 @@ type Engine struct {
 // New builds a budget Engine.
 func New(budgets *store.BudgetRepo, usage *store.UsageRepo) *Engine {
 	return &Engine{
-		budgets:      budgets,
-		usage:        usage,
-		reservations: make(map[string]*reservation),
-		budgetCache:  make(map[string]*budgetCacheEntry),
-		log:          slog.Default(),
+		budgets:       budgets,
+		usage:         usage,
+		reservations:  make(map[string]*reservation),
+		budgetCache:   make(map[string]*budgetCacheEntry),
+		log:           slog.Default(),
+		tokenHoldTail: defaultTokenHoldTail,
 	}
+}
+
+// SetTokenHoldTail sets how long a confirmed request keeps its token hold:
+// long enough for the metered usage row to reach the store Check reads. Zero
+// releases on confirm. Call before serving traffic.
+func (e *Engine) SetTokenHoldTail(d time.Duration) {
+	e.mu.Lock()
+	e.tokenHoldTail = max(d, 0)
+	e.mu.Unlock()
 }
 
 // Decision is the outcome of a budget check.
@@ -106,13 +142,17 @@ type Decision struct {
 	Alerts []store.Budget
 	// BudgetUsage holds per-budget spend details for reporting.
 	BudgetUsage []BudgetUsage
+	// TokensExhausted is set when Blocking blocked on its token limit.
+	TokensExhausted bool
 }
 
 // BudgetUsage pairs a budget with its current-period spend, both cost and tokens.
 type BudgetUsage struct {
 	Budget     store.Budget
 	CostMicros int64
-	TokenCount int64
+	// TokenCount is the recorded tokens; ReservedTokens the in-flight holds.
+	TokenCount     int64
+	ReservedTokens int64
 }
 
 // Scope identifies the request's billing scopes to check.
@@ -120,6 +160,28 @@ type Scope struct {
 	TenantID  string
 	ProjectID string
 	APIKeyID  string
+	// Hold is the request's reservation from Reserve. Confirm and Release
+	// act on it alone; zero means the request holds nothing.
+	Hold uint64
+}
+
+// Estimate is what a request asks Reserve to hold.
+type Estimate struct {
+	Micros int64
+	// TokenMetered holds PromptTokens plus an output cap against every
+	// hard-cutoff budget with a token limit. The cap is MaxOutputTokens
+	// clamped to what remains after the prompt.
+	TokenMetered    bool
+	PromptTokens    int64
+	MaxOutputTokens int64
+}
+
+// Reservation is the outcome of Reserve.
+type Reservation struct {
+	// ID goes in Scope.Hold for Confirm and Release.
+	ID uint64
+	// OutputCap is the granted output cap; zero when no token budget applies.
+	OutputCap int64
 }
 
 // cachedListByScope returns budgets for a scope, using a short-lived in-memory
@@ -249,12 +311,13 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 		// prevent the TOCTOU race where concurrent requests all pass the
 		// budget check before any usage is recorded.
 		reserved := e.getReserved(b.ScopeKind, b.ScopeID)
-		spent += reserved
+		spent += reserved.micros
 
 		dec.BudgetUsage = append(dec.BudgetUsage, BudgetUsage{
-			Budget:     b,
-			CostMicros: spent,
-			TokenCount: tokens,
+			Budget:         b,
+			CostMicros:     spent,
+			TokenCount:     tokens,
+			ReservedTokens: reserved.tokens,
 		})
 
 		// Check USD cost limit.
@@ -265,10 +328,11 @@ func (e *Engine) Check(ctx context.Context, scope Scope) (Decision, error) {
 			return dec, nil
 		}
 		// Check token limit.
-		if b.LimitTokens > 0 && tokens >= b.LimitTokens && b.HardCutoff {
+		if b.LimitTokens > 0 && tokens+reserved.tokens >= b.LimitTokens && b.HardCutoff {
 			dec.Allowed = false
 			blocking := b
 			dec.Blocking = &blocking
+			dec.TokensExhausted = true
 			return dec, nil
 		}
 		// Alert thresholds.
@@ -299,22 +363,26 @@ func (e *Engine) CheckOrError(ctx context.Context, scope Scope) error {
 	return nil
 }
 
-// Reserve atomically checks the budget and records a tentative spend
-// reservation. This prevents the TOCTOU race where N concurrent requests all
-// read the same spend value and proceed, overshooting the hard limit.
+// Reserve checks the budget and holds the request's estimated spend, so
+// concurrent requests see each other before any usage is recorded.
 //
-// estimatedMicros is the expected cost of the request (use 0 for unknown; the
-// reservation will still block concurrent requests from reading stale spend).
+// est.Micros is the expected cost (0 for unknown; the hold still makes
+// concurrent requests count it). A token-metered estimate is checked against
+// the token budgets and held under one lock, so concurrent holds never add up
+// past a limit.
 //
-// After the request completes, call Confirm() with the actual cost, or
-// Release() if the request failed before metering.
-func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64) error {
+// After the request completes, call Confirm with Scope.Hold set to the
+// returned ID, or Release if it failed before metering.
+func (e *Engine) Reserve(ctx context.Context, scope Scope, est Estimate) (Reservation, error) {
 	dec, err := e.Check(ctx, scope)
 	if err != nil {
-		return err
+		return Reservation{}, err
 	}
 	if !dec.Allowed {
-		return &core.ProviderError{
+		if est.TokenMetered && dec.TokensExhausted {
+			return Reservation{}, insufficientTokens(0)
+		}
+		return Reservation{}, &core.ProviderError{
 			Kind:    core.ErrBudgetBlocked,
 			Message: fmt.Sprintf("budget %q exhausted for %s", dec.Blocking.ID, dec.Blocking.ScopeKind),
 		}
@@ -323,67 +391,176 @@ func (e *Engine) Reserve(ctx context.Context, scope Scope, estimatedMicros int64
 	// Minimum-balance gate: an API key must hold at least minKeyBalanceMicros
 	// to make a metered (debiting) request. This stops abuse of near-zero
 	// starter credit. Read-only checks that never reserve (e.g. the media
-	// endpoint) are intentionally unaffected. A budget with a token limit is
-	// exempt: it is metered in tokens and has no balance to gate.
+	// endpoint) are intentionally unaffected. A token-only budget is exempt:
+	// it is metered in tokens and has no balance to gate.
 	for _, bu := range dec.BudgetUsage {
-		if bu.Budget.ScopeKind == store.ScopeAPIKey && bu.Budget.HardCutoff &&
-			bu.Budget.LimitTokens <= 0 && bu.Budget.LimitMicros < minKeyBalanceMicros {
-			return &core.ProviderError{
+		b := bu.Budget
+		tokenOnly := b.LimitTokens > 0 && b.LimitMicros == 0
+		if b.ScopeKind == store.ScopeAPIKey && b.HardCutoff && !tokenOnly && b.LimitMicros < minKeyBalanceMicros {
+			return Reservation{}, &core.ProviderError{
 				Kind:    core.ErrBudgetBlocked,
 				Message: fmt.Sprintf("minimum API key balance is $%.2f", float64(minKeyBalanceMicros)/1_000_000),
 			}
 		}
 	}
 
-	// Acquire the lock once and add all reservations atomically.
-	// This closes the TOCTOU window between Check() returning "allowed"
-	// and the reservation being recorded: no concurrent request can slip
-	// through between the check and the reservation.
-	e.mu.Lock()
+	cost := est.Micros
+	if cost <= 0 {
+		cost = 1
+	}
+	amounts := map[string]reservation{}
 	for _, bu := range dec.BudgetUsage {
 		if !bu.Budget.HardCutoff {
 			continue
 		}
 		key := reservationKey(bu.Budget.ScopeKind, bu.Budget.ScopeID)
-		cost := estimatedMicros
-		if cost <= 0 {
-			cost = 1
-		}
-		if r, ok := e.reservations[key]; ok {
-			r.micros += cost
-		} else {
-			e.reservations[key] = &reservation{micros: cost}
-		}
+		a := amounts[key]
+		a.micros += cost
+		amounts[key] = a
 	}
-	e.mu.Unlock()
-	return nil
-}
 
-// Confirm replaces the reservation with the actual recorded cost. Call this
-// after meter.Record succeeds. The real usage is now in the database, so the
-// reservation is no longer needed.
-func (e *Engine) Confirm(scope Scope, actualMicros int64) {
-	e.releaseAll(scope)
-}
-
-// Release removes the reservation without recording actual cost. Call this
-// when a request fails before metering (e.g., upstream error, timeout).
-func (e *Engine) Release(scope Scope) {
-	e.releaseAll(scope)
-}
-
-func (e *Engine) releaseAll(scope Scope) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, id := range []string{scope.APIKeyID, scope.ProjectID, scope.TenantID} {
-		if id == "" {
+	now := time.Now()
+	e.sweepLocked(now)
+
+	var outputCap int64
+	if est.TokenMetered {
+		// Remaining is read under the lock that adds the hold: the recorded
+		// tokens come from Check, the in-flight ones from the map right now.
+		remaining := int64(-1)
+		for _, bu := range dec.BudgetUsage {
+			b := bu.Budget
+			if !b.HardCutoff || b.LimitTokens <= 0 {
+				continue
+			}
+			left := b.LimitTokens - bu.TokenCount
+			if r, ok := e.reservations[reservationKey(b.ScopeKind, b.ScopeID)]; ok {
+				left -= r.tokens
+			}
+			if remaining < 0 || left < remaining {
+				remaining = left
+			}
+		}
+		if remaining >= 0 {
+			outputCap = min(est.MaxOutputTokens, remaining-est.PromptTokens)
+			if outputCap < 1 {
+				return Reservation{}, insufficientTokens(max(remaining, 0))
+			}
+			held := est.PromptTokens + outputCap
+			for _, bu := range dec.BudgetUsage {
+				b := bu.Budget
+				if !b.HardCutoff || b.LimitTokens <= 0 {
+					continue
+				}
+				key := reservationKey(b.ScopeKind, b.ScopeID)
+				a := amounts[key]
+				a.tokens = held
+				amounts[key] = a
+			}
+		}
+	}
+
+	if len(amounts) == 0 {
+		return Reservation{OutputCap: outputCap}, nil
+	}
+	for key, a := range amounts {
+		r, ok := e.reservations[key]
+		if !ok {
+			r = &reservation{}
+			e.reservations[key] = r
+		}
+		r.micros += a.micros
+		r.tokens += a.tokens
+	}
+	if e.holds == nil {
+		e.holds = make(map[uint64]*hold)
+	}
+	e.nextHold++
+	id := e.nextHold
+	e.holds[id] = &hold{amounts: amounts, created: now}
+	return Reservation{ID: id, OutputCap: outputCap}, nil
+}
+
+func insufficientTokens(remaining int64) *core.ProviderError {
+	return &core.ProviderError{
+		Kind: core.ErrBudgetBlocked,
+		Code: CodeInsufficientTokens,
+		Message: fmt.Sprintf("Sisa token paket tidak cukup untuk permintaan ini: tersisa %d token. "+
+			"Perpendek prompt, kurangi max_tokens, atau beli paket token baru.", remaining),
+	}
+}
+
+// Confirm ends the request's hold after its usage was metered. The micros are
+// released at once; tokens stay held for the tail so the next Check cannot
+// miss a usage row that the async writer has not flushed yet.
+func (e *Engine) Confirm(scope Scope, actualMicros int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h, ok := e.holds[scope.Hold]
+	if !ok || h.confirmed {
+		return
+	}
+	var tokens bool
+	for key, a := range h.amounts {
+		if r, ok := e.reservations[key]; ok {
+			r.micros -= a.micros
+		}
+		a.micros = 0
+		h.amounts[key] = a
+		tokens = tokens || a.tokens > 0
+	}
+	if !tokens || e.tokenHoldTail <= 0 {
+		e.dropLocked(scope.Hold)
+		return
+	}
+	h.confirmed = true
+	id := scope.Hold
+	time.AfterFunc(e.tokenHoldTail, func() {
+		e.mu.Lock()
+		e.dropLocked(id)
+		e.mu.Unlock()
+	})
+}
+
+// Release drops the request's hold when it failed before metering. It is a
+// no-op once the hold was confirmed or released.
+func (e *Engine) Release(scope Scope) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if h, ok := e.holds[scope.Hold]; ok && !h.confirmed {
+		e.dropLocked(scope.Hold)
+	}
+}
+
+func (e *Engine) dropLocked(id uint64) {
+	h, ok := e.holds[id]
+	if !ok {
+		return
+	}
+	delete(e.holds, id)
+	for key, a := range h.amounts {
+		r, ok := e.reservations[key]
+		if !ok {
 			continue
 		}
-		// We don't know the scope kind here, so delete from all possible keys.
-		// The reservation map is small and this is infrequent.
-		delete(e.reservations, reservationKey(store.ScopeAPIKey, id))
-		delete(e.reservations, reservationKey(store.ScopeProject, id))
-		delete(e.reservations, reservationKey(store.ScopeTenant, id))
+		r.micros -= a.micros
+		r.tokens -= a.tokens
+		if r.micros <= 0 && r.tokens <= 0 {
+			delete(e.reservations, key)
+		}
+	}
+}
+
+func (e *Engine) sweepLocked(now time.Time) {
+	if now.Sub(e.lastSweep) < time.Minute {
+		return
+	}
+	e.lastSweep = now
+	for id, h := range e.holds {
+		if now.Sub(h.created) > holdMaxAge {
+			e.dropLocked(id)
+		}
 	}
 }
 
@@ -391,17 +568,14 @@ func reservationKey(kind store.BudgetScope, scopeID string) string {
 	return string(kind) + ":" + scopeID
 }
 
-// getReserved returns the sum of in-flight reservations for a scope.
-// Uses RLock for read-only access to minimize lock contention under
-// high concurrency where many requests check budgets simultaneously.
-func (e *Engine) getReserved(kind store.BudgetScope, scopeID string) int64 {
+// getReserved returns the in-flight reservations for a scope.
+func (e *Engine) getReserved(kind store.BudgetScope, scopeID string) reservation {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	key := reservationKey(kind, scopeID)
-	if r, ok := e.reservations[key]; ok {
-		return r.micros
+	if r, ok := e.reservations[reservationKey(kind, scopeID)]; ok {
+		return *r
 	}
-	return 0
+	return reservation{}
 }
 
 // PeriodStart returns the start of the current budget window for a period.
