@@ -185,9 +185,17 @@ func (s *Server) adminDeleteTokenPackage(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// tokenPlanModels returns the token plan's allowed models, never nil.
+func tokenPlanModels(plan store.Plan) []string {
+	if m := store.GetPlanAllowedModels(plan); m != nil {
+		return m
+	}
+	return []string{}
+}
+
 func tokenSettingsView(st tokenpkg.Settings, plan store.Plan) map[string]any {
 	return map[string]any{
-		"enabled": st.Enabled, "allowed_models": st.AllowedModels,
+		"enabled": st.Enabled, "allowed_models": tokenPlanModels(plan),
 		"rpm_limit": plan.RPMLimit, "concurrency_limit": plan.ConcurrencyLimit,
 	}
 }
@@ -206,8 +214,8 @@ func (s *Server) adminGetTokenSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tokenSettingsView(st, plan))
 }
 
-// adminPutTokenSettings updates the sale switch, the model list and the
-// token plan's rate limits. Fields left out keep their value. The plan itself
+// adminPutTokenSettings updates the sale switch and the token plan's model
+// list and rate limits. Fields left out keep their value. The plan itself
 // cannot be changed here.
 func (s *Server) adminPutTokenSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
@@ -250,7 +258,7 @@ func (s *Server) adminPutTokenSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "allowed_models must not be empty")
 			return
 		}
-		st.AllowedModels = models
+		plan.AllowedModels = store.SetPlanAllowedModels(models)
 	}
 	if body.RPMLimit != nil {
 		if *body.RPMLimit < 0 {
@@ -266,7 +274,7 @@ func (s *Server) adminPutTokenSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		plan.ConcurrencyLimit = *body.ConcurrencyLimit
 	}
-	if body.RPMLimit != nil || body.ConcurrencyLimit != nil {
+	if body.AllowedModels != nil || body.RPMLimit != nil || body.ConcurrencyLimit != nil {
 		plan.UpdatedAt = time.Now()
 		if err := s.db.Plans().Update(ctx, plan); err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))

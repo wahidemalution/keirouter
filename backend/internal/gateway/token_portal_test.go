@@ -36,7 +36,7 @@ func tokenPortalServer(t *testing.T) (*Server, string, *atomic.Int32) {
 	t.Cleanup(gw.Close)
 	s.paymentClient = payment.NewClient(gw.URL, "k")
 	require.NoError(t, tokenpkg.Save(ctx, s.db.Settings(), tokenpkg.Settings{
-		Enabled: true, AllowedModels: tokenpkg.DefaultModels, PlanID: tokenpkg.DefaultPlanID,
+		Enabled: true, PlanID: tokenpkg.DefaultPlanID,
 	}))
 	for _, id := range []string{"tp-20m", "tp-100m", "tp-days-15"} {
 		p, err := s.db.TokenPackages().Get(ctx, id)
@@ -106,12 +106,12 @@ func TestPortalTokenPackagesHidesDisabled(t *testing.T) {
 	require.Equal(t, true, first["featured"])
 
 	require.NoError(t, tokenpkg.Save(t.Context(), s.db.Settings(), tokenpkg.Settings{
-		Enabled: false, AllowedModels: tokenpkg.DefaultModels,
+		Enabled: false,
 	}))
 	require.Equal(t, false, get()["on_sale"])
 
 	require.NoError(t, tokenpkg.Save(t.Context(), s.db.Settings(), tokenpkg.Settings{
-		Enabled: true, AllowedModels: tokenpkg.DefaultModels,
+		Enabled: true,
 	}))
 	s.paymentClient = nil
 	require.Equal(t, false, get()["on_sale"])
@@ -160,7 +160,7 @@ func TestPortalTokenOrderRejectsDisabledPackage(t *testing.T) {
 
 	// Not on sale at all.
 	require.NoError(t, tokenpkg.Save(t.Context(), s.db.Settings(), tokenpkg.Settings{
-		Enabled: false, AllowedModels: tokenpkg.DefaultModels,
+		Enabled: false,
 	}))
 	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-20m","idempotency_key":"x"}`)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())

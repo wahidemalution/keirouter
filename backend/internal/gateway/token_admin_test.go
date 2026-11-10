@@ -112,6 +112,7 @@ func TestAdminTokenSettingsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 30, plan.RPMLimit)
 	require.EqualValues(t, 2, plan.ConcurrencyLimit)
+	require.Equal(t, "m-a,m-b", plan.AllowedModels)
 
 	for _, body := range []string{`{"allowed_models":[]}`, `{"allowed_models":["  "]}`, `{"rpm_limit":-1}`, `{"concurrency_limit":-1}`} {
 		rec = adminTokenCall(s, http.MethodPut, "/token-packages/settings", body, nil, s.adminPutTokenSettings)

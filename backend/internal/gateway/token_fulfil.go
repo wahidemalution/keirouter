@@ -156,8 +156,9 @@ func newTokenBudget(keyID string, now time.Time) store.Budget {
 }
 
 // ensureTokenKeyOnTx creates a user's token key: the key, its token-only
-// budget, its model access and the subscription holding the sealed key. The
-// subscription starts expired; the caller sets the real expiry.
+// budget and the subscription holding the sealed key. The key has no model
+// override, so it follows the token plan's allowed models. The subscription
+// starts expired; the caller sets the real expiry.
 func (s *Server) ensureTokenKeyOnTx(ctx context.Context, tx *sql.Tx, sub, email string, settings tokenpkg.Settings) (store.TokenSubscription, store.Budget, error) {
 	issued, err := s.identity.Generate(store.DefaultTenantID, "", "token:"+email)
 	if err != nil {
@@ -170,9 +171,6 @@ func (s *Server) ensureTokenKeyOnTx(ctx context.Context, tx *sql.Tx, sub, email 
 	now := time.Now()
 	bud := newTokenBudget(issued.Record.ID, now)
 	if err := s.budgets.CreateOnTx(ctx, tx, bud); err != nil {
-		return store.TokenSubscription{}, store.Budget{}, err
-	}
-	if err := s.identity.Keys().SetAllowedModelsOnTx(ctx, tx, issued.Record.ID, settings.AllowedModels); err != nil {
 		return store.TokenSubscription{}, store.Budget{}, err
 	}
 	sealed := crypto.Sealed{}

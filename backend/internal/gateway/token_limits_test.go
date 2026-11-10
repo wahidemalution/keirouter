@@ -44,20 +44,3 @@ func TestPortalPlansHidesTokenPlan(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), tokenpkg.DefaultPlanID)
 	require.Contains(t, rec.Body.String(), `"default"`, "other plans stay listed")
 }
-
-func TestTokenKeyModelAccessIsPerKey(t *testing.T) {
-	s, paygKey := newTokenTestServer(t)
-	ctx := t.Context()
-	require.NoError(t, tokenpkg.Save(ctx, s.db.Settings(), tokenpkg.Settings{
-		Enabled: true, AllowedModels: []string{"gpt-6-luna"}, PlanID: tokenpkg.DefaultPlanID,
-	}))
-	require.True(t, payTokenOrder(t, s, paygKey, "t1", "tp-100m"))
-
-	sub, err := s.db.TokenSubscriptions().GetBySub(ctx, tokenTestSub)
-	require.NoError(t, err)
-	key, err := s.identity.Get(ctx, sub.KeyID)
-	require.NoError(t, err)
-	models, _, err := s.identity.Keys().EffectiveAllowedModels(ctx, key.ID, key.PlanID)
-	require.NoError(t, err)
-	require.Equal(t, []string{"gpt-6-luna"}, models)
-}

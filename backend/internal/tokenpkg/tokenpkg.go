@@ -15,8 +15,8 @@ import (
 // SettingsKey is the settings row holding Settings as JSON.
 const SettingsKey = "token_packages_settings"
 
-// DefaultModels are the models a package key may call until the admin
-// changes the list.
+// DefaultModels are the models seeded on the token plan. The plan's
+// allowed_models is the only source of the list.
 var DefaultModels = []string{"gpt-6-sol", "gpt-6-terra", "gpt-6-luna"}
 
 // DefaultPlanID is the seeded plan whose RPM and concurrency limits apply to
@@ -29,16 +29,16 @@ var ErrNoActivePackage = errors.New("tokenpkg: no active package")
 
 var errUnknownKind = errors.New("tokenpkg: unknown package kind")
 
-// Settings configures the token package product.
+// Settings configures the token package product. The models token keys may
+// call live on the plan (PlanID), not here.
 type Settings struct {
-	Enabled       bool     `json:"enabled"`
-	AllowedModels []string `json:"allowed_models"`
-	PlanID        string   `json:"plan_id"`
+	Enabled bool   `json:"enabled"`
+	PlanID  string `json:"plan_id"`
 }
 
 // Load returns the saved settings, or the defaults when none are saved.
 func Load(ctx context.Context, settings *store.SettingsRepo) (Settings, error) {
-	def := Settings{AllowedModels: append([]string(nil), DefaultModels...), PlanID: DefaultPlanID}
+	def := Settings{PlanID: DefaultPlanID}
 	raw, err := settings.Get(ctx, SettingsKey)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && raw == "") {
 		return def, nil
@@ -50,21 +50,14 @@ func Load(ctx context.Context, settings *store.SettingsRepo) (Settings, error) {
 	if err := json.Unmarshal([]byte(raw), &s); err != nil {
 		return def, fmt.Errorf("tokenpkg: decode settings: %w", err)
 	}
-	if len(s.AllowedModels) == 0 {
-		s.AllowedModels = def.AllowedModels
-	}
 	if s.PlanID == "" {
 		s.PlanID = DefaultPlanID
 	}
 	return s, nil
 }
 
-// Save stores s. An empty model list would leave package keys unable to call
-// anything, so it is rejected.
+// Save stores s.
 func Save(ctx context.Context, settings *store.SettingsRepo, s Settings) error {
-	if len(s.AllowedModels) == 0 {
-		return errors.New("tokenpkg: allowed_models must not be empty")
-	}
 	b, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("tokenpkg: encode settings: %w", err)

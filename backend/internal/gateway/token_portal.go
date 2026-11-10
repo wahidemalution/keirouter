@@ -62,9 +62,14 @@ func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
+	plan, err := s.db.Plans().Get(ctx, settings.PlanID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
 	out := map[string]any{
 		"active": false, "exists": false, "expires_at": "", "used_tokens": int64(0),
-		"limit_tokens": int64(0), "key_display": "", "models": settings.AllowedModels,
+		"limit_tokens": int64(0), "key_display": "", "models": tokenPlanModels(plan),
 	}
 	sub, err := s.db.TokenSubscriptions().GetBySub(ctx, portalGoogleSub(sessionSub))
 	if errors.Is(err, store.ErrNotFound) {
@@ -86,7 +91,7 @@ func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	models, err := s.identity.Keys().GetAllowedModels(ctx, sub.KeyID)
+	models, _, err := s.identity.Keys().EffectiveAllowedModels(ctx, sub.KeyID, key.PlanID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
