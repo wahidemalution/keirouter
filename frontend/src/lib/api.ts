@@ -3693,6 +3693,8 @@ export interface PortalTokenPackages {
 export interface PortalTokenStatus {
   active: boolean;
   exists: boolean;
+  /** The admin disabled the token key; it cannot be used or topped up. */
+  disabled: boolean;
   /** RFC3339, or "" without a package. */
   expires_at: string;
   /** All-time usage of the key; remaining is limit_tokens - used_tokens. */

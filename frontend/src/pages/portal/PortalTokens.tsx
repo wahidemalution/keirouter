@@ -177,6 +177,11 @@ export function PortalTokensPage() {
         qc.invalidateQueries({ queryKey: STATUS_QK });
         return;
       }
+      if (code === "token_key_disabled") {
+        setPickedId(null);
+        qc.invalidateQueries({ queryKey: STATUS_QK });
+        return;
+      }
       toast.error("Payment failed", e.message);
     },
   });
@@ -276,7 +281,15 @@ export function PortalTokensPage() {
         icon={KeyRound}
         title="Your token key"
         action={
-          !st.exists ? <Badge>No package</Badge> : st.active ? <Badge tone="success">Active</Badge> : <Badge tone="danger">Expired</Badge>
+          !st.exists ? (
+            <Badge>No package</Badge>
+          ) : st.disabled ? (
+            <Badge tone="danger">Disabled</Badge>
+          ) : st.active ? (
+            <Badge tone="success">Active</Badge>
+          ) : (
+            <Badge tone="danger">Expired</Badge>
+          )
         }
       >
         {!st.exists ? (
@@ -285,6 +298,12 @@ export function PortalTokensPage() {
           </p>
         ) : (
           <>
+            {st.disabled && (
+              <p role="status" className="mx-4 mt-4 rounded-lg border border-bad/30 bg-bad/10 px-3 py-2.5 text-[12.5px] text-fg sm:mx-5 sm:mt-5">
+                An admin disabled this key. Requests with it are refused and you cannot buy packages for it. Ask the admin to
+                enable it again.
+              </p>
+            )}
             <div className="grid gap-4 p-4 sm:grid-cols-2 sm:p-5">
               {st.active ? (
                 <>
@@ -334,9 +353,11 @@ export function PortalTokensPage() {
       <PanelCard
         icon={CreditCard}
         title="Buy tokens"
-        subtitle={st.active ? "Tokens extend the limit. Days packages extend the expiry." : undefined}
+        subtitle={st.active && !st.disabled ? "Tokens extend the limit. Days packages extend the expiry." : undefined}
       >
-        {!onSale ? (
+        {st.disabled ? (
+          <EmptyState title="Buying is paused while your key is disabled" hint="Once the admin enables the key, you can buy here again." />
+        ) : !onSale ? (
           <EmptyState title="Token packages are not available right now" hint="Check back later." />
         ) : tokenPkgs.length === 0 && daysPkgs.length === 0 ? (
           <EmptyState title="No packages for sale" />

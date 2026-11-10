@@ -47,7 +47,8 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 }
 
 // handlePortalTokenStatus returns the caller's token package: whether it is
-// active, its expiry, token usage against the limit and the key's models.
+// active or disabled, its expiry, token usage against the limit and the
+// key's models.
 // used_tokens counts the key's whole history; a new period raises the limit
 // past the old usage, so limit - used is what is left.
 func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +69,7 @@ func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	out := map[string]any{
-		"active": false, "exists": false, "expires_at": "", "used_tokens": int64(0),
+		"active": false, "exists": false, "disabled": false, "expires_at": "", "used_tokens": int64(0),
 		"limit_tokens": int64(0), "key_display": "", "models": tokenPlanModels(plan),
 	}
 	sub, err := s.db.TokenSubscriptions().GetBySub(ctx, portalGoogleSub(sessionSub))
@@ -100,6 +101,7 @@ func (s *Server) handlePortalTokenStatus(w http.ResponseWriter, r *http.Request)
 		out["models"] = models
 	}
 	out["exists"] = true
+	out["disabled"] = key.Disabled
 	out["active"] = now.Before(sub.ExpiresAt)
 	out["expires_at"] = sub.ExpiresAt.UTC().Format(time.RFC3339)
 	out["used_tokens"] = used
@@ -207,6 +209,28 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 	unlock := s.lockTokenOrders(u.GoogleSub)
 	defer unlock()
 
+	tsub, serr := s.db.TokenSubscriptions().GetBySub(ctx, u.GoogleSub)
+	hasSub := serr == nil
+	if serr != nil && !errors.Is(serr, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, serr, "internal server error"))
+		return
+	}
+	if hasSub {
+		tkey, err := s.identity.Get(ctx, tsub.KeyID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		// A disabled key cannot use what it buys; an admin enables it first.
+		if tkey.Disabled {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{
+				"message": "the token key is disabled", "type": "invalid_request_error",
+				"code": "token_key_disabled",
+			}})
+			return
+		}
+	}
+
 	if idem != "" {
 		existing, gerr := s.db.PaymentOrders().GetByIdempotencyKey(ctx, idem)
 		if gerr == nil {
@@ -234,12 +258,7 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 	}
 	now := time.Now()
 	if pkg.Kind == store.TokenPackageDays {
-		sub, serr := s.db.TokenSubscriptions().GetBySub(ctx, u.GoogleSub)
-		if serr != nil && !errors.Is(serr, store.ErrNotFound) {
-			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, serr, "internal server error"))
-			return
-		}
-		if serr != nil || !now.Before(sub.ExpiresAt) {
+		if !hasSub || !now.Before(tsub.ExpiresAt) {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{
 				"message": "a days package needs an active token package", "type": "invalid_request_error",
 				"code": "no_active_package",
