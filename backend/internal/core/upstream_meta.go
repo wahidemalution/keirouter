@@ -10,9 +10,10 @@ import (
 // in X-Oneapi-Request-Id. The pipeline creates one per attempt and the
 // connector fills it. A nil holder is valid and ignores writes.
 type UpstreamMeta struct {
-	mu        sync.Mutex
-	requestID string
-	streamed  bool
+	mu          sync.Mutex
+	requestID   string
+	streamed    bool
+	requestSent bool
 }
 
 // NewUpstreamMeta returns an empty holder.
@@ -57,6 +58,27 @@ func (m *UpstreamMeta) Streamed() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.streamed
+}
+
+// MarkRequestSent records that the request was written to the upstream.
+func (m *UpstreamMeta) MarkRequestSent() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.requestSent = true
+	m.mu.Unlock()
+}
+
+// RequestSent reports whether the request reached the upstream, so it may
+// have started generating even if no response arrived.
+func (m *UpstreamMeta) RequestSent() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.requestSent
 }
 
 type upstreamMetaKey struct{}

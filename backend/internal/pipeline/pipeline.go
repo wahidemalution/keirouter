@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
@@ -432,7 +433,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		attemptReq := cloneAttempt()
 		attempt.Creds = withTargetHeaders(attempt)
 		attempt.Upstream = core.NewUpstreamMeta()
-		attemptCtx := core.WithUpstreamMeta(upstreamCtx, attempt.Upstream)
+		attemptCtx := withAttemptMeta(upstreamCtx, attempt.Upstream)
 
 		// Soft-degrade unsupported modalities. Stripping replaces input
 		// modalities the resolved profile cannot handle with text placeholders,
@@ -453,6 +454,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		callCtx, reportFast := p.watchFastAttempt(callCtx, attempt.Target)
 		resp, callErr := attempt.Conn.Chat(callCtx, attemptReq, attempt.Creds)
 		cancelTimeout() // cancel immediately to avoid timer goroutine leak
+		deadlineHit := callCtx.Err() == context.DeadlineExceeded
 		if callErr != nil && ctx.Err() == nil && isUnsupportedCloudflareImageError(callErr, attempt.Target.Provider, attempt.Target.Model, attemptReq) {
 			p.log.Debug("retrying Cloudflare request without images", "model", attempt.Target.Model)
 			retryReq := cloneAttempt()
@@ -460,6 +462,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			retryCtx, retryCancel := withRequestDeadline(core.WithProxy(attemptCtx, attempt.Creds))
 			resp, callErr = attempt.Conn.Chat(retryCtx, retryReq, attempt.Creds)
 			retryCancel()
+			deadlineHit = retryCtx.Err() == context.DeadlineExceeded
 		}
 		latency := time.Since(started)
 
@@ -479,6 +482,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			if sErr == nil {
 				sResp, drainErr := drainStream(stream, req.Model)
 				streamCancel()
+				deadlineHit = streamCtx.Err() == context.DeadlineExceeded
 				if drainErr == nil {
 					callErr = nil
 					resp = sResp
@@ -489,6 +493,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			} else {
 				streamCancel()
 				callErr = sErr
+				deadlineHit = streamCtx.Err() == context.DeadlineExceeded
 			}
 		}
 		attemptDone()
@@ -499,6 +504,11 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 
 		if callErr != nil {
 			pe := providerErrorForAttempt(callErr, attempt)
+			if deadlineHit {
+				if usage, ok := tokenAbandonedAttemptUsage(attemptReq, attempt); ok {
+					pe.AttemptUsage = &usage
+				}
+			}
 			lastErr = pe
 			if pe.Fallbackable() {
 				reportFast(0, false)
@@ -871,7 +881,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		attemptReq := cloneForTarget(req, attempt.Target)
 		attempt.Creds = withTargetHeaders(attempt)
 		attempt.Upstream = core.NewUpstreamMeta()
-		attemptCtx := core.WithUpstreamMeta(ctx, attempt.Upstream)
+		attemptCtx := withAttemptMeta(ctx, attempt.Upstream)
 		started := time.Now()
 		p.log.Debug("stream attempt start", "i", i, "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
@@ -953,6 +963,12 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 				if rawErr != nil {
 					cancelUpstream()
 					pe := providerErrorForAttempt(rawErr, attempt)
+					if ctx.Err() != nil {
+						if usage, ok := tokenAbandonedAttemptUsage(attemptReq, attempt); ok {
+							pe.AttemptUsage = &usage
+							return nil, pe, false, attempt, time.Since(started), fellBack
+						}
+					}
 					lastErr = pe
 					p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
 					if p.metrics != nil {
@@ -1084,6 +1100,12 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		if callErr != nil {
 			cancelUpstream()
 			pe := providerErrorForAttempt(callErr, attempt)
+			if ctx.Err() != nil {
+				if usage, ok := tokenAbandonedAttemptUsage(attemptReq, attempt); ok {
+					pe.AttemptUsage = &usage
+					return nil, pe, false, attempt, time.Since(started), fellBack
+				}
+			}
 			lastErr = pe
 			if pe.Fallbackable() {
 				reportFast(0, false)
@@ -2277,10 +2299,34 @@ func tokenAdmissionCharge(req *core.ChatRequest, pe *core.ProviderError) (core.U
 	if pe.AttemptUsage != nil {
 		reported = *pe.AttemptUsage
 	}
-	if reportedOutput(reported) || core.IsClientDisconnect(pe) {
+	if reportedOutput(reported) || core.IsClientDisconnect(pe) || errors.Is(pe, errAdmissionTimeout) {
 		return tokenCutStreamUsage(req, reported, 0), true
 	}
 	return core.Usage{}, false
+}
+
+// tokenAbandonedAttemptUsage is the charge for a token-metered attempt the
+// gateway gave up on (deadline, client cancel) without a response: once the
+// request reached the upstream it may be generating, so it is billed as a
+// cut stream. Not sent, it is free.
+func tokenAbandonedAttemptUsage(req *core.ChatRequest, attempt dispatch.Attempt) (core.Usage, bool) {
+	if !req.Metadata.TokenMetered || !attempt.Upstream.RequestSent() {
+		return core.Usage{}, false
+	}
+	return tokenCutStreamUsage(req, core.Usage{}, 0), true
+}
+
+// withAttemptMeta attaches the attempt's upstream facts to ctx and marks the
+// request as sent once the HTTP transport has written it.
+func withAttemptMeta(ctx context.Context, m *core.UpstreamMeta) context.Context {
+	ctx = core.WithUpstreamMeta(ctx, m)
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				m.MarkRequestSent()
+			}
+		},
+	})
 }
 
 // reportedOutput reports whether usage carries the provider's real output

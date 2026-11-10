@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,6 +15,9 @@ const defaultStreamAdmissionTimeout = 60 * time.Second
 // trailingUsageGrace bounds how long admission waits after an outputless
 // finish frame for the usage frame that follows it.
 const trailingUsageGrace = 2 * time.Second
+
+// errAdmissionTimeout marks a stream the gateway gave up on during admission.
+var errAdmissionTimeout = errors.New("stream admission timeout")
 
 // Providers in this set are known to report routing failures inside an HTTP
 // 200 stream. They must use the parsed channel path so admitStream can inspect
@@ -91,6 +95,7 @@ func admitStreamNotify(ctx context.Context, in <-chan core.StreamChunk, timeout 
 				Provider: provider,
 				Model:    model,
 				Message:  "stream admission timeout: no model output received for " + timeout.String(),
+				Cause:    errAdmissionTimeout,
 			})
 		case chunk, ok := <-in:
 			if !ok {

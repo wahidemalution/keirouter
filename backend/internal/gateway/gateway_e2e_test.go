@@ -44,6 +44,9 @@ type e2eOptions struct {
 	limiter *limits.Memory
 	// provider is the seeded account's provider; "openai" when empty.
 	provider string
+	// requestTimeout and stallTimeout set the pipeline's timeouts; zero keeps
+	// the defaults.
+	requestTimeout, stallTimeout time.Duration
 }
 
 func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOptions)) *e2eHarness {
@@ -102,7 +105,8 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
 	mtr := meter.New(db.Usage(), nil, nil)
 	bud := budget.New(db.Budgets(), db.Usage())
-	pipeDeps := pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud}
+	pipeDeps := pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud,
+		RequestTimeout: o.requestTimeout, StreamStallTimeout: o.stallTimeout}
 	gwDeps := Deps{
 		Config:   o.cfg,
 		DB:       db,
