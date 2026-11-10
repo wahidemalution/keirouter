@@ -66,7 +66,16 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	// via the chain: prefix).
 	chains, err := s.chains.ListByTenant(r.Context(), tenantID)
 	if err == nil {
+		// A token package key lists only the chains it may call.
+		allowed, restricted, aerr := s.tokenChainWhitelist(r.Context(), key)
+		if aerr != nil {
+			writeError(w, http.StatusInternalServerError, "model access check failed")
+			return
+		}
 		for _, c := range chains {
+			if restricted && !allowed[strings.ToLower(strings.TrimSpace(c.Name))] {
+				continue
+			}
 			data = appendModelEntry(data, seen, modelEntry{
 				ID: c.Name, Object: "model", Kind: string(core.ServiceLLM), Name: c.Name,
 			})

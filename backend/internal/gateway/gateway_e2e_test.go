@@ -35,6 +35,7 @@ type e2eHarness struct {
 	gateway  *Server
 	apiKey   string
 	upstream *httptest.Server
+	budget   *budget.Engine
 }
 
 // e2eOptions customizes the harness; the zero value matches production defaults.
@@ -116,7 +117,7 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	return &e2eHarness{server: srv, handler: handler, gateway: gw, apiKey: issued.Plaintext, upstream: upstream}
+	return &e2eHarness{server: srv, handler: handler, gateway: gw, apiKey: issued.Plaintext, upstream: upstream, budget: bud}
 }
 
 func (h *e2eHarness) post(t *testing.T, path, body, auth string) *http.Response {

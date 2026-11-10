@@ -233,6 +233,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		writeError(w, http.StatusInternalServerError, "limit resolution failed")
 		return
 	}
+	tokenState, err := s.tokenKeyState(r.Context(), key)
+	if err != nil {
+		tr.reject(http.StatusInternalServerError, "Failed to resolve token package state", err.Error(), "")
+		writeError(w, http.StatusInternalServerError, "limit resolution failed")
+		return
+	}
 
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,
@@ -244,6 +250,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		Ponytail: s.ponytailConfig(),
 		Skills:   s.skillsConfig(r, key, req.Model, resolved.Targets),
 		Limits:   effectiveLimits,
+
+		TokenMetered: tokenState.isToken,
 	}
 
 	if req.Stream {
@@ -395,6 +403,16 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	// errors before they can reach the client.
 	if result.DirectBody != nil {
 		defer result.DirectBody.Close()
+		// Completion settles usage, budget and the concurrency slot, so it is
+		// also deferred: a panic while relaying must not leak them. It is
+		// settled like a client disconnect, blaming no provider.
+		var completeOnce sync.Once
+		complete := func(err error) {
+			if result.DirectCompleteFunc != nil {
+				completeOnce.Do(func() { result.DirectCompleteFunc(err) })
+			}
+		}
+		defer complete(context.Canceled)
 		dst := io.Writer(w)
 		frameFlush := flusher.Flush
 		var hw *heartbeatWriter
@@ -437,9 +455,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 			_ = result.DirectBody.Close()
 			completionErr = context.Canceled
 		}
-		if result.DirectCompleteFunc != nil {
-			result.DirectCompleteFunc(completionErr)
-		}
+		complete(completionErr)
 		o := outcome{provider: result.Provider, model: result.Model, account: result.AccountID,
 			bytes: n, fallbacks: req.Metadata.FallbackCount, err: cpErr}
 		if result.DirectStats != nil {
@@ -1153,25 +1169,42 @@ func (s *Server) writeProviderErrorAs(w http.ResponseWriter, dialect core.Dialec
 			"upstream_status", pe.StatusCode,
 			"error", err)
 	}
+	if pe.Code != "" {
+		writeDialectErrorCode(w, dialect, status, pe.Message, pe.Code)
+		return
+	}
 	writeDialectError(w, dialect, status, sanitizeUpstreamError(pe))
 }
 
 // writeDialectError writes an error envelope in the given client dialect.
 func writeDialectError(w http.ResponseWriter, dialect core.Dialect, status int, message string) {
+	writeDialectErrorCode(w, dialect, status, message, "")
+}
+
+// writeDialectErrorCode is writeDialectError with a stable error code, when
+// code is not empty.
+func writeDialectErrorCode(w http.ResponseWriter, dialect core.Dialect, status int, message, code string) {
 	switch dialect {
 	case core.DialectAnthropic:
-		writeJSON(w, status, map[string]any{
-			"type":  "error",
-			"error": map[string]any{"type": anthropicErrorType(status), "message": message},
-		})
+		body := map[string]any{"type": anthropicErrorType(status), "message": message}
+		if code != "" {
+			body["code"] = code
+		}
+		writeJSON(w, status, map[string]any{"type": "error", "error": body})
 	case core.DialectGemini:
-		writeJSON(w, status, map[string]any{
-			"error": map[string]any{"code": status, "message": message, "status": googleStatusName(status)},
-		})
+		body := map[string]any{"code": status, "message": message, "status": googleStatusName(status)}
+		if code != "" {
+			body["details"] = []map[string]any{{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": code}}
+		}
+		writeJSON(w, status, map[string]any{"error": body})
 	case core.DialectOllama:
 		writeJSON(w, status, map[string]any{"error": message})
 	default:
-		writeError(w, status, message)
+		body := map[string]any{"message": message, "type": errorType(status)}
+		if code != "" {
+			body["code"] = code
+		}
+		writeJSON(w, status, map[string]any{"error": body})
 	}
 }
 
@@ -1365,6 +1398,28 @@ func (s *Server) filterTokenTargets(ctx context.Context, tokenPlanID, requestedM
 		}
 	}
 	return nil, nil
+}
+
+// tokenChainWhitelist returns the lowercased chain names a token package key
+// may call, matched as filterTokenTargets matches them. restricted is false
+// for any other key.
+func (s *Server) tokenChainWhitelist(ctx context.Context, key store.APIKey) (map[string]bool, bool, error) {
+	tokenState, err := s.tokenKeyState(ctx, key)
+	if err != nil || !tokenState.isToken {
+		return nil, false, err
+	}
+	plan, err := s.db.Plans().Get(ctx, tokenState.planID)
+	if errors.Is(err, store.ErrNotFound) {
+		return map[string]bool{}, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	allowed := map[string]bool{}
+	for _, m := range store.GetPlanAllowedModels(plan) {
+		allowed[strings.ToLower(strings.TrimSpace(m))] = true
+	}
+	return allowed, true, nil
 }
 
 // modelMatchesAny reports whether model matches any pattern in allowed.

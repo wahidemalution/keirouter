@@ -79,6 +79,11 @@ func (s *Server) tokenKeyState(ctx context.Context, key store.APIKey) (tokenSubE
 	return ent, nil
 }
 
+// geminiTokenActions are the Gemini actions a token package key may call.
+var geminiTokenActions = map[string]bool{
+	"generateContent": true, "streamGenerateContent": true, "countTokens": true,
+}
+
 // tokenEndpointAllowed reports whether a token package key may call method
 // path. Only the metered text endpoints and read-only discovery are listed;
 // everything else, including endpoints added later, is denied.
@@ -90,7 +95,12 @@ func tokenEndpointAllowed(method, path string) bool {
 			return true
 		}
 		modelAction, ok := strings.CutPrefix(path, "/v1beta/models/")
-		return ok && modelAction != "" && !strings.Contains(modelAction, "/")
+		if !ok || strings.Contains(modelAction, "/") {
+			return false
+		}
+		// Split as handleGeminiGenerate does.
+		model, action, _ := strings.Cut(modelAction, ":")
+		return model != "" && geminiTokenActions[action]
 	case http.MethodGet:
 		switch path {
 		case "/v1/models", "/v1/models/info", "/v1/keys/me/usage", "/v1/pricing":

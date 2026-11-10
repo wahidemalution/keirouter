@@ -102,6 +102,11 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "limit resolution failed")
 		return
 	}
+	tokenState, err := s.tokenKeyState(r.Context(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "limit resolution failed")
+		return
+	}
 
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,
@@ -113,6 +118,8 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		Ponytail: s.ponytailConfig(),
 		Skills:   s.skillsConfig(r, key, req.Model, resolved.Targets),
 		Limits:   effectiveLimits,
+
+		TokenMetered: tokenState.isToken,
 	}
 
 	if req.Stream {
