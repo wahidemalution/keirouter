@@ -251,7 +251,7 @@ func (r *Redis) Acquire(ctx context.Context, req Request) (ReleaseFunc, Decision
 		return nil, Decision{}, ctx.Err()
 	}
 	lim := req.Limits
-	if !r.enabled.Load() || req.APIKeyID == "" || (lim.RPM <= 0 && lim.TPM <= 0 && lim.Concurrency <= 0) {
+	if (!r.enabled.Load() && !lim.AlwaysEnforce) || req.APIKeyID == "" || (lim.RPM <= 0 && lim.TPM <= 0 && lim.Concurrency <= 0) {
 		return noopRelease, Decision{Allowed: true}, nil
 	}
 	if r.breakerOpen() {

@@ -96,6 +96,23 @@ func TestRedisConcurrencySharedAndReleased(t *testing.T) {
 	require.True(t, dec.Allowed, "the released slot is reusable from another replica")
 }
 
+func TestRedisAlwaysEnforceIgnoresDisabledSwitch(t *testing.T) {
+	mr := miniredis.RunT(t)
+	r := replica(t, mr, newFakeClock(), func(c *RedisConfig) { c.Enabled = false })
+
+	_, dec := acquire(t, r, EffectiveLimits{Concurrency: 1}, 1)
+	require.True(t, dec.Allowed)
+	_, dec = acquire(t, r, EffectiveLimits{Concurrency: 1}, 1)
+	require.True(t, dec.Allowed, "limits are off for ordinary keys")
+
+	lim := EffectiveLimits{Concurrency: 1, AlwaysEnforce: true}
+	_, dec = acquire(t, r, lim, 1)
+	require.True(t, dec.Allowed)
+	_, dec = acquire(t, r, lim, 1)
+	require.False(t, dec.Allowed)
+	require.Equal(t, "concurrency", dec.LimitKind)
+}
+
 func TestRedisCrashedReplicaLeasesExpire(t *testing.T) {
 	mr := miniredis.RunT(t)
 	clock := newFakeClock()

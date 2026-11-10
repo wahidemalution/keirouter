@@ -92,6 +92,10 @@ type EffectiveLimits struct {
 	RPM         int64
 	TPM         int64
 	Concurrency int64
+	// AlwaysEnforce applies these limits even while the global rate-limit
+	// switch is off. Token package keys set it: their plan limits are part of
+	// what the buyer paid for, not an operator tuning knob.
+	AlwaysEnforce bool
 }
 
 type Decision struct {
@@ -203,7 +207,7 @@ func (m *Memory) Acquire(ctx context.Context, req Request) (ReleaseFunc, Decisio
 	if ctx.Err() != nil {
 		return nil, Decision{}, ctx.Err()
 	}
-	if !m.enabled.Load() {
+	if !m.enabled.Load() && !req.Limits.AlwaysEnforce {
 		return noopRelease, Decision{Allowed: true}, nil
 	}
 	if req.APIKeyID == "" {
