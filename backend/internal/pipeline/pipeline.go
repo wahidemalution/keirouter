@@ -548,6 +548,9 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			continue
 		}
 
+		if req.Metadata.TokenMetered && resp.Usage.PromptTokens+resp.Usage.CompletionTokens == 0 {
+			resp.Usage = tokenUnaryUsageEstimate(req, resp)
+		}
 		if priorAttemptUsage.PromptTokens != 0 || priorAttemptUsage.CompletionTokens != 0 ||
 			priorAttemptUsage.TotalTokens != 0 {
 			resp.Usage = addAttemptUsage(priorAttemptUsage, resp.Usage)
@@ -995,7 +998,12 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 						var settled int64
 						defer func() { release(settled) }()
 						recordCtx := context.WithoutCancel(ctx)
-						usage := capturedStreamUsage(req, capture.Bytes())
+						var usage core.Usage
+						if meta.TokenMetered {
+							usage = tokenDirectStreamUsage(req, capture.Bytes(), streamErr)
+						} else {
+							usage = capturedStreamUsage(req, capture.Bytes())
+						}
 						settled = usageTokens(usage)
 						stats.Tokens = int(settled)
 						if errors.Is(streamErr, context.Canceled) {
@@ -1212,7 +1220,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 
 	settleClientCancellation := func() {
 		cancelUpstream()
-		usage = partialStreamUsage(req, usage, completionChars)
+		usage = cutStreamUsage(req, usage, completionChars)
 		status, errorKind := terminalStatusAndKind(context.Canceled)
 		cost := p.recordOutcomeWithTTFT(context.WithoutCancel(ctx), meta, attempt, usage,
 			status, errorKind, false, time.Since(attemptStarted), time.Since(requestStarted), *ttft, save)
@@ -1318,6 +1326,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 					settleClientCancellation()
 					return
 				}
+				truncated := !sawFinish
 				stopStall()
 				if !flushGuard() {
 					return
@@ -1357,16 +1366,18 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 				}
 				// Always synthesize an auditable estimate when the provider omits
 				// usage. Only emit it to the client when include_usage was requested.
-				if !sawUsage {
-					est := estimateStreamUsage(req, completionChars)
-					usage = est
-					if req.IncludeUsage && est.TotalTokens > 0 {
-						select {
-						case out <- core.StreamChunk{Type: core.ChunkUsage, Usage: &est}:
-						case <-ctx.Done():
-							settleClientCancellation()
-							return
-						}
+				if req.Metadata.TokenMetered {
+					usage = tokenStreamEndUsage(req, usage, completionChars, truncated)
+				} else if !sawUsage {
+					usage = estimateStreamUsage(req, completionChars)
+				}
+				if !sawUsage && req.IncludeUsage && usage.TotalTokens > 0 {
+					est := usage
+					select {
+					case out <- core.StreamChunk{Type: core.ChunkUsage, Usage: &est}:
+					case <-ctx.Done():
+						settleClientCancellation()
+						return
 					}
 				}
 				upstreamLatency := time.Since(attemptStarted)
@@ -1641,6 +1652,7 @@ func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Op
 			req.Metadata.ServiceTier = tier
 		}
 	}
+	req.Metadata.TokenMetered = opts.TokenMetered
 	return p.reserveBudget(ctx, req, opts)
 }
 
@@ -1982,7 +1994,7 @@ func (p *Pipeline) recordTerminalStreamFailure(ctx context.Context, req *core.Ch
 		p.recordFailureTelemetry(meta, attempt, pe, upstreamLatency, false)
 	}
 	upstreamLatency := time.Since(attemptStarted)
-	usage = partialStreamUsage(req, usage, completionChars)
+	usage = cutStreamUsage(req, usage, completionChars)
 	pe, cost := p.recordAttemptTerminal(ctx, meta, attempt, pe, usage, upstreamLatency,
 		time.Since(requestStarted), ttft, save, fellBack)
 	p.budgetConfirm(scope, cost)
@@ -2138,6 +2150,114 @@ func partialStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars
 		usage.Source = core.UsageSourceEstimated
 	}
 	return usage
+}
+
+// cutStreamUsage is the usage recorded for a stream that ended before it
+// finished: cancelled, cut off, stalled or failed.
+func cutStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int) core.Usage {
+	if req.Metadata.TokenMetered {
+		return tokenCutStreamUsage(req, usage, completionChars)
+	}
+	return partialStreamUsage(req, usage, completionChars)
+}
+
+// tokenPromptEstimate is the prompt a token-metered request is charged when
+// the upstream reports less: the estimate its hold was sized from.
+func tokenPromptEstimate(req *core.ChatRequest) int {
+	if n := req.Metadata.BudgetPromptTokens; n > 0 {
+		return int(n)
+	}
+	return core.EstimatePromptTokens(req)
+}
+
+// tokenCutStreamUsage settles a token-metered stream cut before the provider
+// reported its output. The upstream may already have spent hidden reasoning
+// tokens up to the output cap it was sent, and only the visible text is
+// countable here, so the cap is charged. A reported output count is kept.
+func tokenCutStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int) core.Usage {
+	// Above 1: an Anthropic message_start reports a 1-token placeholder.
+	if usage.CompletionTokens > 1 {
+		return usage
+	}
+	usage.PromptTokens = max(usage.PromptTokens, tokenPromptEstimate(req))
+	usage.CompletionTokens = max(estimateStreamUsage(req, completionChars).CompletionTokens, int(maxOutputTokens(req)))
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage.Source = core.UsageSourceEstimated
+	return usage
+}
+
+// tokenStreamEndUsage settles a token-metered stream whose upstream closed:
+// a stream without its finish event was cut; a finished one without usage is
+// estimated from its output, never as zero output.
+func tokenStreamEndUsage(req *core.ChatRequest, usage core.Usage, completionChars int, truncated bool) core.Usage {
+	if truncated {
+		return tokenCutStreamUsage(req, usage, completionChars)
+	}
+	if usage.PromptTokens+usage.CompletionTokens > 0 {
+		return usage
+	}
+	return tokenEstimate(req, (completionChars*2+6)/7)
+}
+
+// tokenEstimate is a token-metered request's usage when the upstream
+// reported none.
+func tokenEstimate(req *core.ChatRequest, completion int) core.Usage {
+	prompt := tokenPromptEstimate(req)
+	completion = max(completion, 1)
+	return core.Usage{
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      prompt + completion,
+		Source:           core.UsageSourceEstimated,
+	}
+}
+
+// tokenUnaryUsageEstimate estimates a token-metered unary response that
+// reported no usage from everything it generated: text, reasoning and tool
+// calls.
+func tokenUnaryUsageEstimate(req *core.ChatRequest, resp *core.ChatResponse) core.Usage {
+	chars := 0
+	for _, part := range resp.Message.Content {
+		switch part.Type {
+		case core.PartText, core.PartThinking:
+			chars += len(part.Text)
+		case core.PartToolCall:
+			if part.ToolCall != nil {
+				chars += len(part.ToolCall.Name) + len(part.ToolCall.Arguments)
+			}
+		}
+	}
+	return tokenEstimate(req, (chars*2+6)/7)
+}
+
+// tokenDirectStreamUsage is tokenStreamEndUsage for a direct stream, read
+// from the captured upstream bytes.
+func tokenDirectStreamUsage(req *core.ChatRequest, raw []byte, streamErr error) core.Usage {
+	truncated := streamErr != nil || !directStreamFinished(raw)
+	return tokenStreamEndUsage(req, extractUsageFromStream(raw), completionCharsFromStream(raw), truncated)
+}
+
+// streamFinishMarkers are the terminal events of each dialect's stream.
+var streamFinishMarkers = [][]byte{
+	[]byte("[DONE]"),             // OpenAI chat
+	[]byte(`"finish_reason":"`),  // OpenAI chat without [DONE]
+	[]byte(`"finish_reason": "`), // the same, spaced
+	[]byte("message_stop"),       // Anthropic
+	[]byte("response.completed"), // Responses
+	[]byte("response.incomplete"),
+	[]byte(`"finishReason"`), // Gemini
+	[]byte(`"done":true`),    // Ollama
+}
+
+// directStreamFinished reports whether a captured direct stream reached its
+// dialect's terminal event.
+func directStreamFinished(raw []byte) bool {
+	for _, m := range streamFinishMarkers {
+		if bytes.Contains(raw, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // capabilityOf derives the capability label for a target. KeiRouter routes by

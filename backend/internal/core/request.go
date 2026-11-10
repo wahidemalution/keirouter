@@ -188,4 +188,7 @@ type RequestMetadata struct {
 	// prompt estimate and the tokens its hold covers (prompt + output cap).
 	BudgetPromptTokens int64
 	BudgetHeldTokens   int64
+	// TokenMetered marks a token package request, whose recorded tokens are
+	// what the package is debited.
+	TokenMetered bool
 }
