@@ -18,15 +18,8 @@ type oaiStreamChunk struct {
 		Delta struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
-			// ReasoningContent carries thinking/reasoning text from models
-			// that expose it as a structured field (DeepSeek, some MiMo
-			// versions). The JSON field name varies by provider.
-			ReasoningContent string `json:"reasoning_content"`
-			// Reasoning is the field name OpenRouter, Groq and vLLM use.
-			Reasoning string `json:"reasoning"`
-			// ReasoningDetails is MiniMax's split reasoning (reasoning_split).
-			ReasoningDetails []oaiReasoningDetail `json:"reasoning_details"`
-			ToolCalls        []oaiStreamToolCall  `json:"tool_calls"`
+			OpenAIReasoningDelta
+			ToolCalls []oaiStreamToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -75,7 +68,7 @@ func (OpenAICodec) ParseStreamLine(line []byte, model string) ([]core.StreamChun
 	if len(raw.Choices) > 0 {
 		c := raw.Choices[0]
 		// Structured reasoning_content field (DeepSeek, some MiMo).
-		if reasoning := firstNonEmpty(c.Delta.ReasoningContent, c.Delta.Reasoning, reasoningDetailsText(c.Delta.ReasoningDetails)); reasoning != "" {
+		if reasoning := c.Delta.ReasoningText(); reasoning != "" {
 			chunks = append(chunks, core.StreamChunk{Type: core.ChunkThinking, Delta: reasoning})
 		}
 		if c.Delta.Content != "" {

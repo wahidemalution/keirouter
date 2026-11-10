@@ -259,6 +259,23 @@ type oaiReasoningDetail struct {
 	Text string `json:"text"`
 }
 
+// OpenAIReasoningDelta holds the stream delta fields OpenAI-compatible
+// providers carry reasoning text in. The JSON field name varies by provider.
+type OpenAIReasoningDelta struct {
+	// ReasoningContent: DeepSeek, some MiMo versions.
+	ReasoningContent string `json:"reasoning_content"`
+	// Reasoning: OpenRouter, Groq and vLLM.
+	Reasoning string `json:"reasoning"`
+	// ReasoningDetails: MiniMax's split reasoning (reasoning_split).
+	ReasoningDetails []oaiReasoningDetail `json:"reasoning_details"`
+}
+
+// ReasoningText is the delta's reasoning text, from whichever field the
+// provider used.
+func (d OpenAIReasoningDelta) ReasoningText() string {
+	return firstNonEmpty(d.ReasoningContent, d.Reasoning, reasoningDetailsText(d.ReasoningDetails))
+}
+
 // reasoningDetailsText folds reasoning_details into one thinking string.
 func reasoningDetailsText(details []oaiReasoningDetail) string {
 	switch len(details) {

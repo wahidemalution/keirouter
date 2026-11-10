@@ -585,3 +585,96 @@ func TestTokenStreamCancelVisibleOutputAboveCap(t *testing.T) {
 		})
 	}
 }
+
+const antMessageStart = `event: message_start
+data: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","model":"gpt-4o","content":[],"usage":{"input_tokens":200,"output_tokens":1}}}`
+
+func antStartOnly(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprintf(w, "%s\n\n", antMessageStart)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// useProvider routes the token chain to the harness account's provider.
+func useProvider(t *testing.T, h *e2eHarness, provider string) {
+	t.Helper()
+	ctx := context.Background()
+	chain, err := h.gateway.chains.Get(ctx, "chain-sol")
+	require.NoError(t, err)
+	chain.Steps[0].Provider = provider
+	require.NoError(t, h.gateway.chains.Update(ctx, chain))
+}
+
+// An Anthropic upstream that sends message_start (with its prompt count)
+// and then fails before any output costs nothing, as on the channel path.
+func TestTokenAnthropicStreamFailureBeforeOutputNotCharged(t *testing.T) {
+	upstreams := []struct {
+		name string
+		h    http.HandlerFunc
+	}{
+		{"clean_eof", antStartOnly},
+		{"error_event", func(w http.ResponseWriter, r *http.Request) {
+			antStartOnly(w, r)
+			fmt.Fprintf(w, "%s\n\n", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}")
+		}},
+		{"reset", func(w http.ResponseWriter, r *http.Request) {
+			antStartOnly(w, r)
+			panic(http.ErrAbortHandler)
+		}},
+	}
+	paths := []struct{ name, path, body string }{
+		{"direct", "/v1/messages", `{"model":"gpt-6-sol","stream":true,"max_tokens":4000,"messages":[{"role":"user","content":"hi"}]}`},
+		{"translated", "/v1/chat/completions", `{"model":"gpt-6-sol","stream":true,"max_tokens":4000,"messages":[{"role":"user","content":"hi"}]}`},
+	}
+	for _, up := range upstreams {
+		for _, c := range paths {
+			t.Run(up.name+"/"+c.name, func(t *testing.T) {
+				h := newE2E(t, up.h, func(o *e2eOptions) { o.provider = "anthropic" })
+				h.budget.SetTokenHoldTail(0)
+				tokenKey, keyID := e2eTokenKey(t, h)
+				addKeyBudget(t, h, keyID, 0, 1_000_000)
+				useProvider(t, h, "anthropic")
+
+				_ = readAllString(t, h.post(t, c.path, c.body, tokenKey))
+
+				row := lastUsageRow(t, h, keyID)
+				require.Equal(t, "failed", row.Status)
+				require.Zero(t, row.Prompt)
+				require.Zero(t, row.Completion)
+			})
+		}
+	}
+}
+
+// A reasoning-only direct stream that then fails was output the client
+// received: it is charged as a cut stream, whichever field carried it.
+func TestTokenDirectReasoningOnlyStreamCharged(t *testing.T) {
+	for name, delta := range map[string]string{
+		"reasoning":         `{"reasoning":"thinking hard"}`,
+		"reasoning_content": `{"reasoning_content":"thinking hard"}`,
+		"reasoning_details": `{"reasoning_details":[{"type":"reasoning.text","text":"thinking hard"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			upstream := func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprintf(w, "data: {\"id\":\"s1\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":%s}]}\n\n", delta)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				panic(http.ErrAbortHandler)
+			}
+			h := newE2E(t, upstream)
+			tokenKey, keyID := e2eTokenKey(t, h)
+			addKeyBudget(t, h, keyID, 0, 1_000_000)
+
+			_ = readAllString(t, h.post(t, streamPaths[0].path, streamPaths[0].body, tokenKey))
+
+			row := lastUsageRow(t, h, keyID)
+			require.Equal(t, "failed", row.Status)
+			require.Equal(t, 4000, row.Completion, "streamed reasoning is output: charged as cut")
+			require.Positive(t, row.Prompt)
+		})
+	}
+}

@@ -937,10 +937,10 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 				body, _, rawErr := ds.StreamRaw(callCtx, attemptReq, attempt.Creds, streamCfg)
 				if rawErr != nil && isUnsupportedCloudflareImageError(rawErr, attempt.Target.Provider, attempt.Target.Model, attemptReq) {
 					cancelUpstream()
-					retryReq := cloneForTarget(req, attempt.Target)
-					capability.StripImages(retryReq)
+					attemptReq = cloneForTarget(req, attempt.Target)
+					capability.StripImages(attemptReq)
 					callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
-					body, _, rawErr = ds.StreamRaw(callCtx, retryReq, attempt.Creds, streamCfg)
+					body, _, rawErr = ds.StreamRaw(callCtx, attemptReq, attempt.Creds, streamCfg)
 				}
 				usageDropped := false
 				if rawErr != nil && retryWithoutStreamUsage(rawErr, attemptReq, attempt) {
@@ -1018,7 +1018,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 						if meta.TokenMetered {
 							scan := scanDirectStream(capture.Bytes())
 							chars, hadOutput = scan.chars, scan.hadOutput()
-							if streamErr == nil && !scan.finished && !hadOutput && usageTokens(scan.usage) == 0 {
+							if streamErr == nil && !scan.finished && !hadOutput && !reportedOutput(scan.usage) {
 								streamErr = noOutputError(acc)
 							}
 							usage = tokenDirectStreamUsage(req, scan, streamErr, meta.UpstreamUsageDropped)
@@ -1068,10 +1068,10 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		upstream, callErr := attempt.Conn.Stream(callCtx, attemptReq, attempt.Creds, streamCfg)
 		if callErr != nil && isUnsupportedCloudflareImageError(callErr, attempt.Target.Provider, attempt.Target.Model, attemptReq) {
 			cancelUpstream()
-			retryReq := cloneForTarget(req, attempt.Target)
-			capability.StripImages(retryReq)
+			attemptReq = cloneForTarget(req, attempt.Target)
+			capability.StripImages(attemptReq)
 			callCtx, cancelUpstream = p.trackedStreamCallContext(attemptCtx, attempt.Creds, attempt.Target.Provider)
-			upstream, callErr = attempt.Conn.Stream(callCtx, retryReq, attempt.Creds, streamCfg)
+			upstream, callErr = attempt.Conn.Stream(callCtx, attemptReq, attempt.Creds, streamCfg)
 		}
 		usageDropped := false
 		if callErr != nil && retryWithoutStreamUsage(callErr, attemptReq, attempt) {
@@ -2209,7 +2209,7 @@ func tokenPromptEstimate(req *core.ChatRequest) int {
 // tokens up to the output cap it was sent, and only the visible text is
 // countable here, so the cap is charged. A reported output count is kept.
 func tokenCutStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int) core.Usage {
-	if usage.CompletionTokens > 0 && !usage.OutputPending {
+	if reportedOutput(usage) {
 		return usage
 	}
 	usage.PromptTokens = max(usage.PromptTokens, tokenPromptEstimate(req))
@@ -2264,11 +2264,17 @@ func tokenUnaryUsageEstimate(req *core.ChatRequest, resp *core.ChatResponse) cor
 	return tokenEstimate(req, (chars*2+6)/7)
 }
 
+// reportedOutput reports whether usage carries the provider's real output
+// count, not just a prompt count or a placeholder.
+func reportedOutput(u core.Usage) bool {
+	return u.CompletionTokens > 0 && !u.OutputPending
+}
+
 // failedStreamUsage is the usage recorded for a stream that failed or was
 // cancelled. A token stream the upstream failed before any output is charged
 // nothing, as when it fails before admission; a cancelled one is charged as cut.
 func failedStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int, hadOutput, clientCanceled bool) core.Usage {
-	if req.Metadata.TokenMetered && !clientCanceled && !hadOutput && usageTokens(usage) == 0 {
+	if req.Metadata.TokenMetered && !clientCanceled && !hadOutput && !reportedOutput(usage) {
 		return core.Usage{}
 	}
 	return cutStreamUsage(req, usage, completionChars)
@@ -3138,8 +3144,8 @@ type streamTextEnvelope struct {
 	} `json:"message"`
 	Choices []struct {
 		Delta struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
+			Content string `json:"content"`
+			transform.OpenAIReasoningDelta
 		} `json:"delta"`
 	} `json:"choices"`
 	Candidates []struct {
@@ -3173,7 +3179,7 @@ func completionCharsFromStream(raw []byte) int {
 			continue
 		}
 		for _, choice := range envelope.Choices {
-			chars += len(choice.Delta.Content) + len(choice.Delta.ReasoningContent)
+			chars += len(choice.Delta.Content) + len(choice.Delta.ReasoningText())
 		}
 		for _, candidate := range envelope.Candidates {
 			for _, part := range candidate.Content.Parts {
