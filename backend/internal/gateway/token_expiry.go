@@ -24,9 +24,12 @@ type tokenSubCache struct {
 	m  map[string]tokenSubEntry
 }
 
-// tokenKeyExpired reports whether keyID is a token-package key whose
-// subscription has run out. PAYG keys are cached as non-token.
-func (s *Server) tokenKeyExpired(ctx context.Context, keyID string) (bool, error) {
+// tokenKeyExpired reports whether key is a token-package key whose
+// subscription has run out. PAYG keys are cached as non-token. A key on the
+// token plan without a subscription (its owner was deleted) counts as
+// expired, so it can never run without an expiry.
+func (s *Server) tokenKeyExpired(ctx context.Context, key store.APIKey) (bool, error) {
+	keyID := key.ID
 	now := time.Now()
 	c := &s.tokenSubs
 	c.mu.RLock()
@@ -38,7 +41,12 @@ func (s *Server) tokenKeyExpired(ctx context.Context, keyID string) (bool, error
 		case err == nil:
 			ent = tokenSubEntry{expiresAt: sub.ExpiresAt, isToken: true, loaded: now}
 		case errors.Is(err, store.ErrNotFound):
-			ent = tokenSubEntry{loaded: now}
+			orphan, perr := s.isTokenPlan(ctx, key.PlanID)
+			if perr != nil {
+				return false, perr
+			}
+			// A zero expiry is always in the past.
+			ent = tokenSubEntry{isToken: orphan, loaded: now}
 		default:
 			return false, err
 		}

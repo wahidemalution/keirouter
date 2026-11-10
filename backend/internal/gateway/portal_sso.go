@@ -164,6 +164,15 @@ func (s *Server) handlePortalClaim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "the bansos key cannot be claimed")
 		return
 	}
+	// A token key is bound through its token subscription; claiming it as
+	// PAYG would let credit and token billing mix on one key.
+	if _, err := s.db.TokenSubscriptions().GetByKey(r.Context(), key.ID); err == nil {
+		writeError(w, http.StatusForbidden, "a token package key cannot be claimed")
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
 	email, _ := s.auth.SessionEmail(portalSessionToken(r))
 	// Seal the presented plaintext so the owner can reveal the claimed key
 	// again on /portal/key, matching portal-provisioned keys. Without this the
@@ -476,6 +485,20 @@ func (s *Server) adminDeletePortalUser(w http.ResponseWriter, r *http.Request) {
 	// from the Bansos page and the settings doc still references it.
 	if u.KeyID == s.bansosKeyID(r.Context()) {
 		writeError(w, http.StatusBadRequest, "the bansos key is managed from the Bansos page")
+		return
+	}
+	// The token key would outlive the binding: the subscription row cascades
+	// away with the portal user, leaving a key with no expiry.
+	tsub, err := s.db.TokenSubscriptions().GetBySub(r.Context(), sub)
+	switch {
+	case err == nil:
+		if err := s.identity.Delete(r.Context(), tsub.KeyID); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		s.invalidateTokenSub(tsub.KeyID)
+	case !errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
 	if err := s.identity.Delete(r.Context(), u.KeyID); err != nil {

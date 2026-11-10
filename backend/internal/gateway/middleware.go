@@ -93,7 +93,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 	}
 	tr.base.Key = key.Name
 
-	expired, err := s.tokenKeyExpired(r.Context(), key.ID)
+	expired, err := s.tokenKeyExpired(r.Context(), key)
 	if err != nil {
 		s.log.Error("token subscription lookup failed", "err", err)
 		tr.reject(http.StatusInternalServerError, "Authentication lookup failed", err.Error(),
