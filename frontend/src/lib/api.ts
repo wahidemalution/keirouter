@@ -3686,8 +3686,13 @@ export interface TokenPackageOffer {
 }
 
 export interface PortalTokenPackages {
+  /** Checkout is open. Packages can be listed while this is false. */
   on_sale: boolean;
   packages: TokenPackageOffer[];
+  /** Models (chains) a token key may call. */
+  models: string[];
+  /** Terms version checkout must send back. */
+  terms_version: string;
 }
 
 export interface PortalTokenStatus {
@@ -3721,7 +3726,7 @@ async function portalTokenJSON<T>(path: string, init: RequestInit | undefined, f
   return data;
 }
 
-/** Public package list; on_sale is false when token packages are closed. */
+/** Public package list; empty when the product is off. */
 export function getPortalTokenPackages(): Promise<PortalTokenPackages> {
   return portalTokenJSON("/portal/token/packages", undefined, "Failed to load packages");
 }
@@ -3738,6 +3743,7 @@ export async function revealPortalTokenKey(): Promise<string> {
 
 export function createPortalTokenOrder(input: {
   package_id: string;
+  terms_version: string;
   idempotency_key: string;
   turnstile_token?: string;
 }): Promise<{ id: string; status: PaymentOrder["status"]; payment_link_url: string; amount_idr: number }> {

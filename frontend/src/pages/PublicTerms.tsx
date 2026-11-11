@@ -1,11 +1,13 @@
 // Terms of service at `/ketentuan`, linked from the public footer. Static
 // copy only; styling is scoped through `.landing-root` tokens like the other
-// public pages. The Hosting 9router terms are one part of this page
-// (/ketentuan#hosting), so there is a single terms page.
+// public pages. The Hosting 9router terms (/ketentuan#hosting) and the Paket
+// Token terms (/ketentuan#paket-token) are parts of this page, so there is a
+// single terms page.
 
 import { useEffect } from "react";
 import { PublicLayout, TELEGRAM_URL } from "../components/PublicLayout";
 import { HOSTING_EFFECTIVE_DATE, HOSTING_SECTIONS, HOSTING_TERMS_VERSION, type TermsSection } from "./hostingTerms";
+import { TOKEN_EFFECTIVE_DATE, TOKEN_SECTIONS, TOKEN_TERMS_VERSION } from "./tokenTerms";
 
 const EFFECTIVE_DATE = "22 Oktober 2026";
 
@@ -24,7 +26,8 @@ const SECTIONS: TermsSection[] = [
         <p>Anda menyatakan cakap secara hukum, atau mendapat izin dari pihak yang berwenang, untuk menerima ketentuan ini.</p>
         <p>
           Layanan Hosting 9router juga tunduk pada bagian{" "}
-          <a href="#hosting" className={LINK}>Hosting 9router</a> di halaman ini, yang melengkapi ketentuan umum.
+          <a href="#hosting" className={LINK}>Hosting 9router</a>, dan Paket Token pada bagian{" "}
+          <a href="#paket-token" className={LINK}>Paket Token</a> di halaman ini. Keduanya melengkapi ketentuan umum.
         </p>
       </>
     ),
@@ -229,11 +232,19 @@ const SECTIONS: TermsSection[] = [
   },
 ];
 
-// The hosting part sits just before the closing sections.
-const HOSTING_AT = SECTIONS.findIndex((x) => x.id === "perubahan");
-const BEFORE = SECTIONS.slice(0, HOSTING_AT);
-const AFTER = SECTIONS.slice(HOSTING_AT);
-const HOSTING_NO = BEFORE.length + 1;
+type TermsPart = { id: string; title: string; effective: string; version: string; sections: TermsSection[] };
+
+// Product parts sit just before the closing sections, numbered after the
+// general sections.
+const PARTS: TermsPart[] = [
+  { id: "hosting", title: "Hosting 9router", effective: HOSTING_EFFECTIVE_DATE, version: HOSTING_TERMS_VERSION, sections: HOSTING_SECTIONS },
+  { id: "paket-token", title: "Paket Token", effective: TOKEN_EFFECTIVE_DATE, version: TOKEN_TERMS_VERSION, sections: TOKEN_SECTIONS },
+];
+const PARTS_AT = SECTIONS.findIndex((x) => x.id === "perubahan");
+const BEFORE = SECTIONS.slice(0, PARTS_AT);
+const AFTER = SECTIONS.slice(PARTS_AT);
+const FIRST_PART_NO = BEFORE.length + 1;
+const AFTER_NO = FIRST_PART_NO + PARTS.length;
 
 function SectionBody({ s, no }: { s: TermsSection; no: string }) {
   return (
@@ -243,6 +254,33 @@ function SectionBody({ s, no }: { s: TermsSection; no: string }) {
         {s.title}
       </h2>
       <div className="mt-3 space-y-3 text-[15px] leading-relaxed text-[var(--muted)]">{s.body}</div>
+    </section>
+  );
+}
+
+function PartBody({ part, no }: { part: TermsPart; no: number }) {
+  return (
+    <section id={part.id} className="scroll-mt-20 space-y-8 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-5 sm:p-6">
+      <header>
+        <h2 className="text-[20px] font-semibold tracking-[-0.3px] text-[var(--ink)]">
+          <span className="mr-2 font-mono text-[var(--muted)]">{no}.</span>
+          {part.title}
+        </h2>
+        <p className="mt-1.5 text-[13px] text-[var(--muted)]">
+          Berlaku sejak {part.effective} · <span className="font-mono">Versi {part.version}</span>
+        </p>
+      </header>
+      {part.sections.map((s, i) => (
+        <section key={s.id} id={s.id} className="scroll-mt-20">
+          <h3 className="text-[16px] font-semibold tracking-[-0.2px] text-[var(--ink)]">
+            <span className="mr-2 font-mono text-[var(--muted)]">
+              {no}.{i + 1}
+            </span>
+            {s.title}
+          </h3>
+          <div className="mt-2.5 space-y-3 text-[15px] leading-relaxed text-[var(--muted)]">{s.body}</div>
+        </section>
+      ))}
     </section>
   );
 }
@@ -282,19 +320,21 @@ export default function PublicTerms() {
                 <TocLink id={s.id} no={`${i + 1}.`} title={s.title} />
               </li>
             ))}
-            <li>
-              <TocLink id="hosting" no={`${HOSTING_NO}.`} title="Hosting 9router" />
-              <ol className="mt-1.5 space-y-1.5 pl-3">
-                {HOSTING_SECTIONS.map((s, i) => (
-                  <li key={s.id}>
-                    <TocLink id={s.id} no={`${HOSTING_NO}.${i + 1}`} title={s.title} nested />
-                  </li>
-                ))}
-              </ol>
-            </li>
+            {PARTS.map((part, p) => (
+              <li key={part.id}>
+                <TocLink id={part.id} no={`${FIRST_PART_NO + p}.`} title={part.title} />
+                <ol className="mt-1.5 space-y-1.5 pl-3">
+                  {part.sections.map((s, i) => (
+                    <li key={s.id}>
+                      <TocLink id={s.id} no={`${FIRST_PART_NO + p}.${i + 1}`} title={s.title} nested />
+                    </li>
+                  ))}
+                </ol>
+              </li>
+            ))}
             {AFTER.map((s, i) => (
               <li key={s.id}>
-                <TocLink id={s.id} no={`${HOSTING_NO + 1 + i}.`} title={s.title} />
+                <TocLink id={s.id} no={`${AFTER_NO + i}.`} title={s.title} />
               </li>
             ))}
           </ol>
@@ -305,31 +345,12 @@ export default function PublicTerms() {
             <SectionBody key={s.id} s={s} no={String(i + 1)} />
           ))}
 
-          <section id="hosting" className="scroll-mt-20 space-y-8 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-5 sm:p-6">
-            <header>
-              <h2 className="text-[20px] font-semibold tracking-[-0.3px] text-[var(--ink)]">
-                <span className="mr-2 font-mono text-[var(--muted)]">{HOSTING_NO}.</span>
-                Hosting 9router
-              </h2>
-              <p className="mt-1.5 text-[13px] text-[var(--muted)]">
-                Berlaku sejak {HOSTING_EFFECTIVE_DATE} · <span className="font-mono">Versi {HOSTING_TERMS_VERSION}</span>
-              </p>
-            </header>
-            {HOSTING_SECTIONS.map((s, i) => (
-              <section key={s.id} id={s.id} className="scroll-mt-20">
-                <h3 className="text-[16px] font-semibold tracking-[-0.2px] text-[var(--ink)]">
-                  <span className="mr-2 font-mono text-[var(--muted)]">
-                    {HOSTING_NO}.{i + 1}
-                  </span>
-                  {s.title}
-                </h3>
-                <div className="mt-2.5 space-y-3 text-[15px] leading-relaxed text-[var(--muted)]">{s.body}</div>
-              </section>
-            ))}
-          </section>
+          {PARTS.map((part, p) => (
+            <PartBody key={part.id} part={part} no={FIRST_PART_NO + p} />
+          ))}
 
           {AFTER.map((s, i) => (
-            <SectionBody key={s.id} s={s} no={String(HOSTING_NO + 1 + i)} />
+            <SectionBody key={s.id} s={s} no={String(AFTER_NO + i)} />
           ))}
         </article>
       </div>

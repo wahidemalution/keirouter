@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle2, Coins, CreditCard, Eye, EyeOff, KeyRound, Receipt, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Coins, CreditCard, Eye, EyeOff, KeyRound, Receipt, XCircle } from "lucide-react";
 import {
   createPortalTokenOrder,
   fetchPortalStatus,
@@ -145,6 +145,9 @@ export function PortalTokensPage() {
   const siteKey = useTurnstileSiteKey();
   const [turnstileToken, setTurnstileToken] = useState("");
   const [resetSignal, setResetSignal] = useState(0);
+  const termsId = useId();
+  const [accepted, setAccepted] = useState(false);
+  const [termsNotice, setTermsNotice] = useState<string | null>(null);
 
   const [shown, setShown] = useState(false);
   const reveal = useMutation({ mutationFn: revealPortalTokenKey, onSuccess: () => setShown(true) });
@@ -153,6 +156,7 @@ export function PortalTokensPage() {
     mutationFn: (packageId: string) =>
       createPortalTokenOrder({
         package_id: packageId,
+        terms_version: offers.data?.terms_version ?? "",
         idempotency_key: crypto.randomUUID(),
         turnstile_token: turnstileToken || undefined,
       }),
@@ -175,6 +179,12 @@ export function PortalTokensPage() {
         setNoActive(true);
         setPickedId(null);
         qc.invalidateQueries({ queryKey: STATUS_QK });
+        return;
+      }
+      if (code === "terms_not_accepted") {
+        setAccepted(false);
+        setTermsNotice("The token package terms were updated. Read them again, then tick the box to continue.");
+        qc.invalidateQueries({ queryKey: PACKAGES_QK });
         return;
       }
       if (code === "token_key_disabled") {
@@ -357,10 +367,12 @@ export function PortalTokensPage() {
       >
         {st.disabled ? (
           <EmptyState title="Buying is paused while your key is disabled" hint="Once the admin enables the key, you can buy here again." />
-        ) : !onSale ? (
-          <EmptyState title="Token packages are not available right now" hint="Check back later." />
         ) : tokenPkgs.length === 0 && daysPkgs.length === 0 ? (
-          <EmptyState title="No packages for sale" />
+          onSale ? (
+            <EmptyState title="No packages for sale" />
+          ) : (
+            <EmptyState title="Token packages are not available right now" hint="Check back later." />
+          )
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px]">
             <div className="space-y-5 p-4 sm:p-5">
@@ -398,6 +410,11 @@ export function PortalTokensPage() {
             </div>
 
             <div className="flex flex-col border-t border-line bg-subtle p-4 sm:p-5 lg:border-l lg:border-t-0">
+              {!onSale && (
+                <p role="status" className="mb-4 rounded-lg border border-line bg-surface px-3 py-2.5 text-[12.5px] text-fg">
+                  Payment is not available yet, so packages cannot be bought right now.
+                </p>
+              )}
               <dl className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <dt className="text-[13px] text-fg-muted">Package</dt>
@@ -408,16 +425,49 @@ export function PortalTokensPage() {
                   <dd className="text-[18px] font-semibold tabular-nums text-fg">{picked ? formatIDR(picked.price_idr) : "—"}</dd>
                 </div>
               </dl>
-              <TurnstileWidget
-                siteKey={siteKey}
-                onToken={setTurnstileToken}
-                resetSignal={resetSignal}
-                className="mt-4 flex justify-center"
-              />
+              <div className="mt-4 rounded-lg border border-line bg-surface px-3 py-2.5">
+                <label htmlFor={termsId} className="flex cursor-pointer items-start gap-2.5 text-[13px] text-fg">
+                  <input
+                    id={termsId}
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-input accent-accent-500"
+                    checked={accepted}
+                    disabled={!onSale}
+                    onChange={(e) => {
+                      setAccepted(e.target.checked);
+                      if (e.target.checked) setTermsNotice(null);
+                    }}
+                  />
+                  <span>
+                    I have read and agree to the{" "}
+                    <a href="/ketentuan#paket-token" target="_blank" rel="noopener noreferrer" className="font-medium text-link hover:underline">
+                      Paket Token terms
+                    </a>
+                    .
+                  </span>
+                </label>
+                <p className="mt-1.5 pl-[26px] text-[12px] text-fg-muted">
+                  Tokens left when the package expires are forfeited. Version {offers.data.terms_version}.
+                </p>
+              </div>
+              {termsNotice && (
+                <div role="alert" className="mt-3 flex items-start gap-2.5 rounded-lg border border-warn/30 bg-warn/10 px-3 py-2.5">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" strokeWidth={1.75} aria-hidden="true" />
+                  <p className="text-[12.5px] text-fg">{termsNotice}</p>
+                </div>
+              )}
+              {onSale && (
+                <TurnstileWidget
+                  siteKey={siteKey}
+                  onToken={setTurnstileToken}
+                  resetSignal={resetSignal}
+                  className="mt-4 flex justify-center"
+                />
+              )}
               <Button
                 className="mt-4 w-full"
                 onClick={() => picked && buy.mutate(picked.id)}
-                disabled={!picked || buy.isPending || buy.isSuccess || (!!siteKey && !turnstileToken)}
+                disabled={!onSale || !picked || !accepted || buy.isPending || buy.isSuccess || (!!siteKey && !turnstileToken)}
               >
                 <CreditCard aria-hidden="true" />
                 {buy.isPending ? "Starting payment…" : "Buy package"}
