@@ -69,12 +69,6 @@ function discountPct(p: TokenOffer, base?: TokenOffer): number {
   return pct > 0 ? pct : 0;
 }
 
-const STEPS: { title: string; body: string }[] = [
-  { title: "Masuk ke portal", body: "Login dengan akun Google. Paket token dibeli dari menu Token Packages." },
-  { title: "Pilih paket dan bayar", body: "Centang persetujuan ketentuan, lalu bayar lewat gerbang pembayaran di portal." },
-  { title: "Salin key token", body: "Setelah pembayaran dikonfirmasi, key token muncul di halaman yang sama. Pakai seperti API key biasa." },
-];
-
 export default function PublicTokenPackages() {
   const q = useQuery({ queryKey: ["public-token-packages"], queryFn: fetchTokenCatalog, staleTime: 60_000, retry: 1 });
   const data = q.data;
@@ -148,7 +142,7 @@ export default function PublicTokenPackages() {
 
       <section className="mt-12" aria-labelledby="models-title">
         <h2 id="models-title" className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">
-          Model yang bisa dipakai
+          Available Models
         </h2>
         <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-[var(--muted)]">
           Lewat endpoint chat format OpenAI, Anthropic, atau Gemini. Aturan masa aktif dan pemakaian ada di{" "}
@@ -174,21 +168,6 @@ export default function PublicTokenPackages() {
             })}
           </ul>
         )}
-      </section>
-
-      <section className="mt-16">
-        <h2 className="text-[24px] font-semibold tracking-[-0.5px] text-[var(--ink)] sm:text-[28px]">Cara membeli</h2>
-        <ol className="mt-6 divide-y divide-[var(--line)] rounded-xl border border-[var(--line)] bg-[var(--paper)]">
-          {STEPS.map((s, i) => (
-            <li key={s.title} className="flex gap-4 p-5">
-              <span className="font-mono text-[13px] leading-[22px] text-[var(--muted)]" aria-hidden="true">{i + 1}.</span>
-              <div className="min-w-0">
-                <h3 className="text-[15px] font-semibold text-[var(--ink)]">{s.title}</h3>
-                <p className="mt-1 text-[14px] leading-relaxed text-[var(--muted)]">{s.body}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
       </section>
 
       <section className="mt-16 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-6 sm:p-8">
