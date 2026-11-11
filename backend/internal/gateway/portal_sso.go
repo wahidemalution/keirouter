@@ -729,11 +729,12 @@ func (s *Server) handlePortalUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load portal user")
 		return
 	}
-	s.writePortalKeyUsage(w, r, u.KeyID)
+	s.writePortalKeyUsage(w, r, u.KeyID, false)
 }
 
-// writePortalKeyUsage writes the usage payload of one portal-owned key.
-func (s *Server) writePortalKeyUsage(w http.ResponseWriter, r *http.Request, keyID string) {
+// writePortalKeyUsage writes the usage payload of one portal-owned key. With
+// hideCost the payload carries no cost or spend values (token-package keys).
+func (s *Server) writePortalKeyUsage(w http.ResponseWriter, r *http.Request, keyID string, hideCost bool) {
 	key, err := s.identity.Keys().Get(r.Context(), keyID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -747,6 +748,16 @@ func (s *Server) writePortalKeyUsage(w http.ResponseWriter, r *http.Request, key
 	if err != nil {
 		s.log.Error("portal usage: build failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to build usage")
+		return
+	}
+	if hideCost {
+		stripped, err := withoutCostFields(payload)
+		if err != nil {
+			s.log.Error("portal usage: strip cost failed", "err", err)
+			writeError(w, http.StatusInternalServerError, "failed to build usage")
+			return
+		}
+		writeJSON(w, http.StatusOK, stripped)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)

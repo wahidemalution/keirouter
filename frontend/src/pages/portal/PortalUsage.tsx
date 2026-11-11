@@ -6,18 +6,20 @@ import { fetchPortalStatus, fetchPortalTokenUsage, fetchPortalUsage, getPortalTo
 import { EmptyState, ErrorCard, Spinner } from "../../components/ui";
 import { portal } from "../../lib/portalRoutes";
 import {
-  DateFilter, InsightsSection, PageHeader, RecentRequestsSection, TrendSection,
+  DateFilter, InsightsSection, PageHeader, RecentRequestsSection, ShowCostProvider, TrendSection,
 } from "./components";
 import { TOKEN_STATUS_QK } from "./tokenPackage";
 
 /** Usage report of one key; the page around it decides which key and when. */
 function UsageReport({
-  title, subtitle, queryKey, fetchUsage,
+  title, subtitle, queryKey, fetchUsage, showCost = true,
 }: {
   title: string;
   subtitle: string;
   queryKey: string;
   fetchUsage: (days: number) => Promise<KeyUsageData>;
+  /** False for token packages, which are not priced in USD. */
+  showCost?: boolean;
 }) {
   const [days, setDays] = useState(30);
   const usage = useQuery({
@@ -38,20 +40,22 @@ function UsageReport({
   const recent = data.recent ?? [];
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        icon={BarChart3}
-        title={title}
-        subtitle={subtitle}
-        action={<DateFilter days={days} onChange={setDays} />}
-      />
+    <ShowCostProvider value={showCost}>
+      <div className="space-y-6">
+        <PageHeader
+          icon={BarChart3}
+          title={title}
+          subtitle={subtitle}
+          action={<DateFilter days={days} onChange={setDays} />}
+        />
 
-      {daily.length > 0 && <TrendSection daily={daily} days={days} />}
+        {daily.length > 0 && <TrendSection daily={daily} days={days} />}
 
-      <InsightsSection d={data} />
+        <InsightsSection d={data} />
 
-      {recent.length > 0 && <RecentRequestsSection recent={recent} days={days} />}
-    </div>
+        {recent.length > 0 && <RecentRequestsSection recent={recent} days={days} />}
+      </div>
+    </ShowCostProvider>
   );
 }
 
@@ -134,6 +138,7 @@ export function PortalTokenUsagePage() {
       subtitle="Requests made with your token key."
       queryKey="portal-token-usage"
       fetchUsage={fetchPortalTokenUsage}
+      showCost={false}
     />
   );
 }

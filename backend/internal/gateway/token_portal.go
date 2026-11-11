@@ -161,7 +161,7 @@ func (s *Server) handlePortalTokenUsage(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to load token package")
 		return
 	}
-	s.writePortalKeyUsage(w, r, sub.KeyID)
+	s.writePortalKeyUsage(w, r, sub.KeyID, true)
 }
 
 // handlePortalTokenKeyReveal returns the plaintext of the caller's token key.

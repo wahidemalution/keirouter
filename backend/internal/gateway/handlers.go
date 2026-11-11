@@ -1547,7 +1547,7 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	var out any = map[string]any{
 		"key_id":         key.ID,
 		"key_name":       key.Name,
 		"budgets":        budgetOuts,
@@ -1561,7 +1561,19 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		},
 		"daily":  dailyOut,
 		"models": modelOut,
-	})
+	}
+	tokenState, err := s.tokenKeyState(ctx, key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load key state")
+		return
+	}
+	if tokenState.isToken {
+		if out, err = withoutCostFields(out); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to build usage")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // buildKeyUsageMap assembles the portal usage payload for one key.

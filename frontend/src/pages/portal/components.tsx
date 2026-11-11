@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -15,6 +15,12 @@ import {
 } from "../../components/ui";
 import { claimPortalKey, type KeyUsageData, type PortalRecentRequest } from "../../lib/api";
 import { formatCostUSD, formatSpendUSD } from "../../lib/format";
+
+// Token-package usage is not priced in USD for the customer, so the shared
+// report sections drop every cost value, column and chart series when false.
+const ShowCostContext = createContext(true);
+export const ShowCostProvider = ShowCostContext.Provider;
+const useShowCost = () => useContext(ShowCostContext);
 
 // ─── Layout primitives (mirror the dashboard's page header and panel card) ──
 
@@ -276,10 +282,11 @@ export function OverviewSection({ d }: { d: KeyUsageData }) {
   const activeDays = daily.filter((x) => x.requests > 0).length;
   const avgPerReq = t.requests ? Math.round(totalTokens / t.requests) : 0;
   const budgets = d.budgets ?? [];
+  const showCost = useShowCost();
 
   return (
     <div className="space-y-6">
-      <KpiGrid cols={4} label="Period summary">
+      <KpiGrid cols={showCost ? 4 : 3} label="Period summary">
         <Kpi
           icon={Activity}
           tone="blue"
@@ -288,14 +295,16 @@ export function OverviewSection({ d }: { d: KeyUsageData }) {
           hint={`${avgPerReq ? formatTokens(avgPerReq) : 0} tokens / req`}
           trend={daily.map((x) => x.requests)}
         />
-        <Kpi
-          icon={DollarSign}
-          tone="orange"
-          label="Total cost"
-          value={formatCostUSD(t.cost)}
-          hint={activeDays ? `~${formatCostUSD(t.cost / activeDays)} / day` : "no spend yet"}
-          trend={daily.map((x) => x.cost_usd)}
-        />
+        {showCost && (
+          <Kpi
+            icon={DollarSign}
+            tone="orange"
+            label="Total cost"
+            value={formatCostUSD(t.cost)}
+            hint={activeDays ? `~${formatCostUSD(t.cost / activeDays)} / day` : "no spend yet"}
+            trend={daily.map((x) => x.cost_usd ?? 0)}
+          />
+        )}
         <Kpi
           icon={ArrowDownRight}
           tone="violet"
@@ -344,7 +353,7 @@ export function OverviewSection({ d }: { d: KeyUsageData }) {
                   {b.limit_tokens > 0 && (
                     <BudgetProgress label="Tokens" used={b.tokens_used} limit={b.limit_tokens} pct={b.tokens_pct_used} alert={b.alert} remaining={b.tokens_remaining} format={formatTokens} />
                   )}
-                  {b.limit_usd > 0 && (
+                  {showCost && b.limit_usd > 0 && (
                     <BudgetProgress label="Spend" used={b.spent_usd} limit={b.limit_usd} pct={b.usd_pct_used} alert={b.alert} remaining={b.usd_remaining} format={formatSpendUSD} />
                   )}
                 </div>
@@ -366,9 +375,11 @@ export function OverviewSection({ d }: { d: KeyUsageData }) {
             <PanelRow label="Active days" hint="Days with at least one request">
               <span className="tabular-nums">{activeDays}</span>
             </PanelRow>
-            <PanelRow label="This month so far" hint={`${formatNumber(d.current_period.total_requests)} requests`}>
-              <span className="font-semibold tabular-nums">{formatCostUSD(d.current_period.cost_usd)}</span>
-            </PanelRow>
+            {showCost && (
+              <PanelRow label="This month so far" hint={`${formatNumber(d.current_period.total_requests)} requests`}>
+                <span className="font-semibold tabular-nums">{formatCostUSD(d.current_period.cost_usd ?? 0)}</span>
+              </PanelRow>
+            )}
             <PanelRow label="Total tokens" hint={`${formatTokens(t.prompt)} in · ${formatTokens(t.completion)} out`}>
               <span className="tabular-nums">{formatTokens(totalTokens)}</span>
             </PanelRow>
@@ -386,6 +397,7 @@ export function TrendSection({ daily, days }: { daily: NonNullable<KeyUsageData[
   const [metric, setMetric] = useState<Metric>("tokens");
   const chartData = useMemo(() => daily.map((dp) => ({ ...dp, label: dp.date.slice(5) })), [daily]);
   const t = useMemo(() => aggregate(daily), [daily]);
+  const showCost = useShowCost();
 
   const headline =
     metric === "tokens" ? formatTokens(t.prompt + t.completion) + " tokens"
@@ -404,7 +416,7 @@ export function TrendSection({ daily, days }: { daily: NonNullable<KeyUsageData[
           options={[
             { value: "tokens", label: "Tokens" },
             { value: "requests", label: "Requests" },
-            { value: "cost", label: "Cost" },
+            ...(showCost ? [{ value: "cost" as const, label: "Cost" }] : []),
           ]}
         />
       }
@@ -417,7 +429,7 @@ export function TrendSection({ daily, days }: { daily: NonNullable<KeyUsageData[
           </div>
           <div className="flex items-center gap-4 text-[12px]">
             {metric === "tokens" && (<><LegendDot color={C_INPUT} label="Input" /><LegendDot color={C_OUTPUT} label="Output" /><LegendDot color={C_REQ} label="Requests" /></>)}
-            {metric === "requests" && (<><LegendDot color={C_REQ} label="Requests" /><LegendDot color={C_COST} label="Cost" /></>)}
+            {metric === "requests" && (<><LegendDot color={C_REQ} label="Requests" />{showCost && <LegendDot color={C_COST} label="Cost" />}</>)}
             {metric === "cost" && (<><LegendDot color={C_COST} label="Cost" /><LegendDot color={C_REQ} label="Requests" /></>)}
           </div>
         </div>
@@ -429,12 +441,12 @@ export function TrendSection({ daily, days }: { daily: NonNullable<KeyUsageData[
                 <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
                 <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={10} minTickGap={24} />
                 <YAxis yAxisId="left" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatNumber} width={56} />
-                <YAxis yAxisId="right" orientation="right" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={52} />
+                {showCost && <YAxis yAxisId="right" orientation="right" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={52} />}
                 <Tooltip cursor={{ fill: "var(--bg-subtle)", opacity: 0.6 }} content={<ChartTooltip metric={metric} />} />
                 <Bar yAxisId="left" dataKey="requests" fill={C_REQ} fillOpacity={0.85} radius={[3, 3, 0, 0]} maxBarSize={32} name="Requests" />
-                <Line yAxisId="right" type="monotone" dataKey="cost_usd" stroke={C_COST} strokeWidth={2} dot={false} name="Cost" />
+                {showCost && <Line yAxisId="right" type="monotone" dataKey="cost_usd" stroke={C_COST} strokeWidth={2} dot={false} name="Cost" />}
               </ComposedChart>
-            ) : metric === "cost" ? (
+            ) : metric === "cost" && showCost ? (
               <ComposedChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
                 <defs>
                   <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
@@ -477,6 +489,7 @@ export const TD = "px-4 py-2.5";
 // ─── Recent Requests table ─────────────────────────────────────────────────
 export function RecentRequestsSection({ recent, days: _days }: { recent: PortalRecentRequest[]; days: number }) {
   const { page, pages, paged, setPage, total } = useClientPagination(recent, 15);
+  const showCost = useShowCost();
 
   return (
     <PanelCard
@@ -506,7 +519,7 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
                   <ArrowUpRight className="h-3 w-3 text-[var(--color-chart-2)]" aria-hidden="true" /> Out
                 </span>
               </th>
-              <th scope="col" className={`${TH} text-right`}>Cost</th>
+              {showCost && <th scope="col" className={`${TH} text-right`}>Cost</th>}
               <th scope="col" className={`${TH} text-center`}>Optimizations</th>
               <th scope="col" className={`${TH} text-right`}>Latency</th>
               <th scope="col" className={`${TH} text-right`}>Date</th>
@@ -525,7 +538,7 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
                   </td>
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.prompt_tokens)}</td>
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.completion_tokens)}</td>
-                  <td className={`${TD} text-right tabular-nums text-fg`}>{formatCostUSD(r.cost_usd)}</td>
+                  {showCost && <td className={`${TD} text-right tabular-nums text-fg`}>{formatCostUSD(r.cost_usd ?? 0)}</td>}
                   <td className={`${TD} text-center`}>
                     {opts.length > 0 ? (
                       <div className="flex flex-wrap items-center justify-center gap-1">
@@ -591,6 +604,8 @@ export function InsightsSection({ d }: { d: KeyUsageData }) {
     (max, dp) => (dp.requests > (max?.requests ?? -1) ? dp : max), null,
   );
   const avgPerReq = t.requests ? Math.round(totalTokens / t.requests) : 0;
+  const showCost = useShowCost();
+  const monthTokens = (d.current_period?.prompt_tokens ?? 0) + (d.current_period?.completion_tokens ?? 0);
   const pieData = [
     { name: "Input", value: t.prompt, color: C_INPUT },
     { name: "Output", value: t.completion, color: C_OUTPUT },
@@ -635,7 +650,11 @@ export function InsightsSection({ d }: { d: KeyUsageData }) {
           <Highlight label="Busiest day" value={busiest && busiest.requests > 0 ? busiest.date.slice(5) : "—"} sub={busiest && busiest.requests > 0 ? `${formatNumber(busiest.requests)} requests` : "no activity"} />
           <Highlight label="Models used" value={String(d.models?.length ?? 0)} sub="in period" />
           <Highlight label="Avg / request" value={formatTokens(avgPerReq)} sub="tokens" />
-          <Highlight label="This month" value={formatCostUSD(d.current_period.cost_usd)} sub={`${formatNumber(d.current_period.total_requests)} requests`} />
+          <Highlight
+            label="This month"
+            value={showCost ? formatCostUSD(d.current_period.cost_usd ?? 0) : formatTokens(monthTokens)}
+            sub={showCost ? `${formatNumber(d.current_period.total_requests)} requests` : `tokens · ${formatNumber(d.current_period.total_requests)} requests`}
+          />
         </dl>
       </PanelCard>
     </div>
@@ -644,13 +663,14 @@ export function InsightsSection({ d }: { d: KeyUsageData }) {
 
 // ─── Per-model breakdown ──────────────────────────────────────────────────
 export function ModelSection({ models }: { models: NonNullable<KeyUsageData["models"]> }) {
+  const showCost = useShowCost();
   const sorted = useMemo(() => [...models].sort((a, b) => b.total_requests - a.total_requests), [models]);
   const totals = useMemo(() => sorted.reduce(
     (acc, m) => ({
       requests: acc.requests + m.total_requests,
       prompt: acc.prompt + m.prompt_tokens,
       completion: acc.completion + m.completion_tokens,
-      cost: acc.cost + m.cost_usd,
+      cost: acc.cost + (m.cost_usd ?? 0),
     }),
     { requests: 0, prompt: 0, completion: 0, cost: 0 },
   ), [sorted]);
@@ -666,7 +686,7 @@ export function ModelSection({ models }: { models: NonNullable<KeyUsageData["mod
               <th scope="col" className={`${TH} text-right`}>Input</th>
               <th scope="col" className={`${TH} text-right`}>Output</th>
               <th scope="col" className={`${TH} text-right`}>Avg / req</th>
-              <th scope="col" className={`${TH} text-right`}>Cost</th>
+              {showCost && <th scope="col" className={`${TH} text-right`}>Cost</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -694,7 +714,7 @@ export function ModelSection({ models }: { models: NonNullable<KeyUsageData["mod
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg-muted`}>{formatTokens(m.prompt_tokens)}</td>
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg-muted`}>{formatTokens(m.completion_tokens)}</td>
                   <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg-muted`}>{formatTokens(avg)}</td>
-                  <td className={`${TD} text-right font-semibold tabular-nums ${m.cost_usd > 0 ? "text-fg" : "text-fg-muted"}`}>{formatCostUSD(m.cost_usd)}</td>
+                  {showCost && <td className={`${TD} text-right font-semibold tabular-nums ${(m.cost_usd ?? 0) > 0 ? "text-fg" : "text-fg-muted"}`}>{formatCostUSD(m.cost_usd ?? 0)}</td>}
                 </tr>
               );
             })}
@@ -707,7 +727,7 @@ export function ModelSection({ models }: { models: NonNullable<KeyUsageData["mod
                 <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg-muted`}>{formatTokens(totals.prompt)}</td>
                 <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg-muted`}>{formatTokens(totals.completion)}</td>
                 <td className={TD} />
-                <td className={`${TD} text-right font-semibold tabular-nums text-fg`}>{formatCostUSD(totals.cost)}</td>
+                {showCost && <td className={`${TD} text-right font-semibold tabular-nums text-fg`}>{formatCostUSD(totals.cost)}</td>}
               </tr>
             </tfoot>
           )}
@@ -813,7 +833,10 @@ export function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
+const isCostSeries = (key: string) => key === "cost_usd" || key === "Cost";
+
 export function ChartTooltip({ active, payload, label, metric: _metric, simple }: any) {
+  const showCost = useShowCost();
   if (!active || !payload?.length) return null;
   const fmtVal = (key: string, v: number) => {
     if (key === "requests" || key === "Requests") return formatNumber(v);
@@ -825,7 +848,7 @@ export function ChartTooltip({ active, payload, label, metric: _metric, simple }
     <div className="rounded-lg border border-line bg-surface px-3 py-2 shadow-[var(--shadow-pop)]">
       {!simple && label && <p className="mb-1 text-[12px] text-fg-muted">{label}</p>}
       <div className="space-y-0.5">
-        {payload.map((p: any, i: number) => (
+        {payload.filter((p: any) => showCost || !isCostSeries(p.dataKey ?? p.name)).map((p: any, i: number) => (
           <div key={i} className="flex items-center gap-2 text-[12.5px]">
             <span className="h-2 w-2 rounded-full" style={{ background: p.color || p.payload?.color }} />
             <span className="text-fg-muted">{nameOf(p.name ?? p.dataKey)}</span>
@@ -864,7 +887,7 @@ export function aggregate(daily: NonNullable<KeyUsageData["daily"]>) {
       requests: acc.requests + dp.requests,
       prompt: acc.prompt + dp.prompt_tokens,
       completion: acc.completion + dp.completion_tokens,
-      cost: acc.cost + dp.cost_usd,
+      cost: acc.cost + (dp.cost_usd ?? 0),
     }),
     { requests: 0, prompt: 0, completion: 0, cost: 0 },
   );
