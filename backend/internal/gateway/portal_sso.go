@@ -729,7 +729,12 @@ func (s *Server) handlePortalUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load portal user")
 		return
 	}
-	key, err := s.identity.Keys().Get(r.Context(), u.KeyID)
+	s.writePortalKeyUsage(w, r, u.KeyID)
+}
+
+// writePortalKeyUsage writes the usage payload of one portal-owned key.
+func (s *Server) writePortalKeyUsage(w http.ResponseWriter, r *http.Request, keyID string) {
+	key, err := s.identity.Keys().Get(r.Context(), keyID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusConflict, "claimed key no longer exists")

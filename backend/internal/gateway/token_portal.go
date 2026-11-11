@@ -144,6 +144,26 @@ func (s *Server) tokenUsage(ctx context.Context, keyID string, now time.Time) (u
 	return used, limit, nil
 }
 
+// handlePortalTokenUsage returns usage for the caller's token key, in the same
+// shape as handlePortalUsage returns for the credit key.
+func (s *Server) handlePortalTokenUsage(w http.ResponseWriter, r *http.Request) {
+	sessionSub, ok := s.portalSubject(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "portal session required")
+		return
+	}
+	sub, err := s.db.TokenSubscriptions().GetBySub(r.Context(), portalGoogleSub(sessionSub))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusConflict, "no token key")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load token package")
+		return
+	}
+	s.writePortalKeyUsage(w, r, sub.KeyID)
+}
+
 // handlePortalTokenKeyReveal returns the plaintext of the caller's token key.
 func (s *Server) handlePortalTokenKeyReveal(w http.ResponseWriter, r *http.Request) {
 	sessionSub, ok := s.portalSubject(r)

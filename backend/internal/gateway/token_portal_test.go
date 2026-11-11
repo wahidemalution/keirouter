@@ -455,3 +455,68 @@ func TestPortalTokenOrderReuseNeedsMatchingSnapshot(t *testing.T) {
 	require.NotEqual(t, third["id"], buy("r5")["id"], "a days change needs a new order")
 	require.EqualValues(t, 4, calls.Load())
 }
+
+func usageRecentIDs(t *testing.T, rec *httptest.ResponseRecorder) (string, []string) {
+	t.Helper()
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var out struct {
+		KeyID  string `json:"key_id"`
+		Recent []struct {
+			ID string `json:"id"`
+		} `json:"recent"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	ids := make([]string, 0, len(out.Recent))
+	for _, r := range out.Recent {
+		ids = append(ids, r.ID)
+	}
+	return out.KeyID, ids
+}
+
+func TestPortalTokenUsageScopedToTokenKey(t *testing.T) {
+	s, tok, _ := tokenPortalServer(t)
+	ctx := t.Context()
+
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"u1"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	o, err := s.db.PaymentOrders().Get(ctx, created["id"].(string))
+	require.NoError(t, err)
+	applied, err := s.markTokenOrderPaid(ctx, o, store.PaymentCompleted, "webhook", "")
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	sub, err := s.db.TokenSubscriptions().GetBySub(ctx, "gsub")
+	require.NoError(t, err)
+	u, err := s.db.PortalUsers().GetBySub(ctx, "gsub")
+	require.NoError(t, err)
+	require.NotEqual(t, u.KeyID, sub.KeyID)
+
+	recordTokens(t, s, "payg-req", u.KeyID, 10, 100)
+	recordTokens(t, s, "token-req", sub.KeyID, 0, 200)
+
+	tokenRec := httptest.NewRecorder()
+	s.handlePortalTokenUsage(tokenRec, portalReq(http.MethodGet, "/portal/api/token/usage?days=7", "", tok))
+	keyID, ids := usageRecentIDs(t, tokenRec)
+	require.Equal(t, sub.KeyID, keyID)
+	require.Equal(t, []string{"token-req"}, ids)
+
+	paygRec := httptest.NewRecorder()
+	s.handlePortalUsage(paygRec, portalReq(http.MethodGet, "/portal/api/usage?days=7", "", tok))
+	keyID, ids = usageRecentIDs(t, paygRec)
+	require.Equal(t, u.KeyID, keyID)
+	require.Equal(t, []string{"payg-req"}, ids)
+}
+
+func TestPortalTokenUsageNoKey(t *testing.T) {
+	s, tok, _ := tokenPortalServer(t)
+
+	rec := httptest.NewRecorder()
+	s.handlePortalTokenUsage(rec, portalReq(http.MethodGet, "/portal/api/token/usage", "", tok))
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+
+	rec = httptest.NewRecorder()
+	s.handlePortalTokenUsage(rec, portalReq(http.MethodGet, "/portal/api/token/usage", "", ""))
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+}

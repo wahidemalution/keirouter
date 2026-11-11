@@ -469,6 +469,7 @@ func (s *Server) routes() chi.Router {
 		r.Post("/portal/api/token/key/reveal", s.handlePortalTokenKeyReveal)
 		r.Post("/portal/api/token/orders", s.handlePortalCreateTokenOrder)
 		r.Get("/portal/api/token/orders", s.handlePortalListTokenOrders)
+		r.Get("/portal/api/token/usage", s.handlePortalTokenUsage)
 		r.Post("/portal/auth/logout", s.handlePortalLogout)
 	})
 
