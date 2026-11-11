@@ -18,7 +18,7 @@ import (
 func buyPortalTokenKey(t *testing.T, s *Server, tok string) (store.TokenSubscription, string) {
 	t.Helper()
 	ctx := t.Context()
-	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-100m","idempotency_key":"buy-1"}`)
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"buy-1"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var created map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
@@ -127,7 +127,7 @@ func TestPortalTokenOrderRefusesDisabledKey(t *testing.T) {
 	before := calls.Load()
 
 	for _, pkg := range []string{"tp-20m", "tp-days-15"} {
-		rec := createTokenOrder(t, s, tok, `{"package_id":"`+pkg+`","idempotency_key":"d-`+pkg+`"}`)
+		rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"`+pkg+`","idempotency_key":"d-`+pkg+`"}`)
 		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 		require.Contains(t, rec.Body.String(), "token_key_disabled")
 	}

@@ -364,3 +364,52 @@ func TestTokenOrderDeletedPortalUserIsManual(t *testing.T) {
 	_, err = s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
 	require.ErrorIs(t, err, store.ErrNotFound)
 }
+
+// checkoutTokenOrder creates a tp-100m order through the portal checkout so
+// it carries the package snapshot.
+func checkoutTokenOrder(t *testing.T, s *Server, tok string) store.PaymentOrder {
+	t.Helper()
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"snap-1"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	o, err := s.db.PaymentOrders().Get(t.Context(), created["id"].(string))
+	require.NoError(t, err)
+	return o
+}
+
+func TestTokenOrderFulfilsSnapshotAfterPackageEdit(t *testing.T) {
+	s, tok, _ := tokenPortalServer(t)
+	ctx := t.Context()
+	o := checkoutTokenOrder(t, s, tok)
+
+	p, err := s.db.TokenPackages().Get(ctx, "tp-100m")
+	require.NoError(t, err)
+	p.Tokens, p.Days, p.Kind = 10_000_000, 60, store.TokenPackageTokens
+	require.NoError(t, s.db.TokenPackages().Update(ctx, p))
+
+	applied, err := s.markTokenOrderPaid(ctx, o, store.PaymentCompleted, "webhook", "")
+	require.NoError(t, err)
+	require.True(t, applied)
+	sub, err := s.db.TokenSubscriptions().GetBySub(ctx, "gsub")
+	require.NoError(t, err)
+	require.EqualValues(t, 100_000_000, tokenBudget(t, s, sub.KeyID).LimitTokens, "tokens as bought")
+	require.WithinDuration(t, time.Now().Add(15*24*time.Hour), sub.ExpiresAt, time.Minute, "days as bought")
+}
+
+func TestTokenOrderSnapshotWhenPackageDeleted(t *testing.T) {
+	s, tok, _ := tokenPortalServer(t)
+	ctx := t.Context()
+	o := checkoutTokenOrder(t, s, tok)
+	require.NoError(t, s.db.TokenPackages().Delete(ctx, "tp-100m"))
+
+	applied, err := s.markTokenOrderPaid(ctx, o, store.PaymentCompleted, "webhook", "")
+	require.NoError(t, err)
+	require.True(t, applied)
+	got, err := s.db.PaymentOrders().Get(ctx, o.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.PaymentCompleted, got.Status)
+	sub, err := s.db.TokenSubscriptions().GetBySub(ctx, "gsub")
+	require.NoError(t, err)
+	require.EqualValues(t, 100_000_000, tokenBudget(t, s, sub.KeyID).LimitTokens)
+}

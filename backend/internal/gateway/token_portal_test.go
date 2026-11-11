@@ -119,7 +119,7 @@ func TestPortalTokenPackagesHidesDisabled(t *testing.T) {
 
 func TestPortalTokenOrderRejectsDaysWithoutActive(t *testing.T) {
 	s, tok, calls := tokenPortalServer(t)
-	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-days-15","idempotency_key":"d1"}`)
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-days-15","idempotency_key":"d1"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	var out struct {
 		Error struct{ Code string } `json:"error"`
@@ -140,12 +140,12 @@ func TestPortalTokenOrderRejectsDaysWithoutActive(t *testing.T) {
 	applied, err := s.markTokenOrderPaid(t.Context(), paid, store.PaymentCompleted, "test", "")
 	require.NoError(t, err)
 	require.True(t, applied)
-	rec = createTokenOrder(t, s, tok, `{"package_id":"tp-days-15","idempotency_key":"d2"}`)
+	rec = createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-days-15","idempotency_key":"d2"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, "allowed while active: %s", rec.Body.String())
 	require.EqualValues(t, 1, calls.Load())
 
 	setTokenExpiryFor(t, s, "gsub", time.Now().Add(-time.Minute))
-	rec = createTokenOrder(t, s, tok, `{"package_id":"tp-days-15","idempotency_key":"d3"}`)
+	rec = createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-days-15","idempotency_key":"d3"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	require.EqualValues(t, 1, calls.Load())
 }
@@ -153,7 +153,7 @@ func TestPortalTokenOrderRejectsDaysWithoutActive(t *testing.T) {
 func TestPortalTokenOrderRejectsDisabledPackage(t *testing.T) {
 	s, tok, calls := tokenPortalServer(t)
 	for _, id := range []string{"tp-50m", "nope"} {
-		rec := createTokenOrder(t, s, tok, `{"package_id":"`+id+`","idempotency_key":"x-`+id+`"}`)
+		rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"`+id+`","idempotency_key":"x-`+id+`"}`)
 		require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 	}
 	require.Zero(t, calls.Load())
@@ -162,7 +162,7 @@ func TestPortalTokenOrderRejectsDisabledPackage(t *testing.T) {
 	require.NoError(t, tokenpkg.Save(t.Context(), s.db.Settings(), tokenpkg.Settings{
 		Enabled: false,
 	}))
-	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-20m","idempotency_key":"x"}`)
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-20m","idempotency_key":"x"}`)
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
 	require.Zero(t, calls.Load())
 }
@@ -173,7 +173,7 @@ func TestPortalTokenOrderCreatesPayment(t *testing.T) {
 	u, err := s.db.PortalUsers().GetBySub(ctx, "gsub")
 	require.NoError(t, err)
 
-	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-100m","idempotency_key":"k1"}`)
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"k1"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
@@ -193,21 +193,21 @@ func TestPortalTokenOrderCreatesPayment(t *testing.T) {
 	require.NotEmpty(t, o.ExpiresAt)
 
 	// Same idempotency key: same order, no new payment.
-	rec = createTokenOrder(t, s, tok, `{"package_id":"tp-100m","idempotency_key":"k1"}`)
+	rec = createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"k1"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
 	require.Equal(t, id, out["id"])
 	require.EqualValues(t, 1, calls.Load())
 
 	// Another click for the same package reuses the open order.
-	rec = createTokenOrder(t, s, tok, `{"package_id":"tp-100m","idempotency_key":"k2"}`)
+	rec = createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"k2"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
 	require.Equal(t, id, out["id"])
 	require.EqualValues(t, 1, calls.Load())
 
 	// A different package gets its own order.
-	rec = createTokenOrder(t, s, tok, `{"package_id":"tp-20m","idempotency_key":"k3"}`)
+	rec = createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-20m","idempotency_key":"k3"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
 	require.NotEqual(t, id, out["id"])
@@ -220,7 +220,7 @@ func TestPortalTokenOrderCreatesPayment(t *testing.T) {
 		Status: store.PaymentPending, Provider: "sumopod", IdempotencyKey: "credit-idem",
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}))
-	rec = createTokenOrder(t, s, tok, `{"package_id":"tp-20m","idempotency_key":"credit-idem"}`)
+	rec = createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-20m","idempotency_key":"credit-idem"}`)
 	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 
 	// Order history lists token orders only, with the package name.
@@ -255,7 +255,7 @@ func TestPortalTokenStatus(t *testing.T) {
 	s.handlePortalTokenKeyReveal(reveal, portalReq(http.MethodPost, "/portal/api/token/key/reveal", "", tok))
 	require.Equal(t, http.StatusNotFound, reveal.Code, reveal.Body.String())
 
-	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-100m","idempotency_key":"s1"}`)
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"s1"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var created map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
@@ -316,7 +316,7 @@ func TestCreditTopupRefusesTokenKey(t *testing.T) {
 	u, err := s.db.PortalUsers().GetBySub(ctx, "gsub")
 	require.NoError(t, err)
 
-	rec := createTokenOrder(t, s, tok, `{"package_id":"tp-20m","idempotency_key":"t1"}`)
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-20m","idempotency_key":"t1"}`)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var created map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
@@ -351,4 +351,105 @@ func TestCreditTopupRefusesTokenKey(t *testing.T) {
 	orders, err := s.db.PaymentOrders().ListByKey(ctx, sub.KeyID)
 	require.NoError(t, err)
 	require.Empty(t, orders)
+}
+
+func getTokenPackages(t *testing.T, s *Server) map[string]any {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handlePortalTokenPackages(rec, httptest.NewRequest(http.MethodGet, "/portal/token/packages", nil))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+	return out
+}
+
+func TestPortalTokenPackagesListedWhenPaymentOff(t *testing.T) {
+	s, tok, _ := tokenPortalServer(t)
+	s.paymentClient = nil
+
+	out := getTokenPackages(t, s)
+	require.Equal(t, false, out["on_sale"])
+	require.Len(t, out["packages"], 3, "the catalog shows while sales are open but payment is off")
+	require.ElementsMatch(t, []any{"gpt-6-sol", "gpt-6-terra", "gpt-6-luna"}, out["models"])
+	require.Equal(t, tokenpkg.TermsVersion, out["terms_version"])
+
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-20m","idempotency_key":"p1"}`)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code, "checkout stays closed: %s", rec.Body.String())
+
+	require.NoError(t, tokenpkg.Save(t.Context(), s.db.Settings(), tokenpkg.Settings{Enabled: false}))
+	out = getTokenPackages(t, s)
+	require.Equal(t, false, out["on_sale"])
+	require.Empty(t, out["packages"], "sales closed hides the catalog")
+}
+
+func TestPortalTokenOrderRequiresTerms(t *testing.T) {
+	s, tok, calls := tokenPortalServer(t)
+	for i, body := range []string{
+		`{"package_id":"tp-20m","idempotency_key":"n1"}`,
+		`{"terms_version":"2020-01-01","package_id":"tp-20m","idempotency_key":"n2"}`,
+	} {
+		rec := createTokenOrder(t, s, tok, body)
+		require.Equal(t, http.StatusBadRequest, rec.Code, "case %d: %s", i, rec.Body.String())
+		var out struct {
+			Error struct {
+				Code         string `json:"code"`
+				TermsVersion string `json:"terms_version"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		require.Equal(t, "terms_not_accepted", out.Error.Code)
+		require.Equal(t, tokenpkg.TermsVersion, out.Error.TermsVersion)
+	}
+	require.Zero(t, calls.Load())
+
+	rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-20m","idempotency_key":"n3"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	o, err := s.db.PaymentOrders().Get(t.Context(), created["id"].(string))
+	require.NoError(t, err)
+	require.Equal(t, tokenpkg.TermsVersion, o.TermsVersion)
+	at, err := time.Parse(time.RFC3339, o.TermsAcceptedAt)
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now(), at, time.Minute)
+}
+
+func TestPortalTokenOrderReuseNeedsMatchingSnapshot(t *testing.T) {
+	s, tok, calls := tokenPortalServer(t)
+	ctx := t.Context()
+	buy := func(idem string) map[string]any {
+		t.Helper()
+		rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"`+idem+`"}`)
+		require.Less(t, rec.Code, 300, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out
+	}
+	first := buy("r1")
+	o, err := s.db.PaymentOrders().Get(ctx, first["id"].(string))
+	require.NoError(t, err)
+	require.Equal(t, string(store.TokenPackageTokens), o.TokenKind)
+	require.EqualValues(t, 100_000_000, o.TokenAmount)
+	require.Equal(t, 15, o.TokenDays)
+
+	p, err := s.db.TokenPackages().Get(ctx, "tp-100m")
+	require.NoError(t, err)
+	p.PriceIDR = 249000
+	require.NoError(t, s.db.TokenPackages().Update(ctx, p))
+	second := buy("r2")
+	require.NotEqual(t, first["id"], second["id"], "a price change needs a new order")
+	require.EqualValues(t, 249000, second["amount_idr"])
+	require.EqualValues(t, 2, calls.Load())
+
+	require.Equal(t, second["id"], buy("r3")["id"], "an unchanged package reuses the open order")
+	require.EqualValues(t, 2, calls.Load())
+
+	p.Tokens = 90_000_000
+	require.NoError(t, s.db.TokenPackages().Update(ctx, p))
+	third := buy("r4")
+	require.NotEqual(t, second["id"], third["id"], "a token change needs a new order")
+	p.Days = 30
+	require.NoError(t, s.db.TokenPackages().Update(ctx, p))
+	require.NotEqual(t, third["id"], buy("r5")["id"], "a days change needs a new order")
+	require.EqualValues(t, 4, calls.Load())
 }

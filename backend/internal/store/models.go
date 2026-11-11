@@ -455,8 +455,14 @@ type PaymentOrder struct {
 	CouponCode    string
 	BaseAmountIDR int64
 	BonusDays     int
-	// TokenPackageID is the package a ProductToken order buys.
+	// TokenPackageID is the package a ProductToken order buys. TokenKind,
+	// TokenAmount and TokenDays copy that package at checkout, so fulfilment
+	// grants what was bought even if an admin edits or deletes the package
+	// before payment. TokenKind is empty on orders made before the copy.
 	TokenPackageID string
+	TokenKind      string
+	TokenAmount    int64
+	TokenDays      int
 }
 
 // Payment order products.

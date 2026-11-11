@@ -20,18 +20,29 @@ func (s *Server) tokenOnSale(st tokenpkg.Settings) bool {
 	return st.Enabled && s.cfg.Payment.Enabled && s.paymentClient != nil
 }
 
-// handlePortalTokenPackages lists the enabled token packages. It needs no
-// session so the pricing page can show them before sign-in.
+// handlePortalTokenPackages lists the enabled token packages, the models
+// token keys may call and the terms version checkout needs. It needs no
+// session so the public page can show them before sign-in. The catalog shows
+// whenever the product is enabled, even while payment is off; on_sale tells
+// whether checkout is open.
 func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Request) {
-	st, err := tokenpkg.Load(r.Context(), s.db.Settings())
+	ctx := r.Context()
+	st, err := tokenpkg.Load(ctx, s.db.Settings())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	pkgs, err := s.db.TokenPackages().List(r.Context())
-	if err != nil {
+	plan, err := s.db.Plans().Get(ctx, st.PlanID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
+	}
+	var pkgs []store.TokenPackage
+	if st.Enabled {
+		if pkgs, err = s.db.TokenPackages().List(ctx); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
 	}
 	out := make([]map[string]any, 0, len(pkgs))
 	for _, p := range pkgs {
@@ -43,7 +54,10 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 			"days": p.Days, "price_idr": p.PriceIDR, "featured": p.Featured,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"on_sale": s.tokenOnSale(st), "packages": out})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"on_sale": s.tokenOnSale(st), "packages": out, "models": tokenPlanModels(plan),
+		"terms_version": tokenpkg.TermsVersion,
+	})
 }
 
 // handlePortalTokenStatus returns the caller's token package: whether it is
@@ -163,6 +177,7 @@ func (s *Server) handlePortalTokenKeyReveal(w http.ResponseWriter, r *http.Reque
 
 type createTokenOrderRequest struct {
 	PackageID      string `json:"package_id"`
+	TermsVersion   string `json:"terms_version"`
 	IdempotencyKey string `json:"idempotency_key"`
 	TurnstileToken string `json:"turnstile_token"`
 }
@@ -183,6 +198,13 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 	}
 	var body createTokenOrderRequest
 	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.TermsVersion != tokenpkg.TermsVersion {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
+			"message": "accept the current token package terms first", "type": "invalid_request_error",
+			"code": "terms_not_accepted", "terms_version": tokenpkg.TermsVersion,
+		}})
 		return
 	}
 	if !s.turnstileVerify(w, r, body.TurnstileToken) {
@@ -272,7 +294,7 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	if open, found := s.openTokenOrder(orders, pkg.ID, now); found {
+	if open, found := s.openTokenOrder(orders, pkg, now); found {
 		writeJSON(w, http.StatusOK, tokenOrderResponse(open))
 		return
 	}
@@ -304,6 +326,8 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 		ProviderPaymentID: created.PaymentID, PaymentLinkURL: created.PaymentLinkURL,
 		IdempotencyKey: idem, Actor: "portal", CreatedAt: now, UpdatedAt: now,
 		ExpiresAt: expires, Product: store.ProductToken, TokenPackageID: pkg.ID,
+		TokenKind: string(pkg.Kind), TokenAmount: pkg.Tokens, TokenDays: pkg.Days,
+		TermsVersion: tokenpkg.TermsVersion, TermsAcceptedAt: now.UTC().Format(time.RFC3339),
 	}
 	if err := s.db.PaymentOrders().Create(ctx, o); err != nil {
 		// Another user's order may hold this idempotency key.
@@ -331,13 +355,18 @@ func (s *Server) lockTokenOrders(googleSub string) func() {
 	return s.lockCreditOrders("token:" + googleSub)
 }
 
-// openTokenOrder returns the newest token order for pkgID whose payment link
-// can still be paid.
-func (s *Server) openTokenOrder(orders []store.PaymentOrder, pkgID string, now time.Time) (store.PaymentOrder, bool) {
+// openTokenOrder returns the newest token order for pkg whose payment link
+// can still be paid. An order whose price or snapshot no longer matches the
+// package is left alone, so a checkout after an admin edit pays the new terms.
+func (s *Server) openTokenOrder(orders []store.PaymentOrder, pkg store.TokenPackage, now time.Time) (store.PaymentOrder, bool) {
 	var best store.PaymentOrder
 	found := false
 	for _, o := range orders {
-		if o.Product != store.ProductToken || o.TokenPackageID != pkgID || !s.paymentLinkOpen(o, now) {
+		if o.Product != store.ProductToken || o.TokenPackageID != pkg.ID || !s.paymentLinkOpen(o, now) {
+			continue
+		}
+		if o.AmountIDR != pkg.PriceIDR || o.TokenKind != string(pkg.Kind) ||
+			o.TokenAmount != pkg.Tokens || o.TokenDays != pkg.Days {
 			continue
 		}
 		if !found || o.CreatedAt.After(best.CreatedAt) {

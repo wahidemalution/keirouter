@@ -23,6 +23,12 @@ var DefaultModels = []string{"gpt-6-sol", "gpt-6-terra", "gpt-6-luna"}
 // every token package key.
 const DefaultPlanID = "plan-token-packages"
 
+// TermsVersion is the token package terms version users must accept at
+// checkout. Bump it whenever the token part of the terms page
+// (/ketentuan#paket-token) changes materially, together with
+// TOKEN_TERMS_VERSION in the frontend.
+const TermsVersion = "2026-11-11"
+
 // ErrNoActivePackage is returned when a days package is bought without a
 // running subscription to extend.
 var ErrNoActivePackage = errors.New("tokenpkg: no active package")

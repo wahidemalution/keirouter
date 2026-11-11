@@ -19,9 +19,11 @@ import (
 // markTokenOrderPaid settles a token package order exactly once: the guarded
 // transition out of a settleable status must win, then the user's token key
 // gains the package (created on the first purchase). It never adds PAYG
-// credit. A payment that cannot be applied (package or portal user deleted,
-// or a days package with no active package) moves the order to manual with
-// reason refund_required, grants nothing and reports applied=false.
+// credit. It grants the package as copied at checkout. A payment that
+// cannot be applied (an order without that copy whose package was deleted,
+// a deleted portal user, or a days package with no active package) moves the
+// order to manual with reason refund_required, grants nothing and reports
+// applied=false.
 func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrder, to store.PaymentOrderStatus, actor, reason string) (bool, error) {
 	if !order.Status.Settleable() {
 		return false, nil
@@ -45,12 +47,12 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		return false, err
 	}
 
-	pkg, err := s.db.TokenPackages().GetOnTx(ctx, tx, order.TokenPackageID)
-	if errors.Is(err, store.ErrNotFound) {
-		return s.markTokenOrderManualOnTx(ctx, tx, order, actor, "package deleted", reason)
-	}
+	pkg, ok, err := s.tokenOrderPackageOnTx(ctx, tx, order)
 	if err != nil {
 		return false, err
+	}
+	if !ok {
+		return s.markTokenOrderManualOnTx(ctx, tx, order, actor, "package deleted", reason)
 	}
 	// The user can be deleted between checkout and payment; without it there
 	// is no key to grant to, so the payment goes to manual instead of failing
@@ -133,6 +135,23 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 	}
 	s.invalidateTokenSub(sub.KeyID)
 	return true, nil
+}
+
+// tokenOrderPackageOnTx returns what the order bought: the package copied at
+// checkout, or the live package for orders made before checkout copied it.
+// ok is false when such an old order's package was deleted.
+func (s *Server) tokenOrderPackageOnTx(ctx context.Context, tx *sql.Tx, order store.PaymentOrder) (store.TokenPackage, bool, error) {
+	if order.TokenKind != "" {
+		return store.TokenPackage{
+			ID: order.TokenPackageID, Kind: store.TokenPackageKind(order.TokenKind),
+			Tokens: order.TokenAmount, Days: order.TokenDays, PriceIDR: order.AmountIDR,
+		}, true, nil
+	}
+	pkg, err := s.db.TokenPackages().GetOnTx(ctx, tx, order.TokenPackageID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.TokenPackage{}, false, nil
+	}
+	return pkg, err == nil, err
 }
 
 // markTokenOrderManualOnTx records a payment that cannot be applied, so an
