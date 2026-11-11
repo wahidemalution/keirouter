@@ -11,7 +11,6 @@ import { PublicLayout, TELEGRAM_URL } from "../components/PublicLayout";
 
 const FOCUS = "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]";
 const LINK = "text-[var(--ink)] underline underline-offset-2 hover:opacity-80";
-const TERMS_URL = "/ketentuan#paket-token";
 const BUY_URL = "/portal/token";
 
 // Shape of GET /portal/token/packages (token_portal.go). Kept here because
@@ -136,10 +135,6 @@ export default function PublicTokenPackages() {
         <h2 id="models-title" className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">
           Available Models
         </h2>
-        <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-[var(--muted)]">
-          Lewat endpoint chat format OpenAI, Anthropic, atau Gemini. Aturan masa aktif dan pemakaian ada di{" "}
-          <a href={TERMS_URL} className={LINK}>ketentuan layanan</a>.
-        </p>
         {q.isLoading ? (
           <div className="mt-4 h-24 animate-pulse rounded-xl border border-[var(--line)] bg-[var(--paper)]" aria-hidden="true" />
         ) : q.isError ? (
