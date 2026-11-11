@@ -103,11 +103,12 @@ func tokenEndpointAllowed(method, path string) bool {
 		return model != "" && geminiTokenActions[action]
 	case http.MethodGet:
 		switch path {
-		case "/v1/models", "/v1/models/info", "/v1/keys/me/usage", "/v1/pricing":
+		case "/v1/models", "/v1/keys/me/usage":
 			return true
 		}
 		kind, ok := strings.CutPrefix(path, "/v1/models/")
-		return ok && kind != "" && !strings.Contains(kind, "/")
+		// info reads any catalog model, so it is not a kind view here.
+		return ok && kind != "" && kind != "info" && !strings.Contains(kind, "/")
 	}
 	return false
 }

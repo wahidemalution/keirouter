@@ -145,15 +145,15 @@ func TestTokenEndpointAllowlist(t *testing.T) {
 		{http.MethodPost, "/v1beta/models/gpt-6-sol:streamGenerateContent"},
 		{http.MethodPost, "/v1beta/models/gpt-6-sol:countTokens"},
 		{http.MethodGet, "/v1/models"},
-		{http.MethodGet, "/v1/models/info"},
 		{http.MethodGet, "/v1/models/chat"},
 		{http.MethodGet, "/v1/keys/me/usage"},
-		{http.MethodGet, "/v1/pricing"},
 	}
 	for _, c := range allowed {
 		require.True(t, tokenEndpointAllowed(c.method, c.path), "%s %s", c.method, c.path)
 	}
 	denied := []struct{ method, path string }{
+		{http.MethodGet, "/v1/models/info"},
+		{http.MethodGet, "/v1/pricing"},
 		{http.MethodPost, "/v1/images/understanding"},
 		{http.MethodPost, "/v1/some/future/endpoint"},
 		{http.MethodGet, "/v1/chat/completions"},

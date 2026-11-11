@@ -103,10 +103,24 @@ func (s *Server) handleListModelsByKind(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// A token package key never sees the provider catalog: its llm view is
+	// its chain list, every other kind is empty.
+	key, _ := authedKey(r.Context())
+	if _, restricted, err := s.tokenChainWhitelist(r.Context(), key); err != nil {
+		writeError(w, http.StatusInternalServerError, "model access check failed")
+		return
+	} else if restricted {
+		if kind == core.ServiceLLM {
+			s.handleListModels(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "kind": kindParam, "data": []modelEntry{}})
+		return
+	}
+
 	pairs := connectors.ModelsByKind(kind)
 	data := make([]modelEntry, 0, len(pairs))
 	seen := make(map[string]struct{}, len(pairs))
-	key, _ := authedKey(r.Context())
 	usableProviders := s.usableModelProviders(r.Context(), tenantOf(key))
 	for _, pm := range pairs {
 		if !usableProviders[pm.Provider] {
