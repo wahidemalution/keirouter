@@ -21,7 +21,6 @@ import {
   Skeleton,
   TabBar,
   TabPanel,
-  Textarea,
   Toggle,
 } from "../components/ui";
 import { PortalOrders } from "./payments/PortalOrders";
@@ -119,22 +118,99 @@ function SettingsPanel() {
   );
 }
 
+/** Chain whitelist picker. Values are chain names, which is what token keys
+ *  are matched against (case-insensitive). Saved names with no matching chain
+ *  stay listed so the admin can see and remove them. */
+function ChainPicker({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
+  const [query, setQuery] = useState("");
+  const chains = useQuery({ queryKey: ["chains"], queryFn: api.listChains });
+  const selected = new Set(value.map((v) => v.toLowerCase()));
+  const all = (chains.data?.chains ?? []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const known = new Set(all.map((c) => c.name.toLowerCase()));
+  const missing = value.filter((v) => !known.has(v.toLowerCase()));
+  const q = query.trim().toLowerCase();
+  const shown = q ? all.filter((c) => c.name.toLowerCase().includes(q)) : all;
+
+  const toggle = (name: string) => {
+    const key = name.toLowerCase();
+    onChange(selected.has(key) ? value.filter((v) => v.toLowerCase() !== key) : [...value, name]);
+  };
+
+  if (chains.isLoading) return <Skeleton className="h-32 w-full" />;
+  if (chains.isError) return <ErrorBanner message={`Couldn't load chains. ${errorText(chains.error)}`} />;
+
+  return (
+    <div className="rounded-md border border-line">
+      <div className="flex items-center gap-2 border-b border-line p-2">
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search chains"
+          aria-label="Search chains"
+          className="h-8"
+        />
+        <span className="shrink-0 text-[12px] tabular-nums text-fg-muted">{value.length} selected</span>
+      </div>
+      {all.length === 0 ? (
+        <p className="p-3 text-[12.5px] text-fg-muted">No chains yet. Create a chain first, then pick it here.</p>
+      ) : (
+        <ul className="max-h-60 divide-y divide-line overflow-y-auto" aria-label="Chains">
+          {shown.length === 0 && <li className="p-3 text-[12.5px] text-fg-muted">No chain matches “{query}”.</li>}
+          {shown.map((c) => (
+            <li key={c.id}>
+              <label className="flex min-h-10 cursor-pointer items-center gap-2.5 px-3 py-1.5 text-[13px] hover:bg-subtle">
+                <input
+                  type="checkbox"
+                  checked={selected.has(c.name.toLowerCase())}
+                  onChange={() => toggle(c.name)}
+                  className="h-4 w-4 shrink-0 rounded border-input accent-accent-500"
+                />
+                <span className="min-w-0 flex-1 truncate font-mono">{c.name}</span>
+                {c.disabled ? <Badge tone="danger">Off sale</Badge> : c.sold_out ? <Badge tone="warning">Sold out</Badge> : null}
+                <span className="shrink-0 text-[11.5px] text-fg-faint">
+                  {c.steps.length} {c.steps.length === 1 ? "step" : "steps"}
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+      {missing.length > 0 && (
+        <div className="border-t border-line p-3">
+          <p className="mb-1.5 text-[12px] text-fg-muted">Saved but no chain has this name (keys can't use it):</p>
+          <div className="flex flex-wrap gap-1.5">
+            {missing.map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => onChange(value.filter((v) => v !== m))}
+                className="inline-flex min-h-8 items-center gap-1 rounded-md border border-line px-2 font-mono text-[12px] text-fg hover:bg-subtle"
+                aria-label={`Remove ${m}`}
+              >
+                {m}
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsForm({ initial }: { initial: TokenSettings }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [enabled, setEnabled] = useState(initial.enabled);
-  const [models, setModels] = useState(initial.allowed_models.join("\n"));
+  const [modelList, setModelList] = useState<string[]>(initial.allowed_models);
   const [rpm, setRpm] = useState(String(initial.rpm_limit));
   const [concurrency, setConcurrency] = useState(String(initial.concurrency_limit));
   const [touched, setTouched] = useState(false);
 
-  const modelList = models
-    .split(/[\n,]+/)
-    .map((m) => m.trim())
-    .filter(Boolean);
   const rpmNum = Number(rpm);
   const concNum = Number(concurrency);
-  const modelsError = touched && modelList.length === 0 ? "Enter at least one model." : null;
+  const modelsError = touched && modelList.length === 0 ? "Pick at least one chain." : null;
   const rpmError = touched && (rpm.trim() === "" || !Number.isInteger(rpmNum) || rpmNum < 1) ? "Enter 1 or more." : null;
   const concError =
     touched && (concurrency.trim() === "" || !Number.isInteger(concNum) || concNum < 1) ? "Enter 1 or more." : null;
@@ -179,10 +255,10 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
       <Field
         label="Allowed models"
         error={modelsError}
-        hint={modelsError ? undefined : "One model per line. Token package keys can only call models on this list."}
+        hint={modelsError ? undefined : "Token package keys can only call the chains ticked here."}
         required
       >
-        <Textarea value={models} onChange={(e) => setModels(e.target.value)} rows={3} spellCheck={false} className="font-mono" />
+        <ChainPicker value={modelList} onChange={setModelList} />
       </Field>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Requests per minute" error={rpmError} hint={rpmError ? undefined : "Applies per key."} required>
