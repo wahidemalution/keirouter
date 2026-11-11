@@ -302,6 +302,28 @@ export default function PublicLanding() {
         </div>
       </section>
 
+      {/* Token packages */}
+      <section aria-labelledby="token-packages-title" className="mt-20">
+        <div className="flex flex-col gap-4 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+          <div className="max-w-xl">
+            <h2 id="token-packages-title" className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">
+              Paket Token GPT-6
+            </h2>
+            <p className="mt-1.5 text-[14px] leading-relaxed text-[var(--muted)]">
+              Token prabayar dengan key token sendiri, terpisah dari saldo. Cocok untuk pemakaian GPT-6 yang banyak
+              dalam waktu singkat, karena sisa token hangus saat masa aktif berakhir.
+            </p>
+          </div>
+          <a
+            href="/paket-token"
+            className={`inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-5 text-[14px] font-medium text-[var(--ink)] no-underline transition-colors hover:border-[var(--line-strong)] ${FOCUS}`}
+          >
+            <Coins className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+            Lihat paket token
+          </a>
+        </div>
+      </section>
+
       {/* CTA */}
       <section id="purchase" className="mt-20 scroll-mt-20">
         <div className="relative overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-6 sm:p-10">

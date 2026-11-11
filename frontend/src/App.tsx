@@ -54,6 +54,7 @@ const PublicBansos = lazy(() => import("./pages/PublicBansos"));
 const PublicModels = lazy(() => import("./pages/PublicModels"));
 const PublicTerms = lazy(() => import("./pages/PublicTerms"));
 const PublicHosting = lazy(() => import("./pages/PublicHosting"));
+const PublicTokenPackages = lazy(routeLoaders["/paket-token"]);
 
 function PageFallback() {
   return (
@@ -72,6 +73,7 @@ export function App() {
         <Route path="/bansos" element={<PublicBansos />} />
         <Route path="/model" element={<PublicModels />} />
         <Route path="/9router" element={<PublicHosting />} />
+        <Route path="/paket-token" element={<PublicTokenPackages />} />
         {/* Old addresses still shared around: keep them working. */}
         <Route path="/hosting-9router" element={<Navigate to="/9router" replace />} />
         <Route path="/ketentuan" element={<PublicTerms />} />
