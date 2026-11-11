@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BadgePercent, BarChart3, Bell, BookOpen, Coins, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, Sun, Wallet, X,
+  BadgePercent, BarChart3, Bell, BookOpen, Coins, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, ShoppingCart, Sun, Wallet, X,
   type LucideIcon,
 } from "lucide-react";
 import { fetchPortalStatus, PORTAL_DEV_EMAIL, portalLogout, type LandingNotification } from "../../lib/api";
@@ -24,35 +24,41 @@ const MOBILE_NAV_ID = "portal-mobile-navigation";
 
 type Tone = "blue" | "violet" | "teal" | "orange" | "slate";
 interface NavItem { to: string; label: string; icon: LucideIcon; end?: boolean }
-interface NavGroup { heading?: string; tone: Tone; items: NavItem[] }
+// product: the heading names a product and prefixes its page titles, since
+// both products have a "Usage" page.
+interface NavGroup { heading?: string; product?: boolean; tone: Tone; items: NavItem[] }
 
 const NAV_GROUPS: NavGroup[] = [
   {
     tone: "blue",
-    items: [
-      { to: portal("/"), label: "Dashboard", icon: LayoutGrid, end: true },
-      { to: portal("/usage"), label: "Usage", icon: BarChart3 },
-    ],
+    items: [{ to: portal("/"), label: "Dashboard", icon: LayoutGrid, end: true }],
   },
   {
-    heading: "Access",
+    heading: "AI PAYG",
+    product: true,
     tone: "orange",
     items: [
       { to: portal("/key"), label: "API Key", icon: Key },
+      { to: portal("/usage"), label: "Usage", icon: BarChart3 },
       { to: portal("/models"), label: "Models", icon: Layers },
       { to: portal("/discounts"), label: "Discount Settings", icon: BadgePercent },
-      { to: portal("/token"), label: "Token Packages", icon: Coins },
+      { to: portal("/topup"), label: "Topup", icon: Wallet },
+    ],
+  },
+  {
+    heading: "Token Package",
+    product: true,
+    tone: "teal",
+    items: [
+      { to: portal("/token"), label: "Overview", icon: Coins, end: true },
+      { to: portal("/token/buy"), label: "Buy Package", icon: ShoppingCart },
+      { to: portal("/token/usage"), label: "Usage", icon: BarChart3 },
     ],
   },
   {
     heading: "Hosting",
     tone: "violet",
     items: [{ to: portal("/hosting"), label: "9router", icon: Server }],
-  },
-  {
-    heading: "Billing",
-    tone: "teal",
-    items: [{ to: portal("/topup"), label: "Topup", icon: Wallet }],
   },
   {
     heading: "Help",
@@ -67,21 +73,20 @@ const TITLES: Record<string, string> = {
   "/portal/usage": "Usage",
   "/portal/models": "Models",
   "/portal/discounts": "Discount Settings",
-  "/portal/token": "Token Packages",
   "/portal/topup": "Topup",
+  "/portal/token": "Overview",
+  "/portal/token/buy": "Buy Package",
+  "/portal/token/usage": "Usage",
   "/portal/hosting": "Hosting 9router",
   "/portal/docs": "Docs",
 };
 
 // The nav group that owns a path lends its tone to the page, like the dashboard.
-function toneForPath(pathname: string): Tone {
+function groupForPath(pathname: string): NavGroup | undefined {
   const path = pathname.replace(/\/+$/, "") || "/portal";
-  for (const g of NAV_GROUPS) {
-    for (const item of g.items) {
-      if (item.end ? path === item.to.replace(/\/+$/, "") : path.startsWith(item.to)) return g.tone;
-    }
-  }
-  return "blue";
+  return NAV_GROUPS.find((g) =>
+    g.items.some((item) => (item.end ? path === item.to.replace(/\/+$/, "") : path.startsWith(item.to))),
+  );
 }
 
 function Brand() {
@@ -247,7 +252,9 @@ export function PortalLayoutPage() {
   });
   const notifCount = notif.data?.length ?? 0;
   const title = TITLES[location.pathname.replace(/\/+$/, "") || "/portal"] ?? "Portal";
-  const tone = toneForPath(location.pathname);
+  const group = groupForPath(location.pathname);
+  const section = group?.product ? group.heading : undefined;
+  const tone = group?.tone ?? "blue";
 
   useEffect(() => {
     if (!notifOpen) return;
@@ -264,8 +271,8 @@ export function PortalLayoutPage() {
   }, [notifOpen]);
 
   useEffect(() => {
-    document.title = `${branding.name || "KeiRouter"} - ${title}`;
-  }, [title, branding.name]);
+    document.title = `${branding.name || "KeiRouter"} - ${section ? `${section} ${title}` : title}`;
+  }, [title, section, branding.name]);
 
   // Back from Google sign-in: go to the page the visitor asked for.
   const navigate = useNavigate();
@@ -325,6 +332,12 @@ export function PortalLayoutPage() {
           <nav aria-label="Breadcrumb" className="hidden min-w-0 items-center gap-1.5 text-[13px] sm:flex">
             <span className="text-fg-muted">Portal</span>
             <span className="text-fg-faint" aria-hidden="true">/</span>
+            {section && (
+              <>
+                <span className="shrink-0 text-fg-muted">{section}</span>
+                <span className="text-fg-faint" aria-hidden="true">/</span>
+              </>
+            )}
             <span className="truncate font-medium text-fg" aria-current="page">{title}</span>
           </nav>
 
