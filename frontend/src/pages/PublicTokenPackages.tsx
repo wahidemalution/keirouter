@@ -77,10 +77,6 @@ export default function PublicTokenPackages() {
   const daysPkgs = (data?.packages ?? []).filter((p) => p.kind === "days");
   const models = data?.models ?? [];
   const base = tokenPkgs.reduce<TokenOffer | undefined>((a, p) => (!a || p.tokens < a.tokens ? p : a), undefined);
-  const cheapestPerM = tokenPkgs.reduce<number | null>((min, p) => {
-    const v = pricePerMillion(p);
-    return min === null || v < min ? v : min;
-  }, null);
 
   useEffect(() => {
     document.title = "Tokenizer - Token AI Frontier";
@@ -92,12 +88,8 @@ export default function PublicTokenPackages() {
         <h1 className="text-[34px] font-semibold leading-[1.08] tracking-[-1.2px] text-[var(--ink)] sm:text-[46px]">
           Token AI Frontier
         </h1>
-        <p className="mt-5 max-w-2xl text-[18px] font-medium leading-snug text-[var(--ink)] sm:text-[20px]">
+        <p className="mt-5 max-w-2xl text-[16px] leading-relaxed text-[var(--muted)]">
           Bayar sekali di depan, lalu fokus ke kerjaan. Tanpa tagihan kejutan di akhir bulan.
-        </p>
-        <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-[var(--muted)]">
-          Model AI frontier lewat satu key. Makin besar paketnya, makin murah per token
-          {cheapestPerM !== null ? `: mulai ${formatIDR(cheapestPerM)} per 1 juta token.` : "."}
         </p>
       </section>
 
