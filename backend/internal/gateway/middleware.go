@@ -137,6 +137,11 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 		w.Header().Set("X-Bansos-Notice", notice)
 	}
 
+	// A token package key runs only the chain's own steps; the final fallback
+	// is a different, unpriced upstream, so a stored setting is ignored.
+	if tokenState.isToken {
+		key.ModelFinalFallback = nil
+	}
 	ctx := context.WithValue(r.Context(), apiKeyCtxKey, key)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }

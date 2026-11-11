@@ -109,6 +109,10 @@ func (s *Server) setModelFinalFallback(w http.ResponseWriter, r *http.Request, k
 	if !ok {
 		return
 	}
+	// Turning it off stays allowed so a fallback a migration seeded can be removed.
+	if enabled && s.refuseTokenKey(r.Context(), w, key.ID, "a token package key cannot use the final fallback") {
+		return
+	}
 	if err := s.identity.Keys().SetModelFinalFallback(r.Context(), key.ID, chain.Name, enabled); err != nil {
 		s.log.Error("model settings: save final fallback failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to save final fallback")
