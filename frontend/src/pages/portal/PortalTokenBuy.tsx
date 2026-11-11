@@ -1,11 +1,13 @@
 import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CreditCard, ShoppingCart } from "lucide-react";
+import { AlertTriangle, CreditCard, Receipt, ShoppingCart } from "lucide-react";
 import {
   createPortalTokenOrder,
   getPortalTokenPackages,
   getPortalTokenStatus,
+  listPortalTokenOrders,
   PortalAPIError,
+  type PortalTokenOrder,
   type TokenPackageOffer,
 } from "../../lib/api";
 import { Badge, Button, EmptyState, ErrorCard, Spinner } from "../../components/ui";
@@ -13,9 +15,9 @@ import { TurnstileWidget, useTurnstileSiteKey } from "../../components/Turnstile
 import { useToast } from "../../components/Toast";
 import { formatTokens } from "../../lib/format";
 import { safeHttpUrl } from "../../lib/safeUrl";
-import { PageHeader, PanelCard } from "./components";
+import { PageHeader, PanelCard, TD, TH, THEAD, formatDateTime } from "./components";
 import {
-  AllowedModelsCard, RequireCreditKey, TOKEN_PACKAGES_QK, TOKEN_STATUS_QK, discountPct, formatIDR,
+  ORDER_TONE, RequireCreditKey, TOKEN_ORDERS_QK, TOKEN_PACKAGES_QK, TOKEN_STATUS_QK, discountPct, formatIDR, paidAtLabel,
 } from "./tokenPackage";
 
 const TITLE = "Buy Package";
@@ -68,6 +70,7 @@ function TokenBuy() {
 
   const tokenStatus = useQuery({ queryKey: TOKEN_STATUS_QK, queryFn: getPortalTokenStatus, retry: false });
   const offers = useQuery({ queryKey: TOKEN_PACKAGES_QK, queryFn: getPortalTokenPackages, retry: false });
+  const orders = useQuery({ queryKey: TOKEN_ORDERS_QK, queryFn: listPortalTokenOrders, retry: false });
 
   const [pickedId, setPickedId] = useState<string | null>(null);
   const [noActive, setNoActive] = useState(false);
@@ -275,7 +278,44 @@ function TokenBuy() {
         )}
       </PanelCard>
 
-      <AllowedModelsCard models={st.models} />
+      <TokenOrdersCard isError={orders.isError} orders={orders.data ?? []} />
     </div>
+  );
+}
+
+function TokenOrdersCard({ isError, orders }: { isError: boolean; orders: PortalTokenOrder[] }) {
+  return (
+    <PanelCard icon={Receipt} title="Token orders" count={orders.length}>
+      {isError ? (
+        <EmptyState title="Could not load token orders" />
+      ) : orders.length === 0 ? (
+        <EmptyState title="No token orders yet" />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-[13px]">
+            <thead className={THEAD}>
+              <tr>
+                <th scope="col" className={`${TH} text-left`}>Date</th>
+                <th scope="col" className={`${TH} text-left`}>Package</th>
+                <th scope="col" className={`${TH} text-right`}>Amount</th>
+                <th scope="col" className={`${TH} text-left`}>Status</th>
+                <th scope="col" className={`${TH} text-left`}>Paid</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {orders.map((o) => (
+                <tr key={o.id} className="transition-colors hover:bg-hover">
+                  <td className={`${TD} whitespace-nowrap tabular-nums text-fg-muted`}>{formatDateTime(o.created_at)}</td>
+                  <td className={`${TD} text-fg`}>{o.package_name || "—"}</td>
+                  <td className={`${TD} text-right tabular-nums text-fg`}>{formatIDR(o.amount_idr)}</td>
+                  <td className={TD}><Badge tone={ORDER_TONE[o.status] ?? "neutral"}>{o.status}</Badge></td>
+                  <td className={`${TD} whitespace-nowrap tabular-nums text-fg-muted`}>{paidAtLabel(o.paid_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </PanelCard>
   );
 }

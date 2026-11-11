@@ -1,20 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { CheckCircle2, Coins, CreditCard, Eye, EyeOff, KeyRound, Receipt, XCircle } from "lucide-react";
-import {
-  getPortalTokenStatus,
-  listPortalTokenOrders,
-  revealPortalTokenKey,
-  type PortalTokenOrder,
-} from "../../lib/api";
+import { CheckCircle2, Coins, CreditCard, Eye, EyeOff, KeyRound, XCircle } from "lucide-react";
+import { getPortalTokenStatus, revealPortalTokenKey } from "../../lib/api";
 import { Badge, EmptyState, ErrorCard, Spinner } from "../../components/ui";
-import { formatTokens } from "../../lib/format";
+import { fmtInt } from "../../lib/format";
 import { portal } from "../../lib/portalRoutes";
-import { IdField, PageHeader, PanelCard, TD, TH, THEAD, formatDateTime } from "./components";
+import { IdField, PageHeader, PanelCard } from "./components";
 import {
-  AllowedModelsCard, AllowedModelsList, LINK_BUTTON, ORDER_TONE, RequireCreditKey, TOKEN_ORDERS_QK, TOKEN_STATUS_QK,
-  formatDate, formatIDR, paidAtLabel,
+  AllowedModelsCard, LINK_BUTTON, RequireCreditKey, TOKEN_ORDERS_QK, TOKEN_STATUS_QK, formatDate,
 } from "./tokenPackage";
 
 const CONFIRM_POLL_MS = 60_000;
@@ -48,13 +42,6 @@ function TokenOverview() {
     retry: false,
     refetchInterval: polling,
   });
-  const orders = useQuery({
-    queryKey: TOKEN_ORDERS_QK,
-    queryFn: listPortalTokenOrders,
-    retry: false,
-    refetchInterval: polling,
-  });
-
   useEffect(() => {
     if (returnStatus === "success" || returnStatus === "cancel") {
       qc.invalidateQueries({ queryKey: TOKEN_STATUS_QK });
@@ -165,7 +152,7 @@ function TokenOverview() {
               <>
                 <div className="min-w-0">
                   <p className="text-[12.5px] text-fg-muted">Tokens remaining</p>
-                  <p className="mt-0.5 text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">{formatTokens(remaining)}</p>
+                  <p className="mt-0.5 text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">{fmtInt.format(remaining)}</p>
                 </div>
                 <div className="min-w-0">
                   <p className="text-[12.5px] text-fg-muted">Expires</p>
@@ -192,6 +179,9 @@ function TokenOverview() {
             )}
           </div>
           <div className="space-y-2 border-t border-line p-4 sm:p-5">
+            <p className="text-[12.5px] text-fg-muted">Base URL</p>
+            <IdField value={`${window.location.origin}/v1`} />
+            <p className="pt-2 text-[12.5px] text-fg-muted">API key</p>
             {revealedKey ? (
               <IdField value={revealedKey}>{keyToggle}</IdField>
             ) : (
@@ -202,53 +192,10 @@ function TokenOverview() {
             )}
             {reveal.isError && <p role="alert" className="text-[12.5px] text-bad">{(reveal.error as Error).message}</p>}
           </div>
-          {st.models.length > 0 && (
-            <div className="border-t border-line p-4 sm:p-5">
-              <p className="text-[12.5px] text-fg-muted">This key only works with these models</p>
-              <AllowedModelsList models={st.models} />
-            </div>
-          )}
         </PanelCard>
       )}
 
-      <TokenOrdersCard isError={orders.isError} orders={orders.data ?? []} />
+      {st.exists && <AllowedModelsCard models={st.models} />}
     </div>
-  );
-}
-
-function TokenOrdersCard({ isError, orders }: { isError: boolean; orders: PortalTokenOrder[] }) {
-  return (
-    <PanelCard icon={Receipt} title="Token orders" count={orders.length}>
-      {isError ? (
-        <EmptyState title="Could not load token orders" />
-      ) : orders.length === 0 ? (
-        <EmptyState title="No token orders yet" />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] text-[13px]">
-            <thead className={THEAD}>
-              <tr>
-                <th scope="col" className={`${TH} text-left`}>Date</th>
-                <th scope="col" className={`${TH} text-left`}>Package</th>
-                <th scope="col" className={`${TH} text-right`}>Amount</th>
-                <th scope="col" className={`${TH} text-left`}>Status</th>
-                <th scope="col" className={`${TH} text-left`}>Paid</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {orders.map((o) => (
-                <tr key={o.id} className="transition-colors hover:bg-hover">
-                  <td className={`${TD} whitespace-nowrap tabular-nums text-fg-muted`}>{formatDateTime(o.created_at)}</td>
-                  <td className={`${TD} text-fg`}>{o.package_name || "—"}</td>
-                  <td className={`${TD} text-right tabular-nums text-fg`}>{formatIDR(o.amount_idr)}</td>
-                  <td className={TD}><Badge tone={ORDER_TONE[o.status] ?? "neutral"}>{o.status}</Badge></td>
-                  <td className={`${TD} whitespace-nowrap tabular-nums text-fg-muted`}>{paidAtLabel(o.paid_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </PanelCard>
   );
 }

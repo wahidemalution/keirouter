@@ -51,8 +51,8 @@ const NAV_GROUPS: NavGroup[] = [
     tone: "teal",
     items: [
       { to: portal("/token"), label: "Overview", icon: Coins, end: true },
-      { to: portal("/token/buy"), label: "Buy Package", icon: ShoppingCart },
       { to: portal("/token/usage"), label: "Usage", icon: BarChart3 },
+      { to: portal("/token/buy"), label: "Buy Package", icon: ShoppingCart },
     ],
   },
   {
