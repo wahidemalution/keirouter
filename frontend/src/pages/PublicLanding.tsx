@@ -310,8 +310,8 @@ export default function PublicLanding() {
               Token AI Frontier
             </h2>
             <p className="mt-1.5 text-[14px] leading-relaxed text-[var(--muted)]">
-              Sudah tahu berapa token yang kamu butuhkan? Beli sekali dalam jumlah pasti, makin besar paketnya makin
-              murah per token, dan pakai lewat key token sendiri yang terpisah dari saldo.
+              Bayar sekali di depan, lalu fokus ke kerjaan. Model AI frontier lewat satu key, tanpa tagihan kejutan di
+              akhir bulan. Makin besar paketnya, makin murah per token.
             </p>
           </div>
           <a

@@ -98,13 +98,12 @@ export default function PublicTokenPackages() {
         <h1 className="text-[34px] font-semibold leading-[1.08] tracking-[-1.2px] text-[var(--ink)] sm:text-[46px]">
           Token AI Frontier
         </h1>
-        <p className="mt-5 max-w-2xl text-[16px] leading-relaxed text-[var(--muted)]">
-          Untuk kamu yang sudah tahu kebutuhan tokennya. Beli sekali dalam jumlah pasti, tagihan tidak naik-turun
-          mengikuti pemakaian, dan makin besar paketnya makin murah per token
-          {cheapestPerM !== null ? `, mulai ${formatIDR(cheapestPerM)} per 1 juta token.` : "."}
+        <p className="mt-5 max-w-2xl text-[18px] font-medium leading-snug text-[var(--ink)] sm:text-[20px]">
+          Bayar sekali di depan, lalu fokus ke kerjaan. Tanpa tagihan kejutan di akhir bulan.
         </p>
-        <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[var(--muted)]">
-          Satu key token untuk semua model di daftar bawah, terpisah dari saldo pay-as-you-go.
+        <p className="mt-3 max-w-2xl text-[16px] leading-relaxed text-[var(--muted)]">
+          Model AI frontier lewat satu key. Makin besar paketnya, makin murah per token
+          {cheapestPerM !== null ? `: mulai ${formatIDR(cheapestPerM)} per 1 juta token.` : "."}
         </p>
       </section>
 
