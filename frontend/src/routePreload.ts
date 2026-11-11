@@ -47,7 +47,7 @@ export const routeLoaders = {
   "/hosting": () => named(import("./pages/Hosting"), "HostingPage"),
   "/token-packages": () => named(import("./pages/TokenPackages"), "TokenPackagesPage"),
   "/model": () => import("./pages/PublicModels").then((m) => ({ default: m.default })),
-  "/paket-token": () => import("./pages/PublicTokenPackages").then((m) => ({ default: m.default })),
+  "/token-pack": () => import("./pages/PublicTokenPackages").then((m) => ({ default: m.default })),
 } as const;
 
 export type RoutePreloadKey = keyof typeof routeLoaders;

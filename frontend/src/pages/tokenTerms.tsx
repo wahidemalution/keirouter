@@ -35,7 +35,7 @@ export const TOKEN_SECTIONS: TermsSection[] = [
       <>
         <p>
           Paket Token adalah token prabayar untuk model yang tercantum di halaman{" "}
-          <a href="/paket-token" className={LINK}>Paket Token</a> dan di portal. Pembelian pertama yang dibayar membuat
+          <a href="/token-pack" className={LINK}>Token AI Frontier</a> dan di portal. Pembelian pertama yang dibayar membuat
           satu key token untuk akun Anda. Key ini terpisah dari API key saldo (pay-as-you-go).
         </p>
         <ul className="list-disc space-y-2 pl-5">

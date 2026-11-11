@@ -30,7 +30,7 @@ function storedTheme(): Theme {
 const TABS: { id: string; label: string; href: string; icon: LucideIcon }[] = [
   { id: "overview", label: "Home", href: "/", icon: Home },
   { id: "models", label: "Model", href: "/model", icon: Boxes },
-  { id: "tokens", label: "Token", href: "/paket-token", icon: Coins },
+  { id: "tokens", label: "Token", href: "/token-pack", icon: Coins },
   { id: "hosting", label: "9router", href: "/9router", icon: Server },
   { id: "bansos", label: "Bansos", href: "/bansos", icon: Gift },
   { id: "telegram", label: "Telegram", href: TELEGRAM_URL, icon: Send },
@@ -124,7 +124,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
     const p = window.location.pathname;
     if (p.startsWith("/bansos")) return "bansos";
     if (p.startsWith("/9router")) return "hosting";
-    if (p.startsWith("/paket-token")) return "tokens";
+    if (p.startsWith("/token-pack")) return "tokens";
     if (p.startsWith("/model")) return "models";
     return "overview";
   });
@@ -218,7 +218,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
             <p className="font-mono text-[11px] uppercase tracking-[1px] text-[var(--muted)]">Layanan</p>
             <ul className="mt-3 space-y-2">
               <li><a href="/model" className="text-[var(--ink)] no-underline hover:underline">Model &amp; harga</a></li>
-              <li><a href="/paket-token" className="text-[var(--ink)] no-underline hover:underline">Paket Token</a></li>
+              <li><a href="/token-pack" className="text-[var(--ink)] no-underline hover:underline">Token AI Frontier</a></li>
               <li><a href="/9router" className="text-[var(--ink)] no-underline hover:underline">Hosting 9router</a></li>
               <li><a href="/bansos" className="text-[var(--ink)] no-underline hover:underline">Bansos</a></li>
               <li><a href="/portal" className="text-[var(--ink)] no-underline hover:underline">Portal pengguna</a></li>

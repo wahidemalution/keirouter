@@ -1,12 +1,12 @@
-// Paket Token landing at `/paket-token`. Reads the public package list
+// Token AI Frontier landing at `/token-pack`. Reads the public package list
 // (/portal/token/packages): tokens packages as cards, the days package as an
 // add-on, and the models a token key may call. Featured packages carry a
 // "Rekomendasi" label. Buying happens in the portal;
 // while checkout is closed the cards show without a buy link.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, CalendarPlus, Send } from "lucide-react";
+import { ArrowRight, CalendarPlus, Cpu, Send } from "lucide-react";
 import { PublicLayout, TELEGRAM_URL } from "../components/PublicLayout";
 
 const FOCUS = "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]";
@@ -89,19 +89,22 @@ export default function PublicTokenPackages() {
   }, null);
 
   useEffect(() => {
-    document.title = "Tokenizer - Paket Token";
+    document.title = "Tokenizer - Token AI Frontier";
   }, []);
 
   return (
     <PublicLayout>
       <section className="max-w-3xl">
         <h1 className="text-[34px] font-semibold leading-[1.08] tracking-[-1.2px] text-[var(--ink)] sm:text-[46px]">
-          Paket Token GPT-6
+          Token AI Frontier
         </h1>
         <p className="mt-5 max-w-2xl text-[16px] leading-relaxed text-[var(--muted)]">
-          Beli token di muka, lalu pakai dengan key token sendiri. Key ini terpisah dari saldo pay-as-you-go, jadi
-          pemakaiannya tidak memotong saldo
-          {cheapestPerM !== null ? `. Harga mulai ${formatIDR(cheapestPerM)} per 1 juta token.` : "."}
+          Untuk kamu yang sudah tahu kebutuhan tokennya. Beli sekali dalam jumlah pasti, tagihan tidak naik-turun
+          mengikuti pemakaian, dan makin besar paketnya makin murah per token
+          {cheapestPerM !== null ? `, mulai ${formatIDR(cheapestPerM)} per 1 juta token.` : "."}
+        </p>
+        <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[var(--muted)]">
+          Satu key token untuk semua model di daftar bawah, terpisah dari saldo pay-as-you-go.
         </p>
       </section>
 
@@ -144,42 +147,34 @@ export default function PublicTokenPackages() {
         )}
       </section>
 
-      <section className="mt-16 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--paper)] p-5 sm:p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">Model yang bisa dipakai</h2>
-          <p className="mt-1.5 text-[14px] leading-relaxed text-[var(--muted)]">
-            Key token hanya menerima model di bawah ini, lewat endpoint chat format OpenAI, Anthropic, atau Gemini. Gambar, audio, embedding, dan pencarian tidak tersedia.
-          </p>
-          {q.isLoading ? (
-            <div className="mt-4 h-8 w-2/3 animate-pulse rounded-md bg-[var(--soft)]" aria-hidden="true" />
-          ) : q.isError ? (
-            <p role="alert" className="mt-4 text-[14px] text-[var(--muted)]">Daftar model gagal dimuat. Coba muat ulang halaman.</p>
-          ) : models.length === 0 ? (
-            <p className="mt-4 text-[14px] text-[var(--muted)]">Daftar model belum tersedia.</p>
-          ) : (
-            <ul className="mt-4 flex flex-wrap gap-2">
-              {models.map((m) => (
-                <li key={m} className="rounded-md border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1 font-mono text-[13px] text-[var(--ink)] [overflow-wrap:anywhere]">
-                  {m}
+      <section className="mt-12" aria-labelledby="models-title">
+        <h2 id="models-title" className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">
+          Model yang bisa dipakai
+        </h2>
+        <p className="mt-1.5 max-w-2xl text-[14px] leading-relaxed text-[var(--muted)]">
+          Lewat endpoint chat format OpenAI, Anthropic, atau Gemini. Aturan masa aktif dan pemakaian ada di{" "}
+          <a href={TERMS_URL} className={LINK}>ketentuan layanan</a>.
+        </p>
+        {q.isLoading ? (
+          <div className="mt-4 h-24 animate-pulse rounded-xl border border-[var(--line)] bg-[var(--paper)]" aria-hidden="true" />
+        ) : q.isError ? (
+          <p role="alert" className="mt-4 text-[14px] text-[var(--muted)]">Daftar model gagal dimuat. Coba muat ulang halaman.</p>
+        ) : models.length === 0 ? (
+          <p className="mt-4 text-[14px] text-[var(--muted)]">Daftar model belum tersedia.</p>
+        ) : (
+          <ul className="mt-4 divide-y divide-[var(--line)] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--paper)]">
+            {models.map((m) => {
+              const fam = modelFamily(m);
+              return (
+                <li key={m} className="flex min-h-14 items-center gap-3 px-4 py-2.5 sm:px-5">
+                  <FamilyLogo family={fam} />
+                  <span className="min-w-0 flex-1 font-mono text-[14px] text-[var(--ink)] [overflow-wrap:anywhere]">{m}</span>
+                  {fam && <span className="shrink-0 text-[13px] text-[var(--muted)]">{fam.label}</span>}
                 </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--paper)] p-5 sm:p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">Aturan singkat</h2>
-          <ul className="mt-3 list-disc space-y-2 pl-5 text-[14px] leading-relaxed text-[var(--muted)]">
-            <li>Token dihitung dari input ditambah output, termasuk reasoning dan input yang di-cache. 1 token = 1 token untuk semua model.</li>
-            <li>Masa aktif dihitung sejak pembayaran paket pertama dalam satu periode. Saat berakhir, sisa token hangus dan key token berhenti bekerja.</li>
-            <li>Beli paket token lagi saat masih aktif: token bertambah, tanggal berakhir tetap.</li>
-            <li>Paket +hari hanya memperpanjang masa aktif, tidak menambah token, dan hanya bisa dibeli saat paket masih aktif.</li>
-            <li>Token tidak bisa ditukar menjadi saldo, dan saldo tidak bisa ditukar menjadi token.</li>
+              );
+            })}
           </ul>
-          <a href={TERMS_URL} className={`mt-4 inline-block text-[14px] ${LINK}`}>
-            Baca ketentuan Paket Token lengkap
-          </a>
-        </div>
+        )}
       </section>
 
       <section className="mt-16">
@@ -297,5 +292,47 @@ function DaysAddOn({ pkg: p }: { pkg: TokenOffer }) {
         </p>
       </div>
     </div>
+  );
+}
+
+type Family = { label: string; icon: string };
+
+// Model-name prefix -> provider family, for the logo next to each model.
+// Chain names are admin-chosen, so an unknown prefix shows a neutral tile.
+const FAMILIES: { match: RegExp; family: Family }[] = [
+  { match: /^(gpt|o\d|chatgpt|codex)/i, family: { label: "OpenAI", icon: "/providers/openai.png" } },
+  { match: /^deepseek/i, family: { label: "DeepSeek", icon: "/providers/deepseek.png" } },
+  { match: /^(kimi|moonshot)/i, family: { label: "Moonshot AI", icon: "/providers/kimi.png" } },
+  { match: /^(glm|zhipu|z-ai)/i, family: { label: "Zhipu AI", icon: "/providers/glm.png" } },
+  { match: /^(qwen|qwq)/i, family: { label: "Qwen", icon: "/providers/qwen.png" } },
+  { match: /^(claude|anthropic)/i, family: { label: "Anthropic", icon: "/providers/anthropic.png" } },
+  { match: /^(gemini|gemma)/i, family: { label: "Google", icon: "/providers/gemini.png" } },
+  { match: /^grok/i, family: { label: "xAI", icon: "/providers/xai.png" } },
+  { match: /^(mistral|codestral|magistral|devstral)/i, family: { label: "Mistral", icon: "/providers/mistral.png" } },
+  { match: /^minimax/i, family: { label: "MiniMax", icon: "/providers/minimax.png" } },
+  { match: /^mimo/i, family: { label: "Xiaomi", icon: "/providers/xiaomi-mimo.png" } },
+];
+
+function modelFamily(model: string): Family | null {
+  const name = model.trim().replace(/^[^/]*\//, "");
+  return FAMILIES.find((f) => f.match.test(name))?.family ?? null;
+}
+
+function FamilyLogo({ family }: { family: Family | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!family || failed) {
+    return (
+      <span
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--line)] bg-[var(--soft)] text-[var(--muted)]"
+        aria-hidden="true"
+      >
+        <Cpu className="h-4 w-4" strokeWidth={1.75} />
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-[var(--line)] bg-white" aria-hidden="true">
+      <img src={family.icon} alt="" className="h-full w-full object-contain p-1" onError={() => setFailed(true)} />
+    </span>
   );
 }
