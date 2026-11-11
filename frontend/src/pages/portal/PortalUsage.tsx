@@ -2,45 +2,28 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
-import { fetchPortalStatus, fetchPortalUsage } from "../../lib/api";
+import { fetchPortalStatus, fetchPortalTokenUsage, fetchPortalUsage, getPortalTokenStatus, type KeyUsageData } from "../../lib/api";
 import { EmptyState, ErrorCard, Spinner } from "../../components/ui";
 import { portal } from "../../lib/portalRoutes";
 import {
   DateFilter, InsightsSection, PageHeader, RecentRequestsSection, TrendSection,
 } from "./components";
+import { TOKEN_STATUS_QK } from "./tokenPackage";
 
-export function PortalUsagePage() {
+/** Usage report of one key; the page around it decides which key and when. */
+function UsageReport({
+  title, subtitle, queryKey, fetchUsage,
+}: {
+  title: string;
+  subtitle: string;
+  queryKey: string;
+  fetchUsage: (days: number) => Promise<KeyUsageData>;
+}) {
   const [days, setDays] = useState(30);
-
-  const { data: status, isLoading: statusLoading } = useQuery({
-    queryKey: ["portal-status"],
-    queryFn: fetchPortalStatus,
-    retry: false,
-  });
-
   const usage = useQuery({
-    queryKey: ["portal-usage", days],
-    queryFn: () => fetchPortalUsage(days),
-    enabled: !!status?.has_key,
+    queryKey: [queryKey, days],
+    queryFn: () => fetchUsage(days),
   });
-
-  if (statusLoading) return <Spinner />;
-  if (!status) return <ErrorCard message="Failed to load portal status" />;
-
-  if (status.has_key === false) {
-    return (
-      <div className="space-y-6">
-        <PageHeader icon={BarChart3} title="Usage" />
-        <EmptyState
-          variant="card"
-          icon={BarChart3}
-          title="No API key yet"
-          hint="Create an API key to start tracking usage."
-          action={<Link to={portal("/key")} className="text-[13px] font-medium text-link hover:underline">Create an API key</Link>}
-        />
-      </div>
-    );
-  }
 
   if (usage.isLoading) return <Spinner />;
   if (usage.isError) {
@@ -58,8 +41,8 @@ export function PortalUsagePage() {
     <div className="space-y-6">
       <PageHeader
         icon={BarChart3}
-        title="Usage"
-        subtitle="Daily trend, token mix and every recent request."
+        title={title}
+        subtitle={subtitle}
         action={<DateFilter days={days} onChange={setDays} />}
       />
 
@@ -69,5 +52,88 @@ export function PortalUsagePage() {
 
       {recent.length > 0 && <RecentRequestsSection recent={recent} days={days} />}
     </div>
+  );
+}
+
+function NoKeyState({ title, emptyTitle, hint, to, linkLabel }: {
+  title: string;
+  emptyTitle: string;
+  hint: string;
+  to: string;
+  linkLabel: string;
+}) {
+  return (
+    <div className="space-y-6">
+      <PageHeader icon={BarChart3} title={title} />
+      <EmptyState
+        variant="card"
+        icon={BarChart3}
+        title={emptyTitle}
+        hint={hint}
+        action={<Link to={to} className="text-[13px] font-medium text-link hover:underline">{linkLabel}</Link>}
+      />
+    </div>
+  );
+}
+
+export function PortalUsagePage() {
+  const { data: status, isLoading } = useQuery({
+    queryKey: ["portal-status"],
+    queryFn: fetchPortalStatus,
+    retry: false,
+  });
+
+  if (isLoading) return <Spinner />;
+  if (!status) return <ErrorCard message="Failed to load portal status" />;
+
+  if (status.has_key === false) {
+    return (
+      <NoKeyState
+        title="Usage"
+        emptyTitle="No API key yet"
+        hint="Create an API key to start tracking usage."
+        to={portal("/key")}
+        linkLabel="Create an API key"
+      />
+    );
+  }
+
+  return (
+    <UsageReport
+      title="Usage"
+      subtitle="Daily trend, token mix and every recent request."
+      queryKey="portal-usage"
+      fetchUsage={fetchPortalUsage}
+    />
+  );
+}
+
+export function PortalTokenUsagePage() {
+  const status = useQuery({ queryKey: TOKEN_STATUS_QK, queryFn: getPortalTokenStatus, retry: false });
+
+  if (status.isLoading) return <Spinner />;
+  if (status.isError || !status.data) {
+    return <ErrorCard message={status.error instanceof Error ? status.error.message : "Failed to load token package"} />;
+  }
+
+  if (!status.data.exists) {
+    return (
+      <NoKeyState
+        title="Token usage"
+        emptyTitle="No token package yet"
+        hint="Usage shows up here once you buy a package and send requests with its key."
+        to={portal("/token/buy")}
+        linkLabel="Buy a package"
+      />
+    );
+  }
+
+  return (
+    <UsageReport
+      title="Token usage"
+      subtitle="Requests made with your token key."
+      queryKey="portal-token-usage"
+      fetchUsage={fetchPortalTokenUsage}
+    />
   );
 }

@@ -1935,12 +1935,22 @@ export async function fetchKeyUsageById(id: string, days?: number): Promise<KeyU
   return request<KeyUsageData>("GET", `/keys/${encodeURIComponent(id)}/usage${qs}`);
 }
 
-export async function fetchPortalUsage(days?: number): Promise<KeyUsageData> {
+async function fetchPortalKeyUsage(path: string, days?: number): Promise<KeyUsageData> {
   const qs = days ? `?days=${days}` : "";
-  const resp = await fetch(`/portal/api/usage${qs}`);
+  const resp = await fetch(`${path}${qs}`);
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load usage");
   return data;
+}
+
+/** Usage of the credit (AI PAYG) key. */
+export function fetchPortalUsage(days?: number): Promise<KeyUsageData> {
+  return fetchPortalKeyUsage("/portal/api/usage", days);
+}
+
+/** Usage of the token package key. */
+export function fetchPortalTokenUsage(days?: number): Promise<KeyUsageData> {
+  return fetchPortalKeyUsage("/portal/api/token/usage", days);
 }
 
 export async function portalLogout(): Promise<void> {

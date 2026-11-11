@@ -11,7 +11,7 @@ import { PublicLayout, TELEGRAM_URL } from "../components/PublicLayout";
 
 const FOCUS = "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg)]";
 const LINK = "text-[var(--ink)] underline underline-offset-2 hover:opacity-80";
-const BUY_URL = "/portal/token";
+const BUY_URL = "/portal/token/buy";
 
 // Shape of GET /portal/token/packages (token_portal.go). Kept here because
 // the public pages stay off lib/api.ts.
