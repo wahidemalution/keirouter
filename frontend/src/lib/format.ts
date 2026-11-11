@@ -109,3 +109,9 @@ export function ptsDelta(cur: number, prev: number): Delta {
   if (Math.abs(diff) < 0.01) return { text, tone: "flat", dir: "flat" };
   return { text, tone: diff > 0 ? "good" : "bad", dir: diff > 0 ? "up" : "down" };
 }
+
+// Public catalog formatters (id-ID), shared by the model cards and the
+// model detail popup.
+export const fmtInt = new Intl.NumberFormat("id-ID");
+export const fmtRate = (n: number) => `$${n.toLocaleString("id-ID", { maximumFractionDigits: 6 })}`;
+export const fmtCount = (n: number) => (n > 0 ? fmtInt.format(n) : "0");

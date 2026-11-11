@@ -64,6 +64,19 @@ type Meter struct {
 	hub       *usagehub.Hub
 	async     *AsyncWriter
 	observers []func(store.UsageRecord)
+	trackers  []UsageTracker
+}
+
+// UsageTracker follows each metered row until it is in the usage table, so a
+// spend limit can count rows that are recorded but not yet written. Its
+// methods run on the request path or the writer goroutine and must not block.
+type UsageTracker interface {
+	// UsagePending runs before the row is written.
+	UsagePending(store.UsageRecord)
+	// UsagePersisted runs once the row is in the usage table.
+	UsagePersisted(store.UsageRecord)
+	// UsageDiscarded runs instead if the row will never be written.
+	UsageDiscarded(store.UsageRecord)
 }
 
 // SetHub installs a usage event hub. When set, the meter publishes an event
@@ -81,6 +94,23 @@ func (m *Meter) SetRecordObserver(fn func(store.UsageRecord)) {
 // request export. fn runs on the request path and must not block. Install
 // observers before the meter serves traffic.
 func (m *Meter) AddRecordObserver(fn func(store.UsageRecord)) { m.observers = append(m.observers, fn) }
+
+// AddUsageTracker installs t. Every row Record accepts reaches exactly one of
+// UsagePersisted or UsageDiscarded after UsagePending (rows still queued when
+// the process exits reach neither). Install before the meter serves traffic.
+func (m *Meter) AddUsageTracker(t UsageTracker) { m.trackers = append(m.trackers, t) }
+
+func (m *Meter) notifyPersisted(rec store.UsageRecord) {
+	for _, t := range m.trackers {
+		t.UsagePersisted(rec)
+	}
+}
+
+func (m *Meter) notifyDiscarded(rec store.UsageRecord) {
+	for _, t := range m.trackers {
+		t.UsageDiscarded(rec)
+	}
+}
 
 // New builds a Meter backed by a usage repo and pricing tables.
 func New(usage UsageStore, pricing map[string]Price, modelPrices map[string]Price) *Meter {
@@ -111,6 +141,8 @@ func (m *Meter) EnableAsync(cfg AsyncConfig) {
 		return
 	}
 	m.async = NewAsyncWriter(m.usage, cfg)
+	m.async.onPersisted = m.notifyPersisted
+	m.async.onDiscarded = m.notifyDiscarded
 }
 
 // StartAsync starts the async writer loop when configured.
@@ -214,6 +246,11 @@ type Event struct {
 	HeadroomStats  *HeadroomSnapshot
 	PonytailActive bool
 
+	// EstPromptTokens and EstCostMicros carry the budget estimate made
+	// before dispatch onto the usage row (see store.UsageRecord).
+	EstPromptTokens int
+	EstCostMicros   int64
+
 	// Guardrail is what the guardrails did to the request (zero when no
 	// policy applied).
 	Guardrail core.GuardrailSummary
@@ -245,6 +282,16 @@ func (m *Meter) resolvePrice(provider, model string) Price {
 // CalculateCost is authoritative for analytics and historical aggregation.
 func (m *Meter) CostMicros(provider, model string, u core.Usage, cacheHit bool) int64 {
 	return m.CalculateCost(provider, model, u, cacheHit, 0).CostMicros
+}
+
+// QuoteMicros prices ev's usage the way Record would bill it, without
+// persisting anything. Budget checks use it to estimate a request before
+// dispatch.
+func (m *Meter) QuoteMicros(ev Event) int64 {
+	if ev.Usage.PromptTokens+ev.Usage.CompletionTokens <= 0 {
+		return 0
+	}
+	return m.costForEvent(ev).CostMicros
 }
 
 // Record persists a canonical terminal request row and returns its actual cost
@@ -324,8 +371,9 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		SlimActive: ev.SlimActive, TerseActive: ev.TerseActive, PonytailActive: ev.PonytailActive,
 		GuardrailAction: ev.Guardrail.Action, GuardrailDetector: ev.Guardrail.Detector,
 		GuardrailDirection: ev.Guardrail.Direction, GuardrailMidStream: ev.Guardrail.MidStream,
-		GuardrailMS: int(ev.Guardrail.Elapsed.Milliseconds()),
-		CreatedAt:   recordedAt,
+		GuardrailMS:     int(ev.Guardrail.Elapsed.Milliseconds()),
+		EstPromptTokens: ev.EstPromptTokens, EstCostMicros: ev.EstCostMicros,
+		CreatedAt: recordedAt,
 	}
 	streamedID := ""
 	if ev.Streamed {
@@ -344,8 +392,15 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	if ev.HeadroomStats != nil {
 		rec.HeadroomTokensSaved, rec.HeadroomBytesSaved, rec.HeadroomActive = ev.HeadroomStats.TokensSaved, ev.HeadroomStats.BytesSaved, ev.HeadroomStats.Active
 	}
+	for _, t := range m.trackers {
+		t.UsagePending(rec)
+	}
 	if err := m.recordUsage(ctx, rec); err != nil {
+		m.notifyDiscarded(rec)
 		return cost.CostMicros, err
+	}
+	if m.async == nil {
+		m.notifyPersisted(rec)
 	}
 	for _, fn := range m.observers {
 		fn(rec)
@@ -430,6 +485,11 @@ type AsyncWriter struct {
 	dropped      atomic.Int64
 	syncFallback atomic.Int64
 	flushes      atomic.Int64
+
+	// onPersisted runs for each record after it is written; onDiscarded for
+	// each record the writer drops or fails to write.
+	onPersisted func(store.UsageRecord)
+	onDiscarded func(store.UsageRecord)
 }
 
 // NewAsyncWriter constructs an AsyncWriter with sane fallbacks for invalid
@@ -473,7 +533,7 @@ func (w *AsyncWriter) Start(ctx context.Context) {
 func (w *AsyncWriter) Record(ctx context.Context, rec store.UsageRecord) error {
 	if w.closed.Load() {
 		w.syncFallback.Add(1)
-		return w.store.Record(ctx, rec)
+		return w.recordSync(ctx, rec)
 	}
 	select {
 	case w.ch <- rec:
@@ -481,10 +541,31 @@ func (w *AsyncWriter) Record(ctx context.Context, rec store.UsageRecord) error {
 	default:
 		if w.fullQueuePolicy == "drop" {
 			w.dropped.Add(1)
+			w.discarded(rec)
 			return nil
 		}
 		w.syncFallback.Add(1)
-		return w.store.Record(ctx, rec)
+		return w.recordSync(ctx, rec)
+	}
+}
+
+func (w *AsyncWriter) recordSync(ctx context.Context, rec store.UsageRecord) error {
+	if err := w.store.Record(ctx, rec); err != nil {
+		return err
+	}
+	w.persisted(rec)
+	return nil
+}
+
+func (w *AsyncWriter) persisted(rec store.UsageRecord) {
+	if w.onPersisted != nil {
+		w.onPersisted(rec)
+	}
+}
+
+func (w *AsyncWriter) discarded(rec store.UsageRecord) {
+	if w.onDiscarded != nil {
+		w.onDiscarded(rec)
 	}
 }
 
@@ -535,13 +616,18 @@ func (w *AsyncWriter) run(ctx context.Context) {
 				if err := w.store.Record(context.Background(), rec); err != nil {
 					w.failed.Add(1)
 					w.log.Warn("usage sync retry failed", "err", err)
+					w.discarded(rec)
 				} else {
 					w.written.Add(1)
+					w.persisted(rec)
 				}
 			}
 		} else {
 			w.written.Add(int64(len(batch)))
 			w.flushes.Add(1)
+			for _, rec := range batch {
+				w.persisted(rec)
+			}
 		}
 		batch = batch[:0]
 	}

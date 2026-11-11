@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -146,4 +147,33 @@ func TestFullBackupKeepsSealedSettingsSealed(t *testing.T) {
 	got, err := hosting.Load(ctx, dst.settings.Get, dst.financeBox())
 	require.NoError(t, err, "API key must be re-sealed under the target master key")
 	require.Equal(t, key, got.APIKey)
+}
+
+// A scheduled backup is the same file gzipped; Restore must take it as-is.
+func TestFullRestoreAcceptsGzip(t *testing.T) {
+	src := newPortalTestServer(t)
+	seedSealedSource(t, src)
+	rec := doBackup(t, src, backupPass)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, err := zw.Write(rec.Body.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	dst := newPortalTestServer(t) // fresh master key
+	rec = doRestore(t, dst, gz.Bytes(), backupPass)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	acc, err := dst.db.Accounts().Get(context.Background(), "acc1")
+	require.NoError(t, err)
+	plain, err := dst.vault.Sealer().OpenString(crypto.Sealed{WrappedDEK: acc.SecretWrappedDEK, Ciphertext: acc.SecretCiphertext})
+	require.NoError(t, err)
+	require.Equal(t, "sk-surplus-upstream", plain)
+}
+
+func TestFullRestoreRejectsCorruptGzip(t *testing.T) {
+	dst := newPortalTestServer(t)
+	rec := doRestore(t, dst, []byte{0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad}, backupPass)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 }

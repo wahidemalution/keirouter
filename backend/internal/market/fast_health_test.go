@@ -134,3 +134,24 @@ func TestSurplusFastTimingPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestFastHealthPeekChangesNothing(t *testing.T) {
+	h, clock := newTestHealth()
+	ab := []string{"a", "b"}
+	eq := func(label string, got, want []string) {
+		t.Helper()
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s = %v, want %v", label, got, want)
+		}
+	}
+	h.Observe("m", "a", FastSlowTTFT+time.Second, true)
+	eq("peek while cooling", h.Peek("m", ab), []string{"b"})
+	clock.advance(FastCooldownMax + time.Second)
+	for i := 0; i < 4; i++ {
+		eq("peek after cooldown", h.Peek("m", ab), ab)
+	}
+	eq("first real request", h.Filter("m", ab), ab)
+	eq("second real request", h.Filter("m", ab), []string{"b"})
+	var nilH *FastHealth
+	eq("nil peek", nilH.Peek("m", []string{"a"}), []string{"a"})
+}

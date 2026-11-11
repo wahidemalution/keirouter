@@ -5,6 +5,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/audit"
 	"github.com/mydisha/keirouter/backend/internal/auth"
+	"github.com/mydisha/keirouter/backend/internal/backupjob"
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/cache"
 	"github.com/mydisha/keirouter/backend/internal/config"
@@ -86,6 +89,7 @@ type App struct {
 	inflight           *inflight.Tracker
 	audit              *audit.Recorder
 	auditSweeper       *audit.Sweeper
+	backupJob          *backupjob.Runner
 	// sharedState releases the redis limiter/budget resources; nil with the
 	// memory backend.
 	sharedState func()
@@ -94,6 +98,12 @@ type App struct {
 	// keepalive, health checker, cooldown sweeper) so shutdown can wait for
 	// them to return before closing the store, avoiding a use-after-close race.
 	bg sync.WaitGroup
+
+	// surplusBooks holds the order books fetched by the latest market sync,
+	// keyed by Surplus model name, so later steps of the same run reuse them
+	// instead of refetching (Surplus rate-limits /api/markets per IP).
+	surplusBooksMu sync.Mutex
+	surplusBooks   map[string][]byte
 }
 
 // Build constructs the application from configuration. It opens the database,
@@ -117,6 +127,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	if err := db.Tenants().EnsureDefault(ctx); err != nil {
 		return nil, fmt.Errorf("app: ensure default tenant: %w", err)
 	}
+	ensureSpendRollup(ctx, db, cfg.Database.SpendRollup, log)
 
 	// Clear stale cooldowns left over from a previous session so accounts
 	// are immediately usable after a restart.
@@ -192,6 +203,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	bud := budget.New(db.Budgets(), db.Usage())
 	bud.SetTokenHoldTail(tokenHoldTail(cfg.Meter))
+	// Spend of metered rows counts toward budgets before the async writer
+	// flushes them; see budget.Engine.UsagePending.
+	mtr.AddUsageTracker(bud)
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
 	// Refresh expiring OAuth access tokens just-in-time before each upstream
 	// call, persisting the rotated tokens.
@@ -423,6 +437,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Telemetry:          healthSvc,
 		Inflight:           inflightTracker,
 		FastHealth:         marketCache.FastHealth(),
+		SlugSkips:          marketCache.Skips(),
 	})
 
 	// Resolve frontend dist directory. Check common install locations, then cwd.
@@ -467,6 +482,16 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 	references := market.NewReferenceCache()
 
+	backupJob := backupjob.New(backupjob.Deps{
+		DB: db, Box: sealer, DataDir: dataDir, Log: sysLog("backup"),
+		Audit: func(action, detail string) {
+			auditRec.Record(audit.Event{Action: action, Outcome: audit.OutcomeFailure, ActorType: audit.ActorSystem,
+				ActorID: "system", ResourceType: "backup", Details: map[string]string{"detail": detail}})
+			conLog.Log("ERROR", "Scheduled backups are failing", detail)
+		},
+		Owner: backupOwner(),
+	})
+
 	app := &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references}
 
 	gw := gateway.New(gateway.Deps{
@@ -479,6 +504,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Identity:               idSvc,
 		Auth:                   authSvc,
 		Audit:                  auditRec,
+		BackupJob:              backupJob,
 		Pipeline:               pipe,
 		Conns:                  connRegistry,
 		Chains:                 db.Chains(),
@@ -540,7 +566,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState}
+	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState, backupJob: backupJob}
 	app.costLookup = costlookup.New(costlookup.Deps{
 		Usage: db.Usage(), Providers: db.CustomProviders(), DB: db,
 		Open:   func(stored string) (string, error) { return costlookup.OpenToken(sealer, stored) },
@@ -607,7 +633,6 @@ func buildLimiter(ctx context.Context, cfg config.Config, bud *budget.Engine, mt
 		Logger:   log,
 	})
 	bud.EnableSharedCounter(budget.NewRedisCounter(client, cfg.Limits.RedisTimeout, log), cfg.Limits.BudgetCounterTTL, log)
-	mtr.AddRecordObserver(bud.ObserveUsage)
 	log.Info("limits: shared redis backend (rate limits, concurrency, budgets)",
 		"addr", ropts.Addr, "fail_mode", cfg.Limits.FailMode)
 	return rl, func() {
@@ -778,6 +803,18 @@ func (a *App) Run(ctx context.Context) error {
 			defer a.bg.Done()
 			a.runHostingExpiry(ctx)
 		}()
+		if a.backupJob != nil {
+			a.bg.Add(1)
+			go func() {
+				defer a.bg.Done()
+				a.backupJob.Run(ctx)
+			}()
+		}
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.runSpendRollupCheck(ctx)
+		}()
 	}
 
 	errCh := make(chan error, 1)
@@ -884,6 +921,14 @@ func (a *App) loopbackListeners() ([]net.Listener, error) {
 		return nil, fmt.Errorf("app: listen %s: %w", a.cfg.Addr(), err)
 	}
 	return []net.Listener{ln}, nil
+}
+
+// backupOwner names this process in the backup lease.
+func backupOwner() string {
+	host, _ := os.Hostname()
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return host + "-" + hex.EncodeToString(b)
 }
 
 // resolveDataDir returns the configured data directory, creating it if needed.

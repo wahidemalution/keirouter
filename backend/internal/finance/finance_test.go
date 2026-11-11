@@ -148,3 +148,33 @@ func TestPlanSeries_TodayIsHourly(t *testing.T) {
 		t.Fatal("expected an error for an unknown range")
 	}
 }
+
+func TestPlanCustom_Granularity(t *testing.T) {
+	now := time.Date(2026, 10, 28, 10, 0, 0, 0, wib)
+	d := func(y int, m time.Month, day int) time.Time { return time.Date(y, m, day, 0, 0, 0, 0, wib) }
+
+	p, err := planCustom(d(2026, 10, 20), d(2026, 10, 20), now)
+	if err != nil || p.granularity != "hour" || p.buckets != 24 || !p.until.Equal(d(2026, 10, 21)) {
+		t.Fatalf("past single day: %+v %v", p, err)
+	}
+	if p, _ := planCustom(d(2026, 10, 28), d(2026, 10, 28), now); p.buckets != 11 {
+		t.Fatalf("today stops at the current hour, got %d buckets", p.buckets)
+	}
+	p, err = planCustom(d(2026, 10, 1), d(2026, 10, 15), now)
+	if err != nil || p.granularity != "day" || p.buckets != 15 {
+		t.Fatalf("15 days: %+v %v", p, err)
+	}
+	p, err = planCustom(d(2026, 1, 10), d(2026, 10, 5), now)
+	if err != nil || p.granularity != "month" || !p.start.Equal(d(2026, 1, 1)) || !p.since.Equal(d(2026, 1, 10)) || !p.lastMonth.Equal(d(2026, 10, 1)) {
+		t.Fatalf("long range: %+v %v", p, err)
+	}
+	if s := BuildSeries(p, nil, Markups{}, now); len(s.Points) != 10 {
+		t.Fatalf("custom months fill Jan to Oct, got %d", len(s.Points))
+	}
+	if _, err := planCustom(d(2026, 10, 5), d(2026, 10, 4), now); err == nil {
+		t.Fatal("from after to should fail")
+	}
+	if _, err := planCustom(d(2026, 10, 5), d(2026, 10, 29), now); err == nil {
+		t.Fatal("a day after today should fail")
+	}
+}

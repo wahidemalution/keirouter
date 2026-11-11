@@ -31,6 +31,8 @@ func newTestDB(t *testing.T) *DB {
 	require.NoError(t, err)
 	require.NoError(t, db.Migrate(ctx))
 	require.NoError(t, db.Tenants().EnsureDefault(ctx))
+	_, err = db.EnsureSpendRollup(ctx, true)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

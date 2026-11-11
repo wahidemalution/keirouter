@@ -904,6 +904,7 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 	kind := core.ErrUpstream
 	var retryAfter time.Duration
 	var creditsExhausted bool
+	var quotaCooldown time.Duration
 	var scope core.FailureScope
 	switch {
 	// inferhub: no seller asks at or below the request's bid cap. The price
@@ -940,6 +941,8 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		kind = core.ErrQuotaExhausted
 		if wait := githubMonthlyUsageRetryAfter(provider, resp.StatusCode, body, time.Now()); wait > 0 {
 			retryAfter = wait
+		} else if isSurplusInsufficientCredit(resp, body) {
+			quotaCooldown = surplusBalanceHoldCooldown
 		} else {
 			creditsExhausted = true
 		}
@@ -953,6 +956,18 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		kind = core.ErrBadRequest
 		bodyStr := string(body)
 		switch {
+		// Surplus: this key's account is scoped to another upstream provider
+		// or restricted by Surplus. Both are properties of the account, not
+		// the request, so bench it and let the chain try the next step. The
+		// code is matched as a quoted JSON token so model prose that merely
+		// mentions it cannot trigger this.
+		case strings.Contains(bodyStr, `"unsupported_provider"`),
+			strings.Contains(bodyStr, `"account_restricted"`):
+			kind = core.ErrAuth
+			if strings.Contains(bodyStr, `"account_restricted"`) {
+				slog.Error("surplus account restricted",
+					"provider", provider, "model", model, "surplus_code", "account_restricted")
+			}
 		// Some backends report unknown or inaccessible models as a plain 400
 		// (Codex: "The 'X' model is not supported when using Codex with a
 		// ChatGPT account"). Classify those as model-unavailable so chains
@@ -1011,6 +1026,7 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 		Message:          truncateError(body),
 		RetryAfter:       retryAfter,
 		CreditsExhausted: creditsExhausted,
+		QuotaCooldown:    quotaCooldown,
 	}
 	// Honour Retry-After on every status (503 "overloaded, retry in 2s" is
 	// common). Transient hints are capped so a single odd header cannot park
@@ -1025,6 +1041,28 @@ func httpStatusError(provider, model string, resp *http.Response, body []byte) e
 }
 
 const githubMonthlyUsageLimitMessage = "you've reached your additional usage limit for your plan"
+
+// surplusBalanceHoldCooldown is how long a Surplus account rests after a 402
+// insufficient_credit. Holds clear within seconds, so this is short; a truly
+// dry balance is re-checked at the same pace.
+const surplusBalanceHoldCooldown = 5 * time.Minute
+
+// isSurplusInsufficientCredit reports a Surplus 402 insufficient_credit.
+// Surplus holds the worst-case cost of every in-flight request against the
+// buyer balance and answers this code when the holds leave too little free
+// balance, which clears within seconds. A truly dry balance gets the same
+// code, so it takes surplusBalanceHoldCooldown instead of the 24h park and
+// is re-checked when that cooldown ends.
+func isSurplusInsufficientCredit(resp *http.Response, body []byte) bool {
+	if resp.Request == nil || resp.Request.URL == nil {
+		return false
+	}
+	host := strings.ToLower(resp.Request.URL.Hostname())
+	if host != "surplusintelligence.ai" && !strings.HasSuffix(host, ".surplusintelligence.ai") {
+		return false
+	}
+	return strings.Contains(string(body), `"insufficient_credit"`)
+}
 
 // githubMonthlyUsageRetryAfter identifies GitHub Copilot's resettable monthly
 // premium-request limit. It is intentionally narrow: unrelated HTTP 402

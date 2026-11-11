@@ -34,8 +34,12 @@ const (
 )
 
 // CutUpstreamCostSlug returns the Surplus model name of a slug billed from the
-// upstream's reported cost (surplus-trusted: or surplus-fast:).
+// upstream's reported cost (surplus-trusted:, surplus-trusted@<provider>: or
+// surplus-fast:).
 func CutUpstreamCostSlug(slug string) (string, bool) {
+	if _, name, ok := ParseProviderSlug(slug); ok {
+		return name, true
+	}
 	for _, prefix := range []string{SurplusTrustedPrefix, SurplusFastPrefix} {
 		if name, ok := strings.CutPrefix(slug, prefix); ok && name != "" {
 			return name, true
@@ -44,8 +48,8 @@ func CutUpstreamCostSlug(slug string) (string, bool) {
 	return "", false
 }
 
-// IsUpstreamCostSlug reports whether slug is a surplus-trusted: or
-// surplus-fast: slug.
+// IsUpstreamCostSlug reports whether slug is a surplus-trusted:,
+// surplus-trusted@<provider>: or surplus-fast: slug.
 func IsUpstreamCostSlug(slug string) bool {
 	_, ok := CutUpstreamCostSlug(slug)
 	return ok

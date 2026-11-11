@@ -53,3 +53,35 @@ func TestLoader_MarkupsGlobalFromSettings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 25.0, m.Global)
 }
+
+func TestLoader_ReportCustomBoundsBothEnds(t *testing.T) {
+	db := newLoaderDB(t)
+	ctx := context.Background()
+	at := func(day int) time.Time { return time.Date(2026, 10, day, 12, 0, 0, 0, wib) }
+	rec := func(id string, day int) store.UsageRecord {
+		return store.UsageRecord{
+			ID: id, TenantID: store.DefaultTenantID, APIKeyID: "k1", Provider: "p1", Model: "m",
+			Status: "success", CostNanos: 3e9, UpstreamCostNanos: 2e9,
+			PricingStatus: "priced", PricingSource: "official", CreatedAt: at(day),
+		}
+	}
+	require.NoError(t, db.Usage().RecordBatch(ctx, []store.UsageRecord{rec("before", 9), rec("in1", 10), rec("in2", 12), rec("after", 13)}))
+
+	l := &Loader{DB: db, Settings: db.Settings().Get, Now: func() time.Time { return at(28) }}
+	rep, err := l.ReportCustom(ctx, "2026-10-10", "2026-10-12")
+	require.NoError(t, err)
+	require.Equal(t, "custom", rep.Range)
+	require.Equal(t, "2026-10-10", rep.From)
+	require.EqualValues(t, 2, rep.Overview.Requests)
+	require.InDelta(t, 6.0, rep.Overview.BilledUSD, 1e-9)
+	require.Equal(t, "day", rep.Series.Granularity)
+	require.Len(t, rep.Series.Points, 3)
+	require.EqualValues(t, 1, rep.Series.Points[0].Requests)
+	require.EqualValues(t, 0, rep.Series.Points[1].Requests)
+	require.EqualValues(t, 1, rep.Series.Points[2].Requests)
+
+	for _, bad := range [][2]string{{"2026-10-12", "2026-10-10"}, {"2026-10-10", "2026-11-30"}, {"10/10/2026", "2026-10-12"}} {
+		_, err = l.ReportCustom(ctx, bad[0], bad[1])
+		require.True(t, errors.Is(err, ErrBadRange), "%v: got %v", bad, err)
+	}
+}

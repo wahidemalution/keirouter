@@ -24,6 +24,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/consolelog"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
@@ -48,6 +49,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/keys/{id}/topups", s.adminListKeyTopups)
 	r.Post("/keys/{id}/limit", s.adminAdjustKeyLimit)
 	r.Get("/keys/{id}/limit-adjustments", s.adminListKeyLimitAdjustments)
+	r.Get("/keys/{id}/model-settings", s.adminKeyModelSettings)
+	r.Put("/keys/{id}/allowed-providers", s.adminSetAllowedProviders)
+	r.Put("/keys/{id}/model-settings/{model}/providers/{provider}", s.adminSetKeyModelProvider)
+	r.Put("/keys/{id}/model-settings/{model}/final-fallback", s.adminSetKeyModelFinalFallback)
 
 	r.Get("/bansos", s.adminGetBansos)
 	r.Post("/bansos", s.adminCreateBansos)
@@ -71,6 +76,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/chains", s.adminCreateChain)
 	r.Patch("/chains/{id}", s.adminUpdateChain)
 	r.Delete("/chains/{id}", s.adminDeleteChain)
+	r.Get("/model-reference", s.adminModelReference)
 
 	r.Get("/plans", s.adminListPlans)
 	r.Post("/plans", s.adminCreatePlan)
@@ -146,6 +152,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/settings/access", s.adminUpdateAccessSettings)
 	r.Post("/settings/backup", s.adminFullBackup)
 	r.Post("/settings/restore", s.adminFullRestore)
+	r.Get("/settings/auto-backup", s.adminGetAutoBackup)
+	r.Post("/settings/auto-backup", s.adminSaveAutoBackup)
+	r.Post("/settings/auto-backup/test", s.adminTestAutoBackup)
+	r.Post("/settings/auto-backup/run", s.adminRunAutoBackup)
 	r.Get("/settings/database", s.adminExportDatabase)
 	r.Post("/settings/database", s.adminImportDatabase)
 	r.Post("/settings/database/import-foreign", s.adminImportForeignConfig)
@@ -163,6 +173,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/market-pricing/settings", s.adminGetMarketPricingSettings)
 	r.Patch("/market-pricing/settings", s.adminUpdateMarketPricingSettings)
 	r.Post("/market-pricing/refresh", s.adminRefreshMarketPrices)
+	r.Get("/market-pricing/surplus-providers", s.adminSurplusProviders)
 	r.Get("/public-pricing", s.adminGetPublicPricing)
 	r.Put("/public-pricing", s.adminUpdatePublicPricing)
 
@@ -2028,8 +2039,10 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 			"official_auto":         nil,
 			// No live quote for any bound slug: the stored rates are stale and
 			// requests are refused until the market offers it again.
-			"sold_out": s.chainSoldOut(c),
-			"disabled": c.Disabled,
+			"sold_out":    s.chainSoldOut(c),
+			"disabled":    c.Disabled,
+			"maintenance": c.Maintenance,
+			"hidden":      c.Hidden,
 		}
 		if ref, ok := s.autoOfficialPrice(c); ok {
 			entry["official_auto"] = map[string]any{"input_per_m": ref.InputPerM, "output_per_m": ref.OutputPerM, "source": ref.Source, "provider": ref.Provider}
@@ -2037,10 +2050,22 @@ func (s *Server) adminListChains(w http.ResponseWriter, r *http.Request) {
 		if c.FallbackProvider != "" && c.FallbackModel != "" {
 			entry["fallback_provider"] = c.FallbackProvider
 			entry["fallback_model"] = c.FallbackModel
+			entry["fallback_price"] = s.chainFallbackPriceJSON(c)
 		}
 		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"chains": out})
+}
+
+// validateChainMarketSlugs returns the 400 message for the first chain-level
+// slug a chain may not carry, "" when all are valid.
+func validateChainMarketSlugs(slugs []string) string {
+	for _, slug := range slugs {
+		if err := market.ValidateStepSlug(slug, true); err != nil {
+			return err.Error()
+		}
+	}
+	return ""
 }
 
 func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
@@ -2060,7 +2085,12 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		MarkupPercent       *float64         `json:"markup_percent"`
 		OfficialInputPerM   *float64         `json:"official_input_per_m"`
 		OfficialOutputPerM  *float64         `json:"official_output_per_m"`
+		Disabled            bool             `json:"disabled"`
+		Maintenance         bool             `json:"maintenance"`
+		Hidden              bool             `json:"hidden"`
 		Steps               []chainStepInput `json:"steps"`
+		// FallbackPrice is the final fallback's own price; absent = none set.
+		FallbackPrice *chainFallbackPriceInput `json:"fallback_price"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -2075,6 +2105,10 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateChainName(body.Name); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if msg := validateChainMarketSlugs(body.MarketSlugs); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -2120,6 +2154,9 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		MarkupPercent:       body.MarkupPercent,
 		OfficialInputPerM:   body.OfficialInputPerM,
 		OfficialOutputPerM:  body.OfficialOutputPerM,
+		Disabled:            body.Disabled,
+		Maintenance:         body.Maintenance,
+		Hidden:              body.Hidden,
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
@@ -2130,6 +2167,12 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 	if msg := validateOfficialPrice(chain.OfficialInputPerM, chain.OfficialOutputPerM); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
+	}
+	if body.FallbackPrice != nil {
+		if msg := body.FallbackPrice.applyTo(&chain); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 	for i, st := range body.Steps {
 		if _, ok := connectors.SpecByID(st.Provider); !ok {
@@ -2181,12 +2224,16 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		MarketSlugs         *[]string `json:"market_slugs"`
 		ReorderByMarket     *bool     `json:"reorder_by_market"`
 		Disabled            *bool     `json:"disabled"`
+		Maintenance         *bool     `json:"maintenance"`
+		Hidden              *bool     `json:"hidden"`
 		// markup_percent: absent = unchanged, null = follow global, number = override.
 		MarkupPercent json.RawMessage `json:"markup_percent"`
 		// official_*_per_m: absent = unchanged, null = automatic, number = manual.
 		OfficialInputPerM  json.RawMessage   `json:"official_input_per_m"`
 		OfficialOutputPerM json.RawMessage   `json:"official_output_per_m"`
 		Steps              *[]chainStepInput `json:"steps"`
+		// fallback_price: absent = unchanged, an object replaces the whole price.
+		FallbackPrice *chainFallbackPriceInput `json:"fallback_price"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -2219,6 +2266,10 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 		existing.CapabilityOverrides = *body.CapabilityOverrides
 	}
 	if body.MarketSlugs != nil {
+		if msg := validateChainMarketSlugs(*body.MarketSlugs); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 		existing.MarketSlugs = *body.MarketSlugs
 	}
 	if body.ReorderByMarket != nil {
@@ -2226,6 +2277,12 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Disabled != nil {
 		existing.Disabled = *body.Disabled
+	}
+	if body.Maintenance != nil {
+		existing.Maintenance = *body.Maintenance
+	}
+	if body.Hidden != nil {
+		existing.Hidden = *body.Hidden
 	}
 	if len(body.MarkupPercent) > 0 {
 		if string(body.MarkupPercent) == "null" {
@@ -2260,6 +2317,12 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 	if msg := validateOfficialPrice(existing.OfficialInputPerM, existing.OfficialOutputPerM); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
+	}
+	if body.FallbackPrice != nil {
+		if msg := body.FallbackPrice.applyTo(&existing); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
 	}
 	if body.InputPerM != nil || body.OutputPerM != nil || body.CacheWritePerM != nil || body.CacheReadPerM != nil {
 		rates := []*float64{body.InputPerM, body.OutputPerM, body.CacheWritePerM, body.CacheReadPerM}

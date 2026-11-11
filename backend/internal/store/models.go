@@ -64,6 +64,73 @@ type APIKey struct {
 	// lower-cased model (chain) name. Only filled on authentication; a value
 	// of 0 turns the minimum off for that model.
 	ModelDiscounts map[string]int
+	// AllowedProviders is the admin ceiling: the keirouter providers this key
+	// may use. Empty means no ceiling. Only filled on authentication.
+	AllowedProviders []string
+	// ModelDisabledProviders lists the providers the customer turned off per
+	// model, keyed by NormalizeDiscountModel. Only filled on authentication.
+	ModelDisabledProviders map[string][]string
+	// ModelFinalFallback records the final-fallback setting per model, keyed
+	// by NormalizeDiscountModel: FinalFallbackChosen, FinalFallbackKept, or
+	// FinalFallbackOff (also a missing entry). Only filled on authentication.
+	ModelFinalFallback map[string]int
+}
+
+// ProviderAllowed reports whether provider is inside the admin ceiling.
+func (k APIKey) ProviderAllowed(provider string) bool {
+	if len(k.AllowedProviders) == 0 {
+		return true
+	}
+	for _, p := range k.AllowedProviders {
+		if p == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// ProviderEnabled reports whether a chain step under provider may serve model
+// for this key: inside the ceiling and not turned off by the customer.
+func (k APIKey) ProviderEnabled(model, provider string) bool {
+	if !k.ProviderAllowed(provider) {
+		return false
+	}
+	for _, p := range k.ModelDisabledProviders[NormalizeDiscountModel(model)] {
+		if p == provider {
+			return false
+		}
+	}
+	return true
+}
+
+// Final-fallback settings, as stored in api_key_model_options.final_fallback.
+const (
+	// FinalFallbackOff leaves the chain fallback out. No row means the same.
+	FinalFallbackOff = 0
+	// FinalFallbackChosen is a fallback the customer or admin turned on. The
+	// customer accepted its normal price, so a minimum discount does not
+	// apply to it.
+	FinalFallbackChosen = 1
+	// FinalFallbackKept is a fallback the migration kept for a key that
+	// existed before per-key routing. It runs as before: a minimum discount
+	// still removes it.
+	FinalFallbackKept = 2
+)
+
+// FinalFallbackOn reports whether the chain's last-resort fallback may run
+// for model.
+func (k APIKey) FinalFallbackOn(model string) bool {
+	switch k.ModelFinalFallback[NormalizeDiscountModel(model)] {
+	case FinalFallbackChosen, FinalFallbackKept:
+		return true
+	}
+	return false
+}
+
+// FinalFallbackExempt reports whether the chain fallback for model runs even
+// under the key's minimum discount: only when it was turned on explicitly.
+func (k APIKey) FinalFallbackExempt(model string) bool {
+	return k.ModelFinalFallback[NormalizeDiscountModel(model)] == FinalFallbackChosen
 }
 
 // EffectiveMinDiscount returns the minimum discount that applies to a request
@@ -156,6 +223,17 @@ type Chain struct {
 	Strategy         string
 	FallbackProvider string
 	FallbackModel    string
+	// FallbackInputPerM/FallbackOutputPerM are the fallback model's provider
+	// price (USD per 1M). Both zero means the models.dev price of the fallback
+	// model; with neither, the fallback does not run. Empty cache rates derive
+	// from the input price like a static step.
+	FallbackInputPerM      float64
+	FallbackOutputPerM     float64
+	FallbackCacheReadPerM  *float64
+	FallbackCacheWritePerM *float64
+	// FallbackMarkupPercent is added on top of the fallback price. Nil means no
+	// markup: the global and chain markups never apply to the fallback.
+	FallbackMarkupPercent *float64
 	// DisplayProvider is the operator-chosen category shown in the public model
 	// catalog. Empty means the legacy "combo" sentinel.
 	DisplayProvider string
@@ -181,11 +259,22 @@ type Chain struct {
 	OfficialOutputPerM *float64
 	// Disabled takes the chain off sale: the catalog shows it as sold out and
 	// requests are refused. Off by default.
-	Disabled  bool
+	Disabled bool
+	// Maintenance takes the chain down: requests are refused with a
+	// temporarily disabled error and the chain is left out of the portal, the
+	// public catalog and public pricing.
+	Maintenance bool
+	// Hidden leaves the chain out of the portal, the public catalog and public
+	// pricing, but keys allowed to call it still can.
+	Hidden    bool
 	Steps     []ChainStep
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// Listed reports whether the chain may appear in the portal and on public
+// pages: neither under maintenance nor hidden. A sold-out chain stays listed.
+func (c Chain) Listed() bool { return !c.Maintenance && !c.Hidden }
 
 // ChainStep is one candidate target within a chain.
 type ChainStep struct {
@@ -206,7 +295,17 @@ type ChainStep struct {
 	// MarkupPercent overrides the chain markup for a static step. Nil follows
 	// the chain (then global) markup; 0 is an explicit no-markup override.
 	MarkupPercent *float64
-	CreatedAt     time.Time
+	// DiscountPercent makes the static price a list price the customer gets
+	// a discount on: they pay list × (100 − DiscountPercent) / 100, and no
+	// markup applies. Nil = a plain static step.
+	DiscountPercent *float64
+	// CostMultiplier is the operator's cost as a fraction of the list price on
+	// a discount step. Nil = cost equals the customer price.
+	CostMultiplier *float64
+	// DisplayName is the provider name the portal shows for this step. Empty
+	// keeps the default: the Surplus label, then the provider's own name.
+	DisplayName string
+	CreatedAt   time.Time
 }
 
 // HasStaticPrice reports whether the step is billed at its own fixed price.
@@ -325,6 +424,12 @@ type UsageRecord struct {
 	// applicable), pending, reconciled, over_ceiling, unverified.
 	UpstreamRequestID string
 	ReconcileStatus   string
+
+	// EstPromptTokens and EstCostMicros are the budget engine's estimate
+	// made before dispatch (prompt with margin; prompt plus output
+	// allowance at the priciest target). Zero when none was made.
+	EstPromptTokens int
+	EstCostMicros   int64
 
 	CreatedAt time.Time
 }

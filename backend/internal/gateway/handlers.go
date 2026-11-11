@@ -175,16 +175,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		var bad badModelError
 		if errors.As(err, &bad) {
 			status := bad.HTTPStatus()
-			title := fmt.Sprintf("Rejected · unknown model %q", req.Model)
-			hint := "No provider model, alias or chain has this name. Check the client's model setting against the Models page."
-			if status == http.StatusServiceUnavailable {
-				title = fmt.Sprintf("Rejected · model %q is sold out", req.Model)
-				hint = "The chain is disabled on the Chains page, or no market offer currently clears its price floor."
-			}
-			if status == http.StatusUnprocessableEntity {
-				title = fmt.Sprintf("Rejected · model %q cannot meet the key's discount floor", req.Model)
-				hint = "The key has a minimum discount set in the portal, and no step of this chain can guarantee it (only surplus-trusted steps can)."
-			}
+			title, hint := resolveRejectCopy(req.Model, bad)
 			tr.reject(status, title, bad.Error(), hint)
 			writeError(w, status, bad.Error())
 			return
@@ -1708,10 +1699,13 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// missing/unknown chain id falls back to the recorded model.
 	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
 	recentOut := make([]map[string]any, 0, len(recent))
+	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	for _, rec := range recent {
 		entry := map[string]any{
 			"id":                rec.ID,
 			"provider":          rec.Provider,
+			"provider_name":     logInfo.providerName(rec),
+			"discount_pct":      logInfo.discountPct(rec),
 			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,
 			"completion_tokens": rec.CompletionTokens,
@@ -2006,4 +2000,25 @@ func recordCostUSD(rec store.RecentRecord) float64 {
 		return float64(rec.CostNanos) / 1_000_000_000
 	}
 	return float64(rec.CostMicros) / 1_000_000
+}
+
+// resolveRejectCopy is the console title and hint for a model that failed to
+// resolve.
+func resolveRejectCopy(model string, bad badModelError) (title, hint string) {
+	switch {
+	case bad.fallbackUnpriced:
+		return fmt.Sprintf("Rejected · model %q has only a final fallback with no price", model),
+			"No step of this chain can serve the key, and the final fallback has no price set and none on models.dev. Set the fallback price on the chain."
+	case bad.HTTPStatus() == http.StatusServiceUnavailable:
+		return fmt.Sprintf("Rejected · model %q is sold out", model),
+			"The chain is disabled on the Chains page, or no market offer currently clears its price floor."
+	case bad.noProvider:
+		return fmt.Sprintf("Rejected · model %q has no provider this key can use", model),
+			"Every provider of this chain is off for the key, or outside its allowed providers, and the final fallback is off. Check the key's Routing tab."
+	case bad.HTTPStatus() == http.StatusUnprocessableEntity:
+		return fmt.Sprintf("Rejected · model %q cannot meet the key's discount floor", model),
+			"The key has a minimum discount set in the portal, and no step of this chain can guarantee it (only surplus-trusted steps can)."
+	}
+	return fmt.Sprintf("Rejected · unknown model %q", model),
+		"No provider model, alias or chain has this name. Check the client's model setting against the Models page."
 }

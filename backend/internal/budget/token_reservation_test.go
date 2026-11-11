@@ -22,7 +22,7 @@ func tokenEstimate(prompt, maxOut int64) Estimate {
 }
 
 func reservedTokens(e *Engine, keyID string) int64 {
-	return e.getReserved(store.ScopeAPIKey, keyID).tokens
+	return e.getReservedTokens(store.ScopeAPIKey, keyID)
 }
 
 // raceReservations fires n concurrent token reservations of prompt+maxOut
@@ -92,12 +92,12 @@ func TestTokenReservationReleasedPerRequest(t *testing.T) {
 	require.NotEqual(t, a.ID, b.ID)
 	require.Equal(t, int64(3_300), reservedTokens(eng, "key-tok"))
 
-	eng.Confirm(Scope{APIKeyID: "key-tok", Hold: a.ID}, 0)
+	eng.Confirm(Scope{APIKeyID: "key-tok", Reservation: a.ID}, 0)
 	require.Equal(t, int64(2_200), reservedTokens(eng, "key-tok"), "only a's hold is released")
-	eng.Release(Scope{APIKeyID: "key-tok", Hold: a.ID})
+	eng.Release(Scope{APIKeyID: "key-tok", Reservation: a.ID})
 	require.Equal(t, int64(2_200), reservedTokens(eng, "key-tok"), "a second release is a no-op")
 
-	eng.Release(Scope{APIKeyID: "key-tok", Hold: b.ID})
+	eng.Release(Scope{APIKeyID: "key-tok", Reservation: b.ID})
 	require.Zero(t, reservedTokens(eng, "key-tok"))
 }
 
@@ -109,7 +109,7 @@ func TestTokenReservationKeptForTailAfterConfirm(t *testing.T) {
 
 	res, err := eng.Reserve(context.Background(), scope, tokenEstimate(100, 900))
 	require.NoError(t, err)
-	scope.Hold = res.ID
+	scope.Reservation = res.ID
 	eng.Confirm(scope, 0)
 	require.Equal(t, int64(1_000), reservedTokens(eng, "key-tok"), "held until the usage row is visible")
 	eng.Release(scope)
@@ -161,7 +161,7 @@ func TestPAYGNoTokenReservationOrClamp(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, res.OutputCap)
 	require.Zero(t, reservedTokens(eng, "key-payg"))
-	require.Equal(t, int64(10), eng.getReserved(store.ScopeAPIKey, "key-payg").micros)
+	require.Equal(t, int64(10), eng.getReserved(store.ScopeAPIKey, "key-payg"))
 }
 
 func TestReleaseDoesNotClearOtherReservations(t *testing.T) {
@@ -176,13 +176,13 @@ func TestReleaseDoesNotClearOtherReservations(t *testing.T) {
 	b, err := eng.Reserve(ctx, scope, Estimate{Micros: 2_000})
 	require.NoError(t, err)
 
-	eng.Confirm(Scope{APIKeyID: "key-payg", Hold: a.ID}, 900)
-	require.Equal(t, int64(2_000), eng.getReserved(store.ScopeAPIKey, "key-payg").micros)
+	eng.Confirm(Scope{APIKeyID: "key-payg", Reservation: a.ID}, 900)
+	require.Equal(t, int64(2_000), eng.getReserved(store.ScopeAPIKey, "key-payg"))
 	eng.Release(Scope{APIKeyID: "key-payg"})
-	require.Equal(t, int64(2_000), eng.getReserved(store.ScopeAPIKey, "key-payg").micros,
+	require.Equal(t, int64(2_000), eng.getReserved(store.ScopeAPIKey, "key-payg"),
 		"a scope without a hold releases nothing")
-	eng.Release(Scope{APIKeyID: "key-payg", Hold: b.ID})
-	require.Zero(t, eng.getReserved(store.ScopeAPIKey, "key-payg").micros)
+	eng.Release(Scope{APIKeyID: "key-payg", Reservation: b.ID})
+	require.Zero(t, eng.getReserved(store.ScopeAPIKey, "key-payg"))
 }
 
 func TestReservedTokensCountInCheck(t *testing.T) {
@@ -215,5 +215,46 @@ func TestTokenMeteredWithoutTokenBudgetRefused(t *testing.T) {
 		LimitMicros: 5_000_000, HardCutoff: true})
 	_, err = eng.Reserve(ctx, Scope{APIKeyID: "key-usd"}, tokenEstimate(10, 100))
 	require.Error(t, err, "a USD budget is no token limit")
+	require.Equal(t, CodeInsufficientTokens, core.AsProviderError(err).Code)
+}
+
+// With the tail off, a confirmed token request is still counted through its
+// pending usage row until the writer stores it, so the next request cannot
+// be granted the same tokens.
+func TestConfirmedTokensCountThroughPending(t *testing.T) {
+	eng, db := newTestEngine(t)
+	eng.SetTokenHoldTail(0)
+	createBudget(t, db, tokenBudget("b-tok", "key-tok", 1_000))
+	ctx := context.Background()
+	scope := Scope{APIKeyID: "key-tok"}
+
+	res, err := eng.Reserve(ctx, scope, tokenEstimate(100, 900))
+	require.NoError(t, err)
+	row := store.UsageRecord{TenantID: store.DefaultTenantID, APIKeyID: "key-tok",
+		PromptTokens: 100, CompletionTokens: 850, CreatedAt: time.Now().UTC()}
+	eng.UsagePending(row)
+	eng.Confirm(Scope{APIKeyID: "key-tok", Reservation: res.ID}, 0)
+	require.Zero(t, reservedTokens(eng, "key-tok"))
+
+	got, err := eng.Reserve(ctx, scope, tokenEstimate(20, 500))
+	require.NoError(t, err)
+	require.Equal(t, int64(30), got.OutputCap, "1000 - 950 pending - 20 prompt")
+	eng.Release(Scope{APIKeyID: "key-tok", Reservation: got.ID})
+
+	eng.UsageDiscarded(row)
+	got, err = eng.Reserve(ctx, scope, tokenEstimate(20, 500))
+	require.NoError(t, err)
+	require.Equal(t, int64(500), got.OutputCap, "a dropped row stops counting")
+}
+
+// A token key whose recorded and pending tokens use up the budget is refused
+// with the token error, not the generic budget one.
+func TestTokenExhaustedThroughPendingUsesTokenError(t *testing.T) {
+	eng, db := newTestEngine(t)
+	createBudget(t, db, tokenBudget("b-tok", "key-tok", 1_000))
+	eng.UsagePending(store.UsageRecord{TenantID: store.DefaultTenantID, APIKeyID: "key-tok",
+		PromptTokens: 400, CompletionTokens: 600, CreatedAt: time.Now().UTC()})
+	_, err := eng.Reserve(context.Background(), Scope{APIKeyID: "key-tok"}, tokenEstimate(10, 100))
+	require.Error(t, err)
 	require.Equal(t, CodeInsufficientTokens, core.AsProviderError(err).Code)
 }

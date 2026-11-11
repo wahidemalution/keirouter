@@ -22,10 +22,11 @@ import { cn } from "@/lib/utils";
 import { C_COST, C_PROFIT, C_REV, LegendItem, VIZ_VARS, axisTick } from "../../components/financeChart";
 import {
   api,
-  type HostingCost,
-  type HostingCostCategory,
-  type HostingCostInput,
-  type HostingCostPeriod,
+  type CostCurrency,
+  type CostPayment,
+  type CostPaymentCategory,
+  type CostPaymentInput,
+  type CostPaymentMethod,
   type HostingFinance,
   type HostingFinanceMonth,
 } from "../../lib/api";
@@ -48,25 +49,35 @@ import {
   Skeleton,
   Textarea,
 } from "../../components/ui";
-import { Panel, TH, THEAD, count, dateID, errorText, idr, todayISO } from "../payments/shared";
-import { QK_HOSTING, idrCompact, monthLabel, plainDateID } from "./shared";
+import { Panel, TH, THEAD, count, dateID, errorText, idr, toDateInput, todayISO } from "../payments/shared";
+import { QK_HOSTING, idrCompact, monthLabel } from "./shared";
 
 type Range = "6" | "12" | "24";
 
-const CATEGORY_LABEL: Record<HostingCostCategory, string> = {
+const CATEGORY_LABEL: Record<CostPaymentCategory, string> = {
   vps: "VPS",
+  upstream_ai: "Upstream AI",
   domain: "Domain",
   software: "Software",
   other: "Other",
 };
 
-const CATEGORY_TONE: Record<HostingCostCategory, "accent" | "secondary" | "neutral" | "warning"> = {
+const CATEGORY_TONE: Record<CostPaymentCategory, "accent" | "secondary" | "neutral" | "warning"> = {
   vps: "accent",
-  domain: "secondary",
+  upstream_ai: "secondary",
+  domain: "neutral",
   software: "warning",
   other: "neutral",
 };
 
+const METHOD_LABEL: Record<CostPaymentMethod, string> = {
+  debit_card: "Debit card",
+  credit_card: "Credit card",
+  bank_transfer: "Bank transfer",
+  crypto: "Crypto",
+};
+
+const usd = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
 
 function signedIdr(n: number): string {
   return n > 0 ? `+${idr(n)}` : idr(n);
@@ -211,7 +222,7 @@ function MonthlyChart({ f, range, onRange, fetching }: { f: HostingFinance; rang
           icon={TrendingUp}
           size="sm"
           title="No revenue or costs yet"
-          hint="The chart fills in once a hosting order is paid or a cost is added on the Operating costs tab."
+          hint="The chart fills in once a hosting order is paid or a payment is recorded on the Operating costs tab."
         />
       ) : view === "chart" ? (
         <div className={cn("px-4 pb-3 pt-4", VIZ_VARS)}>
@@ -351,8 +362,9 @@ function RefundWarning({ refunds }: { refunds: NonNullable<HostingFinance["refun
 
 // ─── Operating costs ────────────────────────────────────────────────────────
 
-/** The Operating costs tab. Costs ride on the hosting finance response, so a
- * cost change refreshes the hosting chart through the same query key. */
+/** The Operating costs tab: a history of paid costs. Costs ride on the
+ * hosting finance response, so a change refreshes the hosting chart through
+ * the same query key. */
 export function CostsTab() {
   const q = useQuery({ queryKey: [...QK_HOSTING.finance, "costs"], queryFn: () => api.hostingFinance(1) });
   if (q.isLoading && !q.data) {
@@ -368,53 +380,51 @@ export function CostsTab() {
   return (
     <div className="space-y-6">
       {q.isError && <ErrorBanner message={`Couldn't refresh the costs. The list below may be out of date. ${errorText(q.error)}`} />}
-      <CostsPanel costs={q.data.costs} />
+      <CostsPanel costs={q.data.costs} monthTotal={q.data.current.cost_idr} />
     </div>
   );
 }
 
-function CostsPanel({ costs }: { costs: HostingCost[] }) {
+function CostsPanel({ costs, monthTotal }: { costs: CostPayment[]; monthTotal: number }) {
   const qc = useQueryClient();
   const toast = useToast();
   const confirm = useConfirm();
-  const [editing, setEditing] = useState<HostingCost | "new" | null>(null);
+  const [editing, setEditing] = useState<CostPayment | "new" | null>(null);
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.deleteHostingCost(id),
+    mutationFn: (id: string) => api.deleteCostPayment(id),
     onSuccess: () => {
-      toast.success("Cost deleted");
+      toast.success("Payment deleted");
       qc.invalidateQueries({ queryKey: QK_HOSTING.finance });
     },
-    onError: (e) => toast.error("Couldn't delete cost", errorText(e)),
+    onError: (e) => toast.error("Couldn't delete payment", errorText(e)),
   });
 
-  const onDelete = async (c: HostingCost) => {
+  const onDelete = async (c: CostPayment) => {
     const ok = await confirm({
-      title: "Delete cost?",
+      title: "Delete payment?",
       description: (
         <>
-          <span className="font-medium text-fg">{c.name}</span> is removed from every month, so profit for past months changes too. If this cost
-          has ended, set an end date instead.
+          <span className="font-medium text-fg">{c.name}</span> ({idr(c.amount_idr)}, paid {dateID(c.paid_at)}) is removed from that month's
+          costs, so its profit changes.
         </>
       ),
-      confirmLabel: "Delete cost",
+      confirmLabel: "Delete payment",
       cancelLabel: "Cancel",
       tone: "danger",
     });
     if (ok) remove.mutate(c.id);
   };
 
-  const monthTotal = costs.reduce((s, c) => s + c.this_month_idr, 0);
-
   return (
     <Panel
       icon={Coins}
       title="Operating costs"
-      subtitle={costs.length ? `This month: ${idr(monthTotal)} across ${count(costs.length)} costs.` : undefined}
+      subtitle={costs.length ? `Payment history. This month: ${idr(monthTotal)} · ${count(costs.length)} payments in total.` : "Payment history."}
       action={
         <Button onClick={() => setEditing("new")}>
           <Plus aria-hidden="true" />
-          Add cost
+          Record payment
         </Button>
       }
     >
@@ -422,19 +432,19 @@ function CostsPanel({ costs }: { costs: HostingCost[] }) {
         <EmptyState
           icon={Coins}
           size="sm"
-          title="No costs yet"
-          hint="Add monthly VPS rent or one-time purchases so profit and break-even can be calculated."
+          title="No payments yet"
+          hint="Record each VPS bill or upstream AI top-up when you pay it. It counts in that month's costs."
         />
       ) : (
-        <div className="overflow-x-auto" role="region" aria-label="Operating costs table" tabIndex={0}>
-          <table className="w-full min-w-[860px] text-[13px]">
+        <div className="overflow-x-auto" role="region" aria-label="Operating cost payments table" tabIndex={0}>
+          <table className="w-full min-w-[880px] text-[13px]">
             <thead>
               <tr className={THEAD}>
+                <th scope="col" className={TH}>Paid</th>
                 <th scope="col" className={TH}>Name</th>
                 <th scope="col" className={TH}>Category</th>
+                <th scope="col" className={TH}>Method</th>
                 <th scope="col" className={cn(TH, "text-right")}>Amount</th>
-                <th scope="col" className={TH}>Period</th>
-                <th scope="col" className={cn(TH, "text-right")}>This month</th>
                 <th scope="col" className={TH}>Note</th>
                 <th scope="col" className={cn(TH, "text-right")}>
                   <span className="sr-only">Actions</span>
@@ -444,31 +454,38 @@ function CostsPanel({ costs }: { costs: HostingCost[] }) {
             <tbody className="divide-y divide-line">
               {costs.map((c) => (
                 <tr key={c.id} className="align-top transition-colors hover:bg-hover">
-                  <td className="px-4 py-2.5 font-medium text-fg">{c.name}</td>
+                  <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(c.paid_at)}</td>
+                  <td className="px-4 py-2.5">
+                    <p className="font-medium text-fg">{c.name}</p>
+                    {c.provider && <p className="text-[11.5px] text-fg-muted">{c.provider}</p>}
+                  </td>
                   <td className="px-4 py-2.5">
                     <Badge tone={CATEGORY_TONE[c.category] ?? "neutral"}>{CATEGORY_LABEL[c.category] ?? c.category}</Badge>
                   </td>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-fg-muted">{METHOD_LABEL[c.payment_method] ?? c.payment_method}</td>
                   <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
-                    {idr(c.amount_idr)}
-                    <p className="text-[11.5px] text-fg-muted">{c.period === "monthly" ? "per month" : "one-time"}</p>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">
-                    {c.period === "one_time" ? plainDateID(c.start_date) : `${plainDateID(c.start_date)} – ${c.end_date ? plainDateID(c.end_date) : "ongoing"}`}
-                  </td>
-                  <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums", c.this_month_idr > 0 ? "text-fg" : "text-fg-faint")}>
-                    {idr(c.this_month_idr)}
+                    {c.currency === "USD" && c.amount_usd !== null ? (
+                      <>
+                        <span className="font-medium text-fg">{usd(c.amount_usd)}</span>
+                        <p className="text-[11.5px] text-fg-muted">
+                          {idr(c.amount_idr)} at {idr(c.usd_idr_rate ?? 0)}/USD
+                        </p>
+                      </>
+                    ) : (
+                      <span className="font-medium text-fg">{idr(c.amount_idr)}</span>
+                    )}
                   </td>
                   <td className="max-w-[240px] break-words px-4 py-2.5 text-[12.5px] text-fg-muted">{c.note || "-"}</td>
                   <td className="px-4 py-2.5">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" onClick={() => setEditing(c)} title="Edit cost" aria-label={`Edit ${c.name}`}>
+                      <Button variant="ghost" onClick={() => setEditing(c)} title="Edit payment" aria-label={`Edit ${c.name}`}>
                         <Pencil aria-hidden="true" />
                       </Button>
                       <Button
                         variant="ghost"
                         onClick={() => onDelete(c)}
                         disabled={remove.isPending && remove.variables === c.id}
-                        title="Delete cost"
+                        title="Delete payment"
                         aria-label={`Delete ${c.name}`}
                       >
                         {remove.isPending && remove.variables === c.id ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Trash2 aria-hidden="true" />}
@@ -486,28 +503,48 @@ function CostsPanel({ costs }: { costs: HostingCost[] }) {
   );
 }
 
-function CostModal({ cost, onClose }: { cost: HostingCost | null; onClose: () => void }) {
+function CostModal({ cost, onClose }: { cost: CostPayment | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [name, setName] = useState(cost?.name ?? "");
-  const [category, setCategory] = useState<HostingCostCategory>(cost?.category ?? "vps");
-  const [amount, setAmount] = useState(cost ? String(cost.amount_idr) : "");
-  const [period, setPeriod] = useState<HostingCostPeriod>(cost?.period ?? "monthly");
-  const [start, setStart] = useState(cost?.start_date ?? todayISO());
-  const [end, setEnd] = useState(cost?.end_date ?? "");
+  const [category, setCategory] = useState<CostPaymentCategory>(cost?.category ?? "vps");
+  const [provider, setProvider] = useState(cost?.provider ?? "");
+  const [currency, setCurrency] = useState<CostCurrency>(cost?.currency ?? "USD");
+  const [amount, setAmount] = useState(cost ? String(cost.currency === "USD" ? cost.amount_usd ?? "" : cost.amount_idr) : "");
+  const [method, setMethod] = useState<CostPaymentMethod>(cost?.payment_method ?? "debit_card");
   const [note, setNote] = useState(cost?.note ?? "");
+  const today = todayISO();
+  const [paidDate, setPaidDate] = useState(cost ? toDateInput(cost.paid_at) : today);
   const [touched, setTouched] = useState(false);
+  // The live rate only previews a new USD payment; the server locks the rate on save.
+  const rateQ = useQuery({ queryKey: ["currency-settings"], queryFn: () => api.currencySettings(), enabled: !cost && currency === "USD" });
 
   const amountNum = Number(amount);
-  const nameError = touched && !name.trim() ? "Enter a cost name." : null;
-  const amountError = touched && (amount.trim() === "" || !Number.isInteger(amountNum) || amountNum <= 0) ? "Enter a whole number above 0." : null;
-  const startError = touched && !start ? "Enter a start date." : null;
-  const endError = period === "monthly" && end && start && end < start ? "End date can't be before the start date." : null;
+  const amountValid = amount.trim() !== "" && Number.isFinite(amountNum) && amountNum > 0 && (currency === "IDR" ? Number.isInteger(amountNum) : Math.round(amountNum * 100) > 0);
+  const needsProvider = category === "upstream_ai";
+  const nameError = touched && !name.trim() ? "Enter a name." : null;
+  const providerError = touched && needsProvider && !provider.trim() ? "Enter the provider you paid." : null;
+  const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(paidDate) && paidDate >= "2000-01-01" && paidDate <= today;
+  const dateError = touched && !dateValid ? (paidDate > today ? "Pick today or an earlier day." : "Pick the day it was paid.") : null;
+  const backDated = !cost && dateValid && paidDate !== today;
+  const amountError = touched && !amountValid ? (currency === "IDR" ? "Enter whole rupiah above 0." : "Enter a dollar amount of at least 0.01.") : null;
+
+  const rate = cost ? cost.usd_idr_rate ?? 0 : rateQ.data?.effective_rate ?? 0;
+  let amountHint: string | undefined;
+  if (currency === "USD" && !amountError) {
+    if (cost) amountHint = amountValid ? `${idr(Math.round(amountNum * rate))} at the saved rate of ${idr(rate)}/USD.` : `Converted at the saved rate of ${idr(rate)}/USD.`;
+    else if (rateQ.isLoading) amountHint = "Loading today's rate…";
+    else if (rate > 0)
+      amountHint = `${amountValid ? `About ${idr(Math.round(amountNum * rate))}` : "Converted"} at today's rate of ${idr(rate)}/USD. The rate is locked when you save${backDated ? ", even for an earlier paid date" : ""}.`;
+    else amountHint = "No USD to IDR rate is available yet. Refresh it or set an override in Settings, Currency.";
+  } else if (currency === "IDR" && !amountError && amountValid) {
+    amountHint = idr(amountNum);
+  }
 
   const save = useMutation({
-    mutationFn: (body: HostingCostInput) => (cost ? api.updateHostingCost(cost.id, body) : api.createHostingCost(body)),
+    mutationFn: (body: CostPaymentInput) => (cost ? api.updateCostPayment(cost.id, body) : api.createCostPayment(body)),
     onSuccess: () => {
-      toast.success(cost ? "Cost updated" : "Cost added");
+      toast.success(cost ? "Payment updated" : "Payment recorded");
       qc.invalidateQueries({ queryKey: QK_HOSTING.finance });
       onClose();
     },
@@ -516,60 +553,90 @@ function CostModal({ cost, onClose }: { cost: HostingCost | null; onClose: () =>
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     setTouched(true);
-    const valid = name.trim() && Number.isInteger(amountNum) && amountNum > 0 && start && !endError;
-    if (!valid || save.isPending) return;
+    if (!name.trim() || !amountValid || !dateValid || (needsProvider && !provider.trim()) || save.isPending) return;
     save.mutate({
       name: name.trim(),
       category,
-      amount_idr: amountNum,
-      period,
-      start_date: start,
-      ...(period === "monthly" && end ? { end_date: end } : {}),
+      provider: provider.trim(),
+      currency,
+      amount: amountNum,
+      payment_method: method,
       note: note.trim(),
+      paid_date: paidDate,
     });
   };
 
   return (
-    <Modal open onClose={save.isPending ? () => {} : onClose} title={cost ? "Edit cost" : "Add cost"} subtitle="Hosting operating cost">
+    <Modal
+      open
+      onClose={save.isPending ? () => {} : onClose}
+      title={cost ? "Edit payment" : "Record payment"}
+      subtitle={cost ? `Paid ${dateID(cost.paid_at)}` : "It counts in the month of its paid date."}
+    >
       <form onSubmit={onSubmit} noValidate>
         <div className="space-y-4 px-5 py-4">
           <Field label="Name" error={nameError} required>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="VPS Contabo 8 GB" autoFocus />
           </Field>
+          <Field label="Paid on" error={dateError} hint={dateError ? undefined : "Defaults to today. Pick an earlier day for a past bill."} required>
+            <Input type="date" value={paidDate} min="2000-01-01" max={today} onChange={(e) => setPaidDate(e.target.value)} className="tabular-nums" />
+          </Field>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Category">
-              <Select value={category} onChange={(e) => setCategory(e.target.value as HostingCostCategory)}>
-                {(Object.keys(CATEGORY_LABEL) as HostingCostCategory[]).map((k) => (
+              <Select value={category} onChange={(e) => setCategory(e.target.value as CostPaymentCategory)}>
+                {(Object.keys(CATEGORY_LABEL) as CostPaymentCategory[]).map((k) => (
                   <option key={k} value={k}>
                     {CATEGORY_LABEL[k]}
                   </option>
                 ))}
               </Select>
             </Field>
-            <Field label="Billing" hint={period === "monthly" ? "Counted in full every month while active." : "Counted once, in the start date's month."}>
-              <Select value={period} onChange={(e) => setPeriod(e.target.value as HostingCostPeriod)}>
-                <option value="monthly">Monthly</option>
-                <option value="one_time">One-time</option>
+            <Field label="Payment method">
+              <Select value={method} onChange={(e) => setMethod(e.target.value as CostPaymentMethod)}>
+                {(Object.keys(METHOD_LABEL) as CostPaymentMethod[]).map((k) => (
+                  <option key={k} value={k}>
+                    {METHOD_LABEL[k]}
+                  </option>
+                ))}
               </Select>
             </Field>
           </div>
-          <Field label="Amount (IDR)" error={amountError} hint={!amountError && amountNum > 0 ? idr(amountNum) : undefined} required>
-            <Input type="number" inputMode="numeric" min="1" step="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="250000" className="tabular-nums" />
-          </Field>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Start date" error={startError} required>
-              <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+          {needsProvider && (
+            <Field label="Provider" error={providerError} required>
+              <Input value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="OpenRouter" maxLength={120} />
             </Field>
-            {period === "monthly" && (
-              <Field label="End date" optional hint={endError ? undefined : "Leave empty while ongoing."} error={endError}>
-                <Input type="date" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} />
-              </Field>
-            )}
+          )}
+          <div className="space-y-1.5">
+            <span id="cost-currency-label" className="block text-[12.5px] font-medium text-fg">
+              Currency
+            </span>
+            <SegmentedControl<CostCurrency>
+              aria-labelledby="cost-currency-label"
+              value={currency}
+              onChange={setCurrency}
+              options={[
+                { value: "USD", label: "USD", disabled: Boolean(cost) && cost?.currency !== "USD" },
+                { value: "IDR", label: "IDR", disabled: Boolean(cost) && cost?.currency !== "IDR" },
+              ]}
+            />
+            {cost && <p className="text-[12px] text-fg-muted">The currency of a saved payment is fixed. Delete it and record a new one to change it.</p>}
           </div>
-          <Field label="Note" optional>
-            <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. customer server, paid by credit card" />
+          <Field label={currency === "USD" ? "Amount (USD)" : "Amount (IDR)"} error={amountError} hint={amountHint} required>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min={currency === "USD" ? "0.01" : "1"}
+              step={currency === "USD" ? "0.01" : "1"}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder={currency === "USD" ? "12.50" : "250000"}
+              className="tabular-nums"
+            />
           </Field>
-          {save.isError && <ErrorBanner message={`Couldn't save cost. ${errorText(save.error)}`} />}
+          <Field label="Note" optional>
+            <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="e.g. invoice number or the card used" />
+          </Field>
+          {save.isError && <ErrorBanner message={`Couldn't save payment. ${errorText(save.error)}`} />}
         </div>
         <ModalFooter>
           <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
@@ -577,7 +644,7 @@ function CostModal({ cost, onClose }: { cost: HostingCost | null; onClose: () =>
           </Button>
           <Button type="submit" disabled={save.isPending}>
             {save.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}
-            {cost ? "Save" : "Add"}
+            {cost ? "Save" : "Record"}
           </Button>
         </ModalFooter>
       </form>

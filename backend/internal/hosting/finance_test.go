@@ -13,23 +13,6 @@ var WIB = time.FixedZone("WIB", 7*3600)
 
 func init() { Zone = WIB }
 
-func TestCostInMonth(t *testing.T) {
-	oct := time.Date(2026, 10, 1, 0, 0, 0, 0, WIB)
-	monthly := store.HostingCost{AmountIDR: 100, Period: store.CostMonthly, StartDate: "2026-09-15"}
-	require.EqualValues(t, 100, CostInMonth(monthly, oct))
-	require.EqualValues(t, 0, CostInMonth(monthly, oct.AddDate(0, -2, 0)), "before start")
-
-	ended := monthly
-	ended.EndDate = "2026-09-30"
-	require.EqualValues(t, 0, CostInMonth(ended, oct), "ended last month")
-	ended.EndDate = "2026-10-01"
-	require.EqualValues(t, 100, CostInMonth(ended, oct), "ends inside the month")
-
-	once := store.HostingCost{AmountIDR: 900, Period: store.CostOneTime, StartDate: "2026-10-31"}
-	require.EqualValues(t, 900, CostInMonth(once, oct))
-	require.EqualValues(t, 0, CostInMonth(once, oct.AddDate(0, 1, 0)))
-}
-
 func TestMonths(t *testing.T) {
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, WIB)
 	orders := []store.PaymentOrder{
@@ -41,7 +24,13 @@ func TestMonths(t *testing.T) {
 		{Product: store.ProductHosting, Status: store.PaymentPending, AmountIDR: 50000},
 		{Product: store.ProductCredit, Status: store.PaymentCompleted, AmountIDR: 999999, PaidAt: "2026-10-03T00:00:00Z"},
 	}
-	costs := []store.HostingCost{{AmountIDR: 120000, Period: store.CostMonthly, StartDate: "2026-09-01"}}
+	costs := []store.CostPayment{
+		{AmountIDR: 120000, PaidAt: time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)},
+		// 2026-09-30T18:00Z is 1 Oct 01:00 WIB: counts in October.
+		{AmountIDR: 5000, PaidAt: time.Date(2026, 9, 30, 18, 0, 0, 0, time.UTC)},
+		{AmountIDR: 7000, PaidAt: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)},
+		{AmountIDR: 999, PaidAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)},
+	}
 	m := Months(orders, costs, now, 2)
 	require.Len(t, m, 2)
 	require.Equal(t, "2026-09", m[0].Month)
@@ -50,6 +39,7 @@ func TestMonths(t *testing.T) {
 	require.EqualValues(t, 100000, m[1].RevenueIDR)
 	require.Equal(t, 2, m[1].Orders)
 	require.EqualValues(t, 50000, m[1].RefundIDR)
-	require.EqualValues(t, 120000, m[1].CostIDR)
-	require.EqualValues(t, -20000, m[1].ProfitIDR)
+	require.EqualValues(t, 7000, m[0].CostIDR)
+	require.EqualValues(t, 125000, m[1].CostIDR)
+	require.EqualValues(t, -25000, m[1].ProfitIDR)
 }

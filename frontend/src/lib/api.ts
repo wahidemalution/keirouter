@@ -470,6 +470,9 @@ export interface ChainStep {
   static_cache_read_per_m?: number | null;
   static_cache_write_per_m?: number | null;
   markup_percent?: number | null;
+  discount_percent?: number | null;
+  cost_multiplier?: number | null;
+  display_name?: string;
 }
 
 // ChainStepPayload is one step in a chain create/update body: a market slug
@@ -483,7 +486,39 @@ export type ChainStepPayload = {
   static_cache_read_per_m?: number | null;
   static_cache_write_per_m?: number | null;
   markup_percent?: number | null;
+  /** Set on a discount step: the static rates are a list price the customer
+   * pays (100 − discount_percent)% of, with no markup. */
+  discount_percent?: number | null;
+  /** Operator cost as a fraction of list on a discount step; null = cost
+   * equals the customer price. */
+  cost_multiplier?: number | null;
+  display_name?: string;
 };
+
+/** A model's models.dev list price per 1M tokens. Null cache = unlisted. */
+export interface ModelReferencePrice {
+  model: string;
+  provider: string;
+  input_per_m: number;
+  output_per_m: number;
+  cache_read_per_m: number | null;
+  cache_write_per_m: number | null;
+}
+
+/** A chain's final fallback price per 1M tokens. Input and output at 0 mean
+ * the models.dev price (auto). markup_percent null means no markup. */
+export interface ChainFallbackPricePayload {
+  input_per_m: number;
+  output_per_m: number;
+  cache_read_per_m: number | null;
+  cache_write_per_m: number | null;
+  markup_percent: number | null;
+}
+
+export interface ChainFallbackPrice extends ChainFallbackPricePayload {
+  /** models.dev price of the saved fallback model; null when it has none. */
+  auto: { input_per_m: number; output_per_m: number; source: "models.dev" } | null;
+}
 
 export interface Chain {
   id: string;
@@ -493,6 +528,8 @@ export interface Chain {
   capability_overrides?: string;
   fallback_provider?: string;
   fallback_model?: string;
+  /** The final fallback's own price; present when the chain has a fallback. */
+  fallback_price?: ChainFallbackPrice;
   input_per_m: number;
   output_per_m: number;
   cache_write_per_m: number;
@@ -505,6 +542,10 @@ export interface Chain {
   sold_out?: boolean;
   /** Operator took the chain off sale: shown as sold out, requests refused with 503. */
   disabled?: boolean;
+  /** Operator disabled the chain for maintenance: requests refused with 503, left out of the portal and public catalog. */
+  maintenance?: boolean;
+  /** Left out of the portal and public catalog; keys allowed to call it still can. */
+  hidden?: boolean;
   /** Manual official price per 1M tokens; null/undefined = detected automatically. */
   official_input_per_m?: number | null;
   official_output_per_m?: number | null;
@@ -1713,6 +1754,105 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return res.json() as Promise<T>;
 }
 
+// Scheduled offsite backup (S3 / FTP). Secrets come back only as { set }.
+export interface SecretState {
+  set: boolean;
+}
+export interface AutoBackupSettings {
+  enabled: boolean;
+  destination: "s3" | "ftp";
+  interval_hours: number;
+  keep: number;
+  upload_limit_kbps: number;
+  passphrase: SecretState;
+  s3: {
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    access_key_id: string;
+    secret_access_key: SecretState;
+    path_style: boolean;
+  };
+  ftp: {
+    host: string;
+    port: number;
+    tls: "explicit" | "none";
+    username: string;
+    password: SecretState;
+    folder: string;
+  };
+}
+/** The save/test body: secrets are plain strings, empty keeps the stored one. */
+export type AutoBackupInput = Omit<AutoBackupSettings, "passphrase" | "s3" | "ftp"> & {
+  passphrase: string;
+  s3: Omit<AutoBackupSettings["s3"], "secret_access_key"> & { secret_access_key: string };
+  ftp: Omit<AutoBackupSettings["ftp"], "password"> & { password: string };
+};
+export interface AutoBackupRun {
+  started_at: string;
+  result: "success" | "failed" | "cancelled";
+  size: number;
+  duration_ms: number;
+  note: string;
+  file: string;
+}
+export interface AutoBackupStatus {
+  state: {
+    last_success: string;
+    last_attempt: string;
+    last_failed: boolean;
+    consecutive_failures: number;
+    last_size: number;
+    last_file: string;
+  };
+  next_due: string;
+  running: boolean;
+  bytes_sent: number;
+  bytes_total: number;
+  failing: boolean;
+  history: AutoBackupRun[];
+}
+export interface AutoBackupView {
+  settings: AutoBackupSettings;
+  status: AutoBackupStatus;
+}
+/** An auto-backup request error; field names the setting that failed validation. */
+export class AutoBackupError extends Error {
+  status: number;
+  field?: string;
+  constructor(status: number, message: string, field?: string) {
+    super(message);
+    this.status = status;
+    this.field = field;
+  }
+}
+
+async function autoBackupRequest<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+  const res = await fetchWithTimeout(
+    `/api/settings/auto-backup${path}`,
+    {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    let message = res.statusText;
+    let field: string | undefined;
+    try {
+      const data = await res.json();
+      message = data?.error?.message ?? message;
+      field = data?.error?.field;
+    } catch {
+      // keep statusText
+    }
+    throw new AutoBackupError(res.status, message, field);
+  }
+  return res.json() as Promise<T>;
+}
+
 export interface FullRestoreResult {
   ok: boolean;
   tables: number;
@@ -1810,6 +1950,10 @@ export interface KeyUsageData {
 export interface PortalRecentRequest {
   id: string;
   provider: string;
+  /** Provider as the customer knows it, e.g. "DeepSeek" for a Surplus route. */
+  provider_name?: string;
+  /** Billed cost's discount below the official price; null when unknown. */
+  discount_pct?: number | null;
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
@@ -1935,6 +2079,34 @@ export async function fetchKeyUsageById(id: string, days?: number): Promise<KeyU
   return request<KeyUsageData>("GET", `/keys/${encodeURIComponent(id)}/usage${qs}`);
 }
 
+/** The admin view of a key's model settings: the portal rows plus its provider ceiling. */
+export async function fetchKeyModelSettings(id: string): Promise<KeyModelSettings> {
+  return request<KeyModelSettings>("GET", `/keys/${encodeURIComponent(id)}/model-settings`);
+}
+
+/** Replace a key's allowed-providers ceiling. An empty list allows every provider. */
+export async function setKeyAllowedProviders(id: string, providers: string[]): Promise<{ allowed_providers: string[] }> {
+  return request<{ allowed_providers: string[] }>("PUT", `/keys/${encodeURIComponent(id)}/allowed-providers`, { providers });
+}
+
+/** Turn one provider on or off for one of the key's models; answers with the updated row. */
+export async function setKeyModelProvider(id: string, model: string, provider: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  return request<PortalModelSettingsRow>(
+    "PUT",
+    `/keys/${encodeURIComponent(id)}/model-settings/${encodeURIComponent(model)}/providers/${encodeURIComponent(provider)}`,
+    { enabled },
+  );
+}
+
+/** Turn a model's final fallback on or off for the key; answers with the updated row. */
+export async function setKeyFinalFallback(id: string, model: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  return request<PortalModelSettingsRow>(
+    "PUT",
+    `/keys/${encodeURIComponent(id)}/model-settings/${encodeURIComponent(model)}/final-fallback`,
+    { enabled },
+  );
+}
+
 async function fetchPortalKeyUsage(path: string, days?: number): Promise<KeyUsageData> {
   const qs = days ? `?days=${days}` : "";
   const resp = await fetch(`${path}${qs}`);
@@ -1951,6 +2123,32 @@ export function fetchPortalUsage(days?: number): Promise<KeyUsageData> {
 /** Usage of the token package key. */
 export function fetchPortalTokenUsage(days?: number): Promise<KeyUsageData> {
   return fetchPortalKeyUsage("/portal/api/token/usage", days);
+}
+
+/** One model the portal key may call, with its best price per 1M tokens. */
+export interface PortalModelPrice {
+  name: string;
+  provider: string;
+  provider_id: string;
+  input_per_m: number;
+  output_per_m: number;
+  cached_per_m: number;
+  /** live follows the market (the price is today's cheapest offer), fixed is set. Empty when sold out. */
+  price_basis: "live" | "fixed" | "";
+  max_input_per_m: number | null;
+  max_output_per_m: number | null;
+  official_input_per_m: number | null;
+  official_output_per_m: number | null;
+  discount_up_to_pct: number | null;
+  context_tokens: number | null;
+  sold_out: boolean;
+}
+
+export async function fetchPortalModels(): Promise<{ models: PortalModelPrice[] }> {
+  const resp = await fetch("/portal/api/models");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load models");
+  return data;
 }
 
 export async function portalLogout(): Promise<void> {
@@ -2109,7 +2307,13 @@ export interface PaymentSummary {
   count_by_status: Record<string, number>;
 }
 
-export type FinanceRange = "today" | "7d" | "30d" | "all";
+export type FinanceRange = "today" | "7d" | "30d" | "all" | "custom";
+
+/** Days for range "custom", YYYY-MM-DD in the server zone, both inclusive. */
+export interface FinanceCustomRange {
+  from: string;
+  to: string;
+}
 
 export interface FinanceOverview {
   /** What users were charged: upstream cost plus markup. */
@@ -2144,6 +2348,9 @@ export interface FinanceSeries {
 
 export interface FinanceReport {
   range: FinanceRange;
+  /** Set only for range "custom". */
+  from?: string;
+  to?: string;
   overview: FinanceOverview;
   series: FinanceSeries;
 }
@@ -2189,7 +2396,7 @@ export async function setPortalDiscountFloor(minDiscountPct: number): Promise<{ 
   return data;
 }
 
-/** One model row on the portal's Discount Settings page. */
+/** The discount fields of one model row on the portal's Model Settings page. */
 export interface PortalDiscountModel {
   model: string;
   /** False when no step of the chain can guarantee a discount. */
@@ -2198,20 +2405,6 @@ export interface PortalDiscountModel {
   override_pct: number | null;
   /** What requests for this model must meet. */
   effective_pct: number;
-}
-
-export interface PortalDiscounts {
-  default_pct: number;
-  max_pct: number;
-  models: PortalDiscountModel[];
-}
-
-/** The key's default minimum discount and its per-model overrides. */
-export async function fetchPortalDiscounts(): Promise<PortalDiscounts> {
-  const resp = await fetch("/portal/api/discounts");
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load discount settings");
-  return data;
 }
 
 /** Set one model's minimum discount, overriding the key default. */
@@ -2230,6 +2423,107 @@ export async function resetPortalModelDiscount(model: string): Promise<void> {
   const resp = await fetch(`/portal/api/discounts/models/${encodeURIComponent(model)}`, { method: "DELETE" });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to reset minimum discount");
+}
+
+/** One provider a model can route through, on the portal's Model Settings page. */
+export interface PortalModelProvider {
+  /** keirouter provider id, used in the toggle URL. */
+  id: string;
+  name: string;
+  /** Inside the admin ceiling and not turned off by the customer. */
+  enabled: boolean;
+  /** Outside the admin ceiling: the customer cannot turn it on. */
+  locked: boolean;
+  /** False when none of its steps has a live offer right now. */
+  available: boolean;
+  /** Best customer price per 1M tokens, markup included; null when unknown. */
+  input_per_m: number | null;
+  output_per_m: number | null;
+  /** Best price's discount below the official price; null when no official price. */
+  discount_pct?: number | null;
+  /** Published 24h median latency in ms; null when unknown. */
+  latency_p50_ms?: number | null;
+  /** Every Surplus offer, cheapest first, markup included. */
+  offers?: PortalModelOffer[];
+}
+
+/** One Surplus offer on a provider, markup included. */
+export interface PortalModelOffer {
+  input_per_m: number;
+  output_per_m: number;
+  discount_pct: number | null;
+}
+
+/** One model row: the discount fields plus provider and fallback settings. */
+export interface PortalModelSettingsRow extends PortalDiscountModel {
+  providers: PortalModelProvider[];
+  /** The model's chain has a final fallback the toggle can turn on. */
+  has_fallback: boolean;
+  final_fallback: boolean;
+  /** On because it was kept from before per-key routing, not chosen. */
+  final_fallback_kept?: boolean;
+  /**
+   * Routing really tries the fallback for this key and model. False when it
+   * is off, or kept from before while a minimum discount applies.
+   */
+  fallback_runs: boolean;
+  /** The fallback's normal price per 1M tokens. */
+  fallback_input_per_m: number;
+  fallback_output_per_m: number;
+}
+
+export interface PortalModelSettings {
+  default_pct: number;
+  max_pct: number;
+  models: PortalModelSettingsRow[];
+}
+
+/** A keirouter provider an admin may put on a key's allowed-providers ceiling. */
+export interface ProviderOption {
+  id: string;
+  name: string;
+}
+
+/** An API key's model settings as the admin sees them, plus its provider ceiling. */
+export interface KeyModelSettings extends PortalModelSettings {
+  /** Empty means every provider is allowed. */
+  allowed_providers: string[];
+  provider_options: ProviderOption[];
+}
+
+/** The key's discount, provider and final-fallback settings for every model it may call. */
+export async function fetchPortalModelSettings(): Promise<PortalModelSettings> {
+  const resp = await fetch("/portal/api/model-settings");
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to load model settings");
+  return data;
+}
+
+/** Turn one provider on or off for a model; answers with the updated row. */
+export async function setPortalModelProvider(model: string, provider: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  const resp = await fetch(
+    `/portal/api/model-settings/${encodeURIComponent(model)}/providers/${encodeURIComponent(provider)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to save provider setting");
+  return data;
+}
+
+/** Turn a model's final fallback on or off; answers with the updated row. */
+export async function setPortalFinalFallback(model: string, enabled: boolean): Promise<PortalModelSettingsRow> {
+  const resp = await fetch(`/portal/api/model-settings/${encodeURIComponent(model)}/final-fallback`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.error?.message || data.error || "Failed to save final fallback");
+  return data;
 }
 
 /** Read-only topup ledger + balance for the signed-in portal user. */
@@ -2628,33 +2922,43 @@ export interface HostingFinanceMonth {
   refund_idr: number;
 }
 
-export type HostingCostCategory = "vps" | "domain" | "software" | "other";
-export type HostingCostPeriod = "monthly" | "one_time";
+export type CostPaymentCategory = "vps" | "upstream_ai" | "domain" | "software" | "other";
+export type CostPaymentMethod = "debit_card" | "credit_card" | "bank_transfer" | "crypto";
+export type CostCurrency = "USD" | "IDR";
 
-export interface HostingCost {
+/** One paid operating cost. paid_at is when it was paid: the moment it was
+ * recorded, or noon of a back-dated day. A USD payment keeps the USD->IDR
+ * rate of the moment it was recorded, so amount_idr never changes. */
+export interface CostPayment {
   id: string;
   name: string;
-  category: HostingCostCategory;
+  category: CostPaymentCategory;
+  provider: string;
+  currency: CostCurrency;
+  /** Set for USD payments only. */
+  amount_usd: number | null;
+  usd_idr_rate: number | null;
   amount_idr: number;
-  period: HostingCostPeriod;
-  /** YYYY-MM-DD */
-  start_date: string;
-  /** "" or YYYY-MM-DD */
-  end_date: string;
+  payment_method: CostPaymentMethod;
+  paid_at: string;
   note: string;
   created_at: string;
   updated_at: string;
-  this_month_idr: number;
 }
 
-export interface HostingCostInput {
+export interface CostPaymentInput {
   name: string;
-  category: HostingCostCategory;
-  amount_idr: number;
-  period: HostingCostPeriod;
-  start_date: string;
-  end_date?: string;
+  category: CostPaymentCategory;
+  provider?: string;
+  /** Fixed once saved; ignored on update. */
+  currency: CostCurrency;
+  /** Dollars for USD, whole rupiah for IDR. */
+  amount: number;
+  payment_method: CostPaymentMethod;
   note?: string;
+  /** Day it was paid, YYYY-MM-DD in the server zone. Omitted: now on create,
+   * the saved date on update. */
+  paid_date?: string;
 }
 
 export interface HostingFinance {
@@ -2673,7 +2977,7 @@ export interface HostingFinance {
   totals: { revenue_idr: number; cost_idr: number; profit_idr: number };
   status_counts: Record<string, number>;
   refunds_needed: { order_id: string; amount_idr: number; paid_at: string; instance_id: string }[] | null;
-  costs: HostingCost[];
+  costs: CostPayment[];
   note: string;
 }
 
@@ -2834,13 +3138,19 @@ export const api = {
     request<HostingCoupon>("PUT", `/hosting/coupons/${encodeURIComponent(id)}`, body),
   deleteHostingCoupon: (id: string) => request<{ deleted: boolean }>("DELETE", `/hosting/coupons/${encodeURIComponent(id)}`),
   hostingFinance: (months: number) => request<HostingFinance>("GET", `/hosting/finance?months=${months}`),
-  createHostingCost: (body: HostingCostInput) => request<HostingCost>("POST", "/hosting/costs", body),
-  updateHostingCost: (id: string, body: HostingCostInput) => request<HostingCost>("PUT", `/hosting/costs/${encodeURIComponent(id)}`, body),
-  deleteHostingCost: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
+  createCostPayment: (body: CostPaymentInput) => request<CostPayment>("POST", "/hosting/costs", body),
+  updateCostPayment: (id: string, body: CostPaymentInput) => request<CostPayment>("PUT", `/hosting/costs/${encodeURIComponent(id)}`, body),
+  deleteCostPayment: (id: string) => request<void>("DELETE", `/hosting/costs/${encodeURIComponent(id)}`),
 
   // Finance monitor (admin): credit, revenue and provider cost.
-  financeReport: (range: FinanceRange) =>
-    request<FinanceReport>("GET", `/payments/finance?range=${encodeURIComponent(range)}`),
+  financeReport: (range: FinanceRange, custom?: FinanceCustomRange) => {
+    const q = new URLSearchParams({ range });
+    if (range === "custom" && custom) {
+      q.set("from", custom.from);
+      q.set("to", custom.to);
+    }
+    return request<FinanceReport>("GET", `/payments/finance?${q}`);
+  },
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
   createKey: (name: string, opts?: {
@@ -2906,11 +3216,13 @@ export const api = {
     request<CodexUsageDetails>("GET", `/accounts/${id}/codex-usage-details`),
 
   listChains: () => request<{ chains: Chain[] }>("GET", "/chains"),
-  createChain: (input: { name: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; steps: ChainStepPayload[] }) =>
+  createChain: (input: { name: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; fallback_price?: ChainFallbackPricePayload; steps: ChainStepPayload[] }) =>
     request<{ id: string }>("POST", "/chains", input),
-  updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; steps?: ChainStepPayload[] }) =>
+  updateChain: (id: string, patch: { name?: string; strategy?: string; display_provider?: string; fallback_provider?: string; fallback_model?: string; input_per_m?: number; output_per_m?: number; cache_write_per_m?: number; cache_read_per_m?: number; market_slugs?: string[]; reorder_by_market?: boolean; markup_percent?: number | null; official_input_per_m?: number | null; official_output_per_m?: number | null; disabled?: boolean; maintenance?: boolean; hidden?: boolean; fallback_price?: ChainFallbackPricePayload; steps?: ChainStepPayload[] }) =>
     request<{ id: string }>("PATCH", `/chains/${id}`, patch),
   deleteChain: (id: string) => request<void>("DELETE", `/chains/${id}`),
+  modelReference: (model: string) =>
+    request<ModelReferencePrice>("GET", `/model-reference?model=${encodeURIComponent(model)}`),
 
   listBudgets: () => request<{ budgets: Budget[] }>("GET", "/budgets"),
   budgetStatus: () => request<{ budgets: BudgetStatus[] }>("GET", "/budgets/status"),
@@ -2993,6 +3305,9 @@ export const api = {
   updateMarketPricingSettings: (patch: Partial<Pick<MarketPricingSettings, "auto_refresh" | "refresh_interval_seconds" | "markup_percent" | "safety_margin_enabled" | "safety_margin_percent" | "surplus_fallback_depth">>) =>
     request<MarketPricingSettings>("PATCH", "/market-pricing/settings", patch),
   refreshMarketPrices: () => request<{ synced: number; last_fetched_at: string }>("POST", "/market-pricing/refresh", {}),
+  /** Surplus provider ids and names for a model; complete=false is a cached fallback. */
+  surplusProviders: (model: string) =>
+    request<{ providers: { id: string; name: string }[]; complete: boolean }>("GET", `/market-pricing/surplus-providers?model=${encodeURIComponent(model)}`),
   publicPricing: () => request<PublicPricingSettings>("GET", "/public-pricing"),
   updatePublicPricing: (body: { enabled: boolean; chain_ids: string[] }) =>
     request<PublicPricingSettings>("PUT", "/public-pricing", body),
@@ -3072,6 +3387,11 @@ export const api = {
     if (!res.ok) throw new APIError(res.status, await errorMessage(res));
     return res.json() as Promise<FullRestoreResult>;
   },
+
+  getAutoBackup: () => autoBackupRequest<AutoBackupView>("GET", ""),
+  saveAutoBackup: (input: AutoBackupInput) => autoBackupRequest<AutoBackupView>("POST", "", input),
+  testAutoBackup: (input: AutoBackupInput) => autoBackupRequest<{ ok: true }>("POST", "/test", input, 90_000),
+  runAutoBackup: () => autoBackupRequest<{ started: true }>("POST", "/run", {}),
 
   sqliteStatus: () => request<SQLiteStatus>("GET", "/settings/sqlite"),
   backupSQLite: () => requestBlob("GET", "/settings/sqlite/backup"),

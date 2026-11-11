@@ -74,6 +74,7 @@ type Pipeline struct {
 	telemetry  *health.Service
 	inflight   *inflight.Tracker
 	fastHealth *market.FastHealth
+	slugSkips  *market.SlugSkips
 
 	requestTimeout     time.Duration // upper bound on non-streaming upstream calls
 	streamStallTimeout time.Duration // aborts a stream with no bytes for this long
@@ -108,6 +109,9 @@ type Deps struct {
 	Inflight *inflight.Tracker
 	// FastHealth receives each surplus-fast attempt's outcome. Optional.
 	FastHealth *market.FastHealth
+	// SlugSkips collects market slugs Surplus reports out of stock, so routing
+	// stops sending to them until the next market refresh. Optional.
+	SlugSkips *market.SlugSkips
 }
 
 // New builds a Pipeline.
@@ -131,6 +135,7 @@ func New(d Deps) *Pipeline {
 		telemetry:  d.Telemetry,
 		inflight:   d.Inflight,
 		fastHealth: d.FastHealth,
+		slugSkips:  d.SlugSkips,
 
 		requestTimeout:     d.RequestTimeout,
 		streamStallTimeout: d.StreamStallTimeout,
@@ -255,14 +260,20 @@ type Result struct {
 
 // Chat runs a non-streaming request through the full pipeline with fallback.
 func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options) (*Result, error) {
+	res, err := p.chat(ctx, req, opts)
+	// Backstop: drop the budget reservation if no path settled it. Release
+	// after Confirm is a no-op.
+	p.budgetRelease(budgetScopeFor(req.Metadata))
+	return res, err
+}
+
+func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options) (*Result, error) {
 	requestStarted := time.Now()
 	if err := p.preflight(ctx, req, opts); err != nil {
 		p.log.Debug("preflight rejected", "err", err)
 		p.recordLocalTerminal(ctx, req.Metadata, opts.Targets, err, requestStarted)
 		return nil, err
 	}
-	// Covers exits that neither confirm nor release; a no-op after either.
-	defer p.budgetRelease(budgetScopeFor(req.Metadata))
 	release, err := p.acquireLimit(ctx, req, opts)
 	if err != nil {
 		scope := budgetScopeFor(req.Metadata)
@@ -1714,18 +1725,36 @@ func (p *Pipeline) preflight(ctx context.Context, req *core.ChatRequest, opts Op
 	return p.reserveBudget(ctx, req, opts)
 }
 
+// budgetEstimateMargin pads the prompt estimate. The token heuristic is
+// calibrated to o200k; other tokenizers (Claude's in particular) count more
+// tokens for the same text, and an estimate that runs low lets a request
+// spend past the balance.
+const budgetEstimateMargin = 1.25
+
+// budgetOutputAllowance is the output a request reserves for when the client
+// sets no smaller max_tokens. Agents ask for 32k+ max_tokens but most replies
+// are a few hundred tokens; reserving the full max would lock small balances
+// out, so this covers typical replies and longer ones settle on completion.
+const budgetOutputAllowance = 2048
+
 // tokenOutputCeiling is the output cap given to a token-metered request that
 // names none.
 const tokenOutputCeiling = 32768
 
-// reserveBudget holds the request's budget and records the hold on its
-// metadata. A token-metered request's output is clamped to the granted cap.
+// reserveBudget reserves the request's estimated cost against its budgets and
+// records the reservation on req.Metadata. The prompt is billed by the
+// upstream before the first output token, so this is the point where an
+// unaffordable request must be refused. A token-metered request also holds
+// its prompt plus an output cap against its token budget, and its output is
+// clamped to the granted cap.
 func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opts Options) error {
+	req.Metadata.BudgetReservation = 0
 	if p.budget == nil {
 		return nil
 	}
 	var est budget.Estimate
 	if opts.TokenMetered {
+		// Before the cost estimate: it drops service_tier, which prices it.
 		if err := limitTokenMeteredParams(req); err != nil {
 			return err
 		}
@@ -1739,11 +1768,14 @@ func (p *Pipeline) reserveBudget(ctx context.Context, req *core.ChatRequest, opt
 			MaxOutputTokens: want,
 		}
 	}
+	prompt, micros := p.estimateRequest(req, opts.Targets)
+	est.Micros = micros
+	req.Metadata.BudgetEstPromptTokens, req.Metadata.BudgetEstMicros = prompt, micros
 	res, err := p.budget.Reserve(ctx, budgetScopeFor(req.Metadata), est)
 	if err != nil {
 		return err
 	}
-	req.Metadata.BudgetHold = res.ID
+	req.Metadata.BudgetReservation = res.ID
 	if res.OutputCap > 0 {
 		clampOutputTokens(req, res.OutputCap)
 		req.Metadata.BudgetPromptTokens = est.PromptTokens
@@ -1822,8 +1854,63 @@ func retryOutputCap(md core.RequestMetadata, prior core.Usage) (int64, bool) {
 	return left, left >= 1
 }
 
+// budgetScopeFor is the budget scope of a request, carrying its reservation.
 func budgetScopeFor(md core.RequestMetadata) budget.Scope {
-	return budget.Scope{TenantID: md.TenantID, ProjectID: md.ProjectID, APIKeyID: md.APIKeyID, Hold: md.BudgetHold}
+	return budget.Scope{TenantID: md.TenantID, ProjectID: md.ProjectID, APIKeyID: md.APIKeyID, Reservation: md.BudgetReservation}
+}
+
+// estimateRequest returns the padded prompt token estimate and the request's
+// cost estimate: that prompt, uncached, plus the output allowance at the most
+// expensive target, since fallback may land on any of them.
+func (p *Pipeline) estimateRequest(req *core.ChatRequest, targets []dispatch.Target) (promptTokens int, micros int64) {
+	if p.meter == nil {
+		return 0, 0
+	}
+	prompt := int(math.Ceil(float64(core.EstimatePromptTokens(req)) * budgetEstimateMargin))
+	if prompt <= 0 {
+		return 0, 0
+	}
+	output := budgetOutputAllowance
+	if req.MaxTokens != nil && *req.MaxTokens > 0 {
+		output = min(output, *req.MaxTokens)
+	}
+	var worst int64
+	for _, t := range targets {
+		ev := targetPriceEvent(t, req.Metadata.ServiceTier)
+		ev.Usage = core.Usage{PromptTokens: prompt, CompletionTokens: output}
+		worst = max(worst, p.meter.QuoteMicros(ev))
+	}
+	return prompt, worst
+}
+
+// targetPriceEvent carries a target's prices into a meter event. Billing and
+// the pre-dispatch budget estimate both build on it, so they price alike.
+func targetPriceEvent(t dispatch.Target, serviceTier string) meter.Event {
+	return meter.Event{
+		Provider:               t.Provider,
+		Model:                  t.Model,
+		ServiceTier:            serviceTier,
+		InputPerM:              t.InputPerM,
+		OutputPerM:             t.OutputPerM,
+		CacheWritePerM:         t.CacheWritePerM,
+		CacheReadPerM:          t.CacheReadPerM,
+		MarketSlug:             t.MarketSlug,
+		StaticPrice:            t.StaticPrice,
+		MarketRateIn:           t.MarketRateIn,
+		MarketRateOut:          t.MarketRateOut,
+		MarketCacheReadRate:    t.MarketCacheReadRate,
+		MarketCacheWriteRate:   t.MarketCacheWriteRate,
+		MarketReasoningRate:    t.MarketReasoningRate,
+		UpstreamRateIn:         t.UpstreamRateIn,
+		UpstreamRateOut:        t.UpstreamRateOut,
+		UpstreamCacheReadRate:  t.UpstreamCacheReadRate,
+		UpstreamCacheWriteRate: t.UpstreamCacheWriteRate,
+		UpstreamReasoningRate:  t.UpstreamReasoningRate,
+		CheapestRateIn:         t.InputPerM,
+		BillUpstreamCost:       t.BillUpstreamCost,
+		UpstreamCostMult:       t.UpstreamCostMult,
+		MinChargeMicro:         t.MinChargeMicro,
+	}
 }
 
 // budgetConfirm releases the reservation after successful metering.
@@ -2073,11 +2160,24 @@ func (p *Pipeline) recordTerminalStreamFailure(ctx context.Context, req *core.Ch
 	return pe
 }
 
+// skipOutOfStockSlug sets a market slug aside once Surplus says no seller can
+// serve it. Seller stock is the same for every key, so this is per slug.
+func (p *Pipeline) skipOutOfStockSlug(attempt dispatch.Attempt, pe *core.ProviderError) {
+	if pe != nil && pe.Kind == core.ErrModelOutOfStock && market.IsUpstreamCostSlug(attempt.Target.MarketSlug) {
+		if p.slugSkips.Add(attempt.Target.MarketSlug) {
+			p.log.Info("market slug set aside until the next refresh: out of stock", "slug", attempt.Target.MarketSlug)
+		}
+	}
+}
+
 // recordFailureTelemetry emits a best-effort health telemetry event for a
 // failed upstream attempt. fallbackable reports whether the dispatcher
-// advanced to the next candidate (i.e. fallback was triggered).
+// advanced to the next candidate (i.e. fallback was triggered). Every chat and
+// stream failure passes through here, so it is also where an out-of-stock
+// slug is recorded.
 func (p *Pipeline) recordFailureTelemetry(meta core.RequestMetadata, attempt dispatch.Attempt,
 	pe *core.ProviderError, latency time.Duration, fallbackable bool) {
+	p.skipOutOfStockSlug(attempt, pe)
 	if p.telemetry == nil || pe == nil {
 		return
 	}
@@ -2514,51 +2614,30 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 	if usage.Source == "" && usage.PromptTokens+usage.CompletionTokens > 0 {
 		usage.Source = core.UsageSourceProvider
 	}
-	ev := meter.Event{
-		RequestID:              meta.RequestID,
-		TenantID:               meta.TenantID,
-		ProjectID:              meta.ProjectID,
-		APIKeyID:               meta.APIKeyID,
-		ChainID:                meta.ChainID,
-		InputPerM:              attempt.Target.InputPerM,
-		OutputPerM:             attempt.Target.OutputPerM,
-		CacheWritePerM:         attempt.Target.CacheWritePerM,
-		CacheReadPerM:          attempt.Target.CacheReadPerM,
-		MarketSlug:             attempt.Target.MarketSlug,
-		StaticPrice:            attempt.Target.StaticPrice,
-		MarketRateIn:           attempt.Target.MarketRateIn,
-		MarketRateOut:          attempt.Target.MarketRateOut,
-		MarketCacheReadRate:    attempt.Target.MarketCacheReadRate,
-		MarketCacheWriteRate:   attempt.Target.MarketCacheWriteRate,
-		MarketReasoningRate:    attempt.Target.MarketReasoningRate,
-		UpstreamRateIn:         attempt.Target.UpstreamRateIn,
-		UpstreamRateOut:        attempt.Target.UpstreamRateOut,
-		UpstreamCacheReadRate:  attempt.Target.UpstreamCacheReadRate,
-		UpstreamCacheWriteRate: attempt.Target.UpstreamCacheWriteRate,
-		UpstreamReasoningRate:  attempt.Target.UpstreamReasoningRate,
-		CheapestRateIn:         attempt.Target.InputPerM,
-		BillUpstreamCost:       attempt.Target.BillUpstreamCost,
-		UpstreamCostMult:       attempt.Target.UpstreamCostMult,
-		MinChargeMicro:         attempt.Target.MinChargeMicro,
-		FallbackCount:          meta.FallbackCount,
-		CostLookup:             attempt.Target.CostLookup,
-		UpstreamRequestID:      attempt.Upstream.RequestID(),
-		Streamed:               attempt.Upstream.Streamed(),
-		ServiceTier:            meta.ServiceTier,
-		Guardrail:              meta.Guardrail.Summary(),
-		Provider:               attempt.Target.Provider,
-		Model:                  attempt.Target.Model,
-		AccountID:              attempt.Account.ID,
-		Client:                 meta.ClientKind,
-		Status:                 status,
-		ErrorKind:              errorKind,
-		Usage:                  usage,
-		UsageSource:            string(usage.Source),
-		CacheHit:               cacheHit,
-		Latency:                upstreamLatency,
-		EndToEndLatency:        endToEndLatency,
-		TTFT:                   ttft,
-	}
+	ev := targetPriceEvent(attempt.Target, meta.ServiceTier)
+	ev.EstPromptTokens, ev.EstCostMicros = meta.BudgetEstPromptTokens, meta.BudgetEstMicros
+	ev.RequestID = meta.RequestID
+	ev.TenantID = meta.TenantID
+	ev.ProjectID = meta.ProjectID
+	ev.APIKeyID = meta.APIKeyID
+	ev.ChainID = meta.ChainID
+	ev.FallbackCount = meta.FallbackCount
+	ev.Guardrail = meta.Guardrail.Summary()
+	ev.AccountID = attempt.Account.ID
+	ev.Client = meta.ClientKind
+	ev.Status = status
+	ev.ErrorKind = errorKind
+	ev.Usage = usage
+	ev.UsageSource = string(usage.Source)
+	ev.CacheHit = cacheHit
+	ev.Latency = upstreamLatency
+	ev.EndToEndLatency = endToEndLatency
+	ev.TTFT = ttft
+	// Not part of the price: the request id lets a CostLookup target
+	// reconcile its cost later, so the budget quote leaves them out.
+	ev.CostLookup = attempt.Target.CostLookup
+	ev.UpstreamRequestID = attempt.Upstream.RequestID()
+	ev.Streamed = attempt.Upstream.Streamed()
 	if save != nil {
 		ev.SlimStats = save.slimSnap
 		ev.SlimActive = save.slim

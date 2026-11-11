@@ -384,3 +384,80 @@ func TestHTTPStatusError_SurplusMinimumDiscountNotMet(t *testing.T) {
 	require.True(t, pe.Fallbackable())
 	require.False(t, pe.Retryable())
 }
+
+// A Surplus key scoped to another upstream provider, or an account Surplus
+// restricted, fails identically on every retry of this account. Both are
+// configuration faults of the account, so they bench it and advance the chain
+// instead of reaching the customer as a request error.
+func TestHTTPStatusErrorSurplusConfigErrors(t *testing.T) {
+	cases := []struct {
+		name         string
+		status       int
+		body         string
+		kind         core.ErrorKind
+		fallbackable bool
+	}{
+		{"400 unsupported_provider", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"unsupported_provider","message":"provider 'foo' is not supported"}}`,
+			core.ErrAuth, true},
+		{"400 account_restricted", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"account_restricted","message":"this account is restricted"}}`,
+			core.ErrAuth, true},
+		{"403 provider_not_in_key_scope", http.StatusForbidden,
+			`{"error":{"type":"permission_error","code":"provider_not_in_key_scope","message":"key is not scoped to this provider"}}`,
+			core.ErrAuth, true},
+		{"400 invalid_request", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"invalid_request","message":"messages must not be empty"}}`,
+			core.ErrBadRequest, false},
+		{"400 code named in prose only", http.StatusBadRequest,
+			`{"error":{"type":"invalid_request_error","code":"invalid_request","message":"the model said unsupported_provider and account_restricted"}}`,
+			core.ErrBadRequest, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: tc.status, Header: http.Header{}}
+
+			pe := core.AsProviderError(httpStatusError("surplus", "glm-5.3", resp, []byte(tc.body)))
+
+			require.Equal(t, tc.kind, pe.Kind)
+			require.Equal(t, tc.fallbackable, pe.Fallbackable())
+			if tc.kind == core.ErrAuth {
+				require.Equal(t, core.FailureScopeAccount, pe.EffectiveScope())
+			}
+		})
+	}
+}
+
+// Surplus reserves the worst-case cost of every in-flight request against the
+// buyer balance. When those holds leave too little free balance it answers
+// 402 insufficient_credit even though the balance itself is fine, and the
+// holds clear within seconds. That must not park the account for a day.
+func TestHTTPStatusError_Surplus402InsufficientCreditIsNotTerminal(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.surplusintelligence.ai/v1/chat/completions", nil)
+	require.NoError(t, err)
+	resp := &http.Response{StatusCode: http.StatusPaymentRequired, Header: http.Header{}, Request: req}
+	body := []byte(`{"error":{"type":"payment_required","code":"insufficient_credit","message":"This request needs $0.0007 and your balance covers it, but another request in flight is holding that amount. Please retry in a moment."},"request_id":"01M6QGV6R3Z6ZSCC2QVPM07DK2"}`)
+
+	pe := core.AsProviderError(httpStatusError("custom-openai-surplus-openrouter", "deepseek-v4.1-flash-1017", resp, body))
+
+	require.Equal(t, core.ErrQuotaExhausted, pe.Kind)
+	require.Equal(t, core.FailureScopeAccount, pe.EffectiveScope())
+	require.False(t, pe.CreditsExhausted, "a Surplus balance hold must get the short quota cooldown, not the 24h park")
+	require.Equal(t, 5*time.Minute, pe.QuotaCooldown)
+	require.True(t, pe.Fallbackable())
+}
+
+// The Surplus exception is keyed on the upstream host: the same body from any
+// other gateway keeps the terminal credits-exhausted handling.
+func TestHTTPStatusError_402InsufficientCreditElsewhereStaysTerminal(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/v1/chat/completions", nil)
+	require.NoError(t, err)
+	resp := &http.Response{StatusCode: http.StatusPaymentRequired, Header: http.Header{}, Request: req}
+	body := []byte(`{"error":{"type":"payment_required","code":"insufficient_credit","message":"not enough credit"}}`)
+
+	pe := core.AsProviderError(httpStatusError("other", "model", resp, body))
+
+	require.Equal(t, core.ErrQuotaExhausted, pe.Kind)
+	require.True(t, pe.CreditsExhausted)
+	require.Zero(t, pe.QuotaCooldown)
+}

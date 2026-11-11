@@ -36,6 +36,7 @@ type e2eHarness struct {
 	apiKey   string
 	upstream *httptest.Server
 	budget   *budget.Engine
+	db       *store.DB
 }
 
 // e2eOptions customizes the harness; the zero value matches production defaults.
@@ -49,6 +50,9 @@ type e2eOptions struct {
 	requestTimeout, stallTimeout time.Duration
 	// headerTimeout is the stream response-header timeout; zero keeps 60s.
 	headerTimeout time.Duration
+	// modelPrices seeds the meter catalog ("provider/model" keys); nil
+	// leaves every model unpriced.
+	modelPrices map[string]meter.Price
 }
 
 // e2eTimeouts serves headerTimeout; zero values fall back to the pipeline's.
@@ -112,8 +116,9 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	// Wire pipeline + gateway.
 	connRegistry := connectors.DefaultRegistry()
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
-	mtr := meter.New(db.Usage(), nil, nil)
+	mtr := meter.New(db.Usage(), nil, o.modelPrices)
 	bud := budget.New(db.Budgets(), db.Usage())
+	mtr.AddUsageTracker(bud) // as internal/app wires it
 	pipeDeps := pipeline.Deps{Dispatcher: disp, Meter: mtr, Budget: bud,
 		RequestTimeout: o.requestTimeout, StreamStallTimeout: o.stallTimeout}
 	if o.headerTimeout > 0 {
@@ -138,7 +143,7 @@ func newE2E(t *testing.T, upstreamHandler http.HandlerFunc, opts ...func(*e2eOpt
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	return &e2eHarness{server: srv, handler: handler, gateway: gw, apiKey: issued.Plaintext, upstream: upstream, budget: bud}
+	return &e2eHarness{server: srv, handler: handler, gateway: gw, apiKey: issued.Plaintext, upstream: upstream, budget: bud, db: db}
 }
 
 func (h *e2eHarness) post(t *testing.T, path, body, auth string) *http.Response {

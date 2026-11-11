@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"math"
 	"time"
 )
 
@@ -232,8 +231,6 @@ func (r *UsageRepo) ReconcileDaySummary(ctx context.Context, provider string, fr
 	}
 	return out, nil
 }
-
-func nanosToMicros(n int64) int64 { return int64(math.Round(float64(n) / 1000)) }
 
 // TryAdvisoryLock takes a session-level Postgres advisory lock on a dedicated
 // connection without waiting. ok is false when another session holds it.

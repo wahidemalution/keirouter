@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
@@ -21,7 +23,13 @@ type chainStepInput struct {
 	StaticCacheReadPerM  *float64 `json:"static_cache_read_per_m"`
 	StaticCacheWritePerM *float64 `json:"static_cache_write_per_m"`
 	MarkupPercent        *float64 `json:"markup_percent"`
+	DiscountPercent      *float64 `json:"discount_percent"`
+	CostMultiplier       *float64 `json:"cost_multiplier"`
+	DisplayName          string   `json:"display_name"`
 }
+
+// maxStepDisplayName bounds the portal provider name of a step, in runes.
+const maxStepDisplayName = 60
 
 // toStore validates the step and converts it for storage. pos is the 0-based
 // step index; the returned string is the 400 message, "" when valid.
@@ -32,7 +40,18 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		Provider: in.Provider, Model: in.Model, MarketSlug: strings.TrimSpace(in.MarketSlug),
 		StaticInputPerM: in.StaticInputPerM, StaticOutputPerM: in.StaticOutputPerM,
 		StaticCacheReadPerM: in.StaticCacheReadPerM, StaticCacheWritePerM: in.StaticCacheWritePerM,
-		MarkupPercent: in.MarkupPercent, CreatedAt: now,
+		MarkupPercent: in.MarkupPercent, DiscountPercent: in.DiscountPercent, CostMultiplier: in.CostMultiplier,
+		DisplayName: strings.TrimSpace(in.DisplayName), CreatedAt: now,
+	}
+	if utf8.RuneCountInString(st.DisplayName) > maxStepDisplayName {
+		return st, prefix + fmt.Sprintf("display_name must be at most %d characters", maxStepDisplayName)
+	}
+	if err := market.ValidateStepSlug(st.MarketSlug, false); err != nil {
+		return st, prefix + err.Error()
+	}
+	// The market cache keys a per-provider slug by its lowercase provider id.
+	if provider, model, ok := market.ParseProviderSlug(st.MarketSlug); ok {
+		st.MarketSlug = market.ProviderSlug(provider, model)
 	}
 	for _, r := range []*float64{&in.StaticInputPerM, &in.StaticOutputPerM, in.StaticCacheReadPerM, in.StaticCacheWritePerM} {
 		if r != nil && !validRate(*r) {
@@ -40,8 +59,9 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		}
 	}
 	if !st.HasStaticPrice() {
-		if in.StaticCacheReadPerM != nil || in.StaticCacheWritePerM != nil || in.MarkupPercent != nil {
-			return st, prefix + "cache overrides and markup only apply to a static-price step"
+		if in.StaticCacheReadPerM != nil || in.StaticCacheWritePerM != nil || in.MarkupPercent != nil ||
+			in.DiscountPercent != nil || in.CostMultiplier != nil {
+			return st, prefix + "cache overrides, markup and discount only apply to a static-price step"
 		}
 		return st, ""
 	}
@@ -61,7 +81,29 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 	if in.MarkupPercent != nil && !validMarkup(*in.MarkupPercent) {
 		return st, prefix + "markup_percent must be between 0 and 1000"
 	}
-	return st, ""
+	return st, in.discountProblem(prefix)
+}
+
+// discountProblem validates the discount fields of a static step; "" when
+// valid. The customer price is list × (100 − discount) / 100, so a discount of
+// 100 or more would bill nothing or a negative amount.
+func (in chainStepInput) discountProblem(prefix string) string {
+	if in.DiscountPercent == nil {
+		if in.CostMultiplier != nil {
+			return prefix + "cost_multiplier only applies to a discount step"
+		}
+		return ""
+	}
+	if d := *in.DiscountPercent; !validRate(d) || d >= 100 {
+		return prefix + "discount_percent must be at least 0 and below 100"
+	}
+	if in.MarkupPercent != nil {
+		return prefix + "markup does not apply to a discount step; leave markup_percent empty"
+	}
+	if m := in.CostMultiplier; m != nil && (!validRate(*m) || *m <= 0 || *m > 100) {
+		return prefix + "cost_multiplier must be above 0 and at most 100"
+	}
+	return ""
 }
 
 // chainStepJSON is the admin list shape of one step. Nil pointers encode as
@@ -70,10 +112,13 @@ func chainStepJSON(st store.ChainStep) map[string]any {
 	return map[string]any{
 		"provider": st.Provider, "model": st.Model, "position": st.Position,
 		"market_slug":              st.MarketSlug,
+		"display_name":             st.DisplayName,
 		"static_input_per_m":       st.StaticInputPerM,
 		"static_output_per_m":      st.StaticOutputPerM,
 		"static_cache_read_per_m":  st.StaticCacheReadPerM,
 		"static_cache_write_per_m": st.StaticCacheWritePerM,
 		"markup_percent":           st.MarkupPercent,
+		"discount_percent":         st.DiscountPercent,
+		"cost_multiplier":          st.CostMultiplier,
 	}
 }

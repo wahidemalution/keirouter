@@ -16,17 +16,16 @@ func isStaticStep(t dispatch.Target) bool {
 // uses, so the meter bills the step that served the request. The step markup
 // wins over chainMarkup, which is the chain-effective markup. Cache rates the
 // operator left empty derive from the input price with the market ratios.
+//
+// A discount step reads its static rates as a list price instead: the
+// customer pays list × (100 − discount) / 100 with no markup, and the cost is
+// list × the cost multiplier, or the customer price when none is set.
 func priceStaticSteps(steps []dispatch.Target, chainMarkup float64) []dispatch.Target {
 	for i := range steps {
 		t := &steps[i]
 		if !isStaticStep(*t) {
 			continue
 		}
-		markup := chainMarkup
-		if t.StepMarkupSet {
-			markup = t.StepMarkupPercent
-		}
-		mult := 1 + markup/100
 		cacheRead := t.StaticInputPerM * market.CacheReadMult
 		if connectors.CostLookupEnabled(t.Provider) {
 			// Subrouter merchants often bill cache reads at the full input
@@ -40,12 +39,24 @@ func priceStaticSteps(steps []dispatch.Target, chainMarkup float64) []dispatch.T
 		if t.StaticCacheWriteSet {
 			cacheWrite = t.StaticCacheWritePerM
 		}
-		t.UpstreamRateIn, t.UpstreamRateOut = t.StaticInputPerM, t.StaticOutputPerM
-		t.UpstreamCacheReadRate, t.UpstreamCacheWriteRate = cacheRead, cacheWrite
-		t.UpstreamReasoningRate = t.StaticOutputPerM
-		t.MarketRateIn, t.MarketRateOut = t.StaticInputPerM*mult, t.StaticOutputPerM*mult
-		t.MarketCacheReadRate, t.MarketCacheWriteRate = cacheRead*mult, cacheWrite*mult
-		t.MarketReasoningRate = t.StaticOutputPerM * mult
+		bill, cost := 1+chainMarkup/100, 1.0
+		if t.StepMarkupSet {
+			bill = 1 + t.StepMarkupPercent/100
+		}
+		if t.DiscountSet {
+			// (100 − d) / 100 keeps 90 at exactly 0.1; 1 − d/100 does not.
+			bill = (100 - t.DiscountPercent) / 100
+			cost = bill
+			if t.CostMultiplierSet {
+				cost = t.CostMultiplier
+			}
+		}
+		t.UpstreamRateIn, t.UpstreamRateOut = t.StaticInputPerM*cost, t.StaticOutputPerM*cost
+		t.UpstreamCacheReadRate, t.UpstreamCacheWriteRate = cacheRead*cost, cacheWrite*cost
+		t.UpstreamReasoningRate = t.StaticOutputPerM * cost
+		t.MarketRateIn, t.MarketRateOut = t.StaticInputPerM*bill, t.StaticOutputPerM*bill
+		t.MarketCacheReadRate, t.MarketCacheWriteRate = cacheRead*bill, cacheWrite*bill
+		t.MarketReasoningRate = t.StaticOutputPerM * bill
 		t.StaticPrice = true
 	}
 	return steps

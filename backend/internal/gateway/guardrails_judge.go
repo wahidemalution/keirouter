@@ -25,7 +25,7 @@ func (s *Server) Complete(ctx context.Context, model string, req *core.ChatReque
 		tenant = store.DefaultTenantID
 		req.Metadata.TenantID = tenant
 	}
-	resolved, err := resolveTargets(ctx, s.chains, s.aliases, s.latencyReader(), tenant, model)
+	resolved, err := s.resolveJudgeTargets(ctx, tenant, model)
 	if err != nil {
 		return nil, fmt.Errorf("guardrails judge: resolve %q: %w", model, err)
 	}
@@ -45,6 +45,14 @@ func (s *Server) Complete(ctx context.Context, model string, req *core.ChatReque
 		return nil, err
 	}
 	return res.Response, nil
+}
+
+// resolveJudgeTargets resolves the judge model as the operator configured it.
+// The triggering key's provider settings and final-fallback choice cover the
+// models that key requests, not this internal chain, so they are left out of
+// resolution; usage is still metered on the caller's ctx.
+func (s *Server) resolveJudgeTargets(ctx context.Context, tenant, model string) (resolveResult, error) {
+	return resolveTargets(context.WithValue(ctx, apiKeyCtxKey, nil), s.chains, s.aliases, s.latencyReader(), tenant, model)
 }
 
 // adminGuardrailCapabilities reports which optional engines this server can

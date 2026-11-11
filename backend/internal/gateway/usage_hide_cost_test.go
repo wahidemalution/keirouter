@@ -14,9 +14,10 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/tokenpkg"
 )
 
-var costKeyRe = regexp.MustCompile(`(?i)cost|usd|spent`)
+var costKeyRe = regexp.MustCompile(`(?i)cost|usd|spent|discount`)
 
-// costKeyPaths lists the JSON path of every object key matching cost|usd|spent.
+// costKeyPaths lists the JSON path of every object key matching
+// cost|usd|spent|discount.
 func costKeyPaths(v any, path string) []string {
 	var out []string
 	switch x := v.(type) {

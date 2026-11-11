@@ -2,11 +2,13 @@
 // dedicated /model page. Extracted verbatim from PublicLanding so both surfaces
 // render identical cards and provider filters. No new dependency.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, Copy, Cpu, Search } from "lucide-react";
 import { ModelCapabilityIcons } from "./ModelCapabilityIcons";
+import { ModelDetailDialog } from "./ModelDetailDialog";
 import type { PublicModel } from "../lib/publicApi";
 import { familySlug, resolveProvider } from "../lib/providerResolve";
+import { fmtCount, fmtInt, fmtRate } from "../lib/format";
 
 export { familySlug, resolveProvider } from "../lib/providerResolve";
 
@@ -48,11 +50,9 @@ export function ProviderLogo({ providerId, modelId }: { providerId: string; mode
   );
 }
 
-const fmtInt = new Intl.NumberFormat("id-ID");
 const fmtCompact = new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 });
 
-export const fmtRate = (n: number) => `$${n.toLocaleString("id-ID", { maximumFractionDigits: 6 })}`;
-export const fmtCount = (n: number) => (n > 0 ? fmtInt.format(n) : "0");
+export { fmtRate, fmtCount };
 export const fmtShort = (n: number) => (n > 0 ? fmtCompact.format(n) : "0");
 
 // Context windows read as "1M", "1,05M" or "128K". Exact binary sizes
@@ -131,9 +131,13 @@ function cardDiscount(model: PublicModel): { pct: number; upTo: boolean } | null
   return pct > 0 ? { pct, upTo: false } : null;
 }
 
+// Each card owns its popup, mounted only while open, so one dialog exists at
+// a time and the landing page's cards get it too.
 export function ModelCard({ model }: { model: PublicModel }) {
   const live = model.price_basis === "live";
   const discount = cardDiscount(model);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailButton = useRef<HTMLButtonElement>(null);
   return (
     <article className="group flex flex-col rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4 transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--line-strong)] hover:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.18)]">
       <div className="flex items-start gap-3">
@@ -202,7 +206,26 @@ export function ModelCard({ model }: { model: PublicModel }) {
               <Price label="Cache write / 1M" value={model.cache_write_per_m} />
             </div>
           </div>
+          {model.has_detail === true && (
+            <button
+              ref={detailButton}
+              type="button"
+              aria-haspopup="dialog"
+              onClick={() => setDetailOpen(true)}
+              className="mt-3 min-h-[44px] w-full rounded-lg border border-[var(--line)] bg-[var(--paper)] px-4 text-[13px] font-medium text-[var(--ink)] transition-colors hover:border-[var(--line-strong)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--green)]"
+            >
+              Detail model
+            </button>
+          )}
         </>
+      )}
+      {detailOpen && (
+        <ModelDetailDialog
+          model={model.name}
+          open
+          onClose={() => setDetailOpen(false)}
+          returnFocusRef={detailButton}
+        />
       )}
     </article>
   );

@@ -2,18 +2,22 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { Coins, Network, ReceiptText, Server } from "lucide-react";
-import { api, type FinanceRange } from "../lib/api";
+import { api, type FinanceCustomRange, type FinanceRange } from "../lib/api";
 import { dashboard } from "../lib/dashboardRoutes";
 import { PageHeader } from "../components/Layout";
 import { SegmentedControl, Skeleton, TabBar, TabPanel } from "../components/ui";
-import { FinanceOverview, RANGE_LABEL } from "./payments/FinanceOverview";
-import { FinanceChart } from "./payments/FinanceChart";
+import { FinanceOverview, RANGE_LABEL, rangeText } from "./payments/FinanceOverview";
+import { FinanceSeriesTable } from "./payments/FinanceSeriesTable";
+import { CustomRangeForm } from "./payments/CustomRangeForm";
 import { PortalOrders } from "./payments/PortalOrders";
 import { CostsTab, FinanceTab as HostingFinance } from "./hosting/HostingFinance";
-import { QK, REFETCH_MS, errorText } from "./payments/shared";
+import { QK, REFETCH_MS, errorText, todayISO } from "./payments/shared";
+import { serverDateISO } from "../lib/serverTime";
 
 const RANGES = (Object.keys(RANGE_LABEL) as FinanceRange[]).map((value) => ({ value, label: RANGE_LABEL[value] }));
 const RANGE_STORAGE_KEY = "kr.payments.range";
+const CUSTOM_STORAGE_KEY = "kr.payments.customRange";
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // /finance is the AI gateway tab; the others have their own URL so the
 // sidebar, bookmarks and links can open them directly.
@@ -38,6 +42,27 @@ function initialRange(): FinanceRange {
   return "30d";
 }
 
+// The saved custom range, or the last 30 days when nothing valid is saved.
+function initialCustom(): FinanceCustomRange {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CUSTOM_STORAGE_KEY) ?? "null") as Partial<FinanceCustomRange> | null;
+    if (saved && DAY_RE.test(saved.from ?? "") && DAY_RE.test(saved.to ?? "") && saved.from! <= saved.to!) {
+      return { from: saved.from!, to: saved.to! };
+    }
+  } catch {
+    // storage unavailable or malformed: use the default
+  }
+  return { from: serverDateISO(Date.now() - 29 * 86_400_000), to: todayISO() };
+}
+
+function save(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
 export function FinancePage() {
   const params = useParams();
   const tab = (params.tab ?? "gateway") as Tab;
@@ -45,16 +70,17 @@ export function FinancePage() {
   const [range, setRangeState] = useState<FinanceRange>(initialRange);
   const setRange = (r: FinanceRange) => {
     setRangeState(r);
-    try {
-      localStorage.setItem(RANGE_STORAGE_KEY, r);
-    } catch {
-      // ignore
-    }
+    save(RANGE_STORAGE_KEY, r);
+  };
+  const [custom, setCustomState] = useState<FinanceCustomRange>(initialCustom);
+  const setCustom = (c: FinanceCustomRange) => {
+    setCustomState(c);
+    save(CUSTOM_STORAGE_KEY, JSON.stringify(c));
   };
 
   const finance = useQuery({
-    queryKey: [...QK.finance, range],
-    queryFn: () => api.financeReport(range),
+    queryKey: range === "custom" ? [...QK.finance, range, custom.from, custom.to] : [...QK.finance, range],
+    queryFn: () => api.financeReport(range, custom),
     refetchInterval: REFETCH_MS,
     enabled: tab === "gateway",
   });
@@ -86,9 +112,10 @@ export function FinancePage() {
       <TabPanel idPrefix={TABS_ID} value={tab} className="space-y-6">
         {tab === "gateway" ? (
           <>
-            <FinanceOverview overview={finance.data?.overview} range={range} loading={finance.isLoading} error={financeError} />
+            {range === "custom" && <CustomRangeForm key={`${custom.from}:${custom.to}`} value={custom} onApply={setCustom} />}
+            <FinanceOverview overview={finance.data?.overview} label={rangeText(range, custom)} loading={finance.isLoading} error={financeError} />
             {finance.data ? (
-              <FinanceChart series={finance.data.series} range={finance.data.range} />
+              <FinanceSeriesTable series={finance.data.series} label={rangeText(range, custom)} />
             ) : finance.isLoading ? (
               <Skeleton className="h-[372px] w-full rounded-2xl" />
             ) : null}

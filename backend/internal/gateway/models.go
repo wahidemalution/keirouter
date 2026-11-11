@@ -76,6 +76,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			if restricted && !allowed[strings.ToLower(strings.TrimSpace(c.Name))] {
 				continue
 			}
+			if c.Maintenance {
+				continue
+			}
 			data = appendModelEntry(data, seen, modelEntry{
 				ID: c.Name, Object: "model", Kind: string(core.ServiceLLM), Name: c.Name,
 			})

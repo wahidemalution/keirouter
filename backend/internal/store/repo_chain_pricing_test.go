@@ -145,3 +145,26 @@ func TestChainRepoPersistsStepStaticPrice(t *testing.T) {
 	require.Nil(t, again.Steps[1].StaticCacheReadPerM)
 	require.Equal(t, 0.5, again.Steps[1].StaticInputPerM)
 }
+
+func TestChainRepoPersistsStepDiscount(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	now := time.Now().UTC()
+	f := func(v float64) *float64 { return &v }
+	c := Chain{
+		ID: "c-disc", TenantID: DefaultTenantID, Name: "disc", Strategy: "priority",
+		CreatedAt: now, UpdatedAt: now,
+		Steps: []ChainStep{
+			{ID: "s0", ChainID: "c-disc", Position: 0, Provider: "openai", Model: "glm-5", CreatedAt: now,
+				StaticInputPerM: 1, StaticOutputPerM: 4, DiscountPercent: f(90), CostMultiplier: f(0.01)},
+			{ID: "s1", ChainID: "c-disc", Position: 1, Provider: "openai", Model: "glm-5", MarketSlug: "surplus-fast:glm-5", CreatedAt: now},
+		},
+	}
+	require.NoError(t, db.Chains().Create(ctx, c))
+	got, err := db.Chains().Get(ctx, "c-disc")
+	require.NoError(t, err)
+	require.Equal(t, 90.0, *got.Steps[0].DiscountPercent)
+	require.Equal(t, 0.01, *got.Steps[0].CostMultiplier)
+	require.Nil(t, got.Steps[1].DiscountPercent)
+	require.Nil(t, got.Steps[1].CostMultiplier)
+}

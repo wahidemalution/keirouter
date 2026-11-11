@@ -74,7 +74,7 @@ const usageColumns = `id, request_id, tenant_id, project_id, api_key_id, provide
 	slim_rules, slim_active, caveman_active, terse_active, headroom_tokens_saved,
 	headroom_bytes_saved, headroom_active, ponytail_active, chain_id, fallback_count, created_at,
 	cache_write_1h_tokens, web_search_requests, tool_cost_nanos, guardrail_action, guardrail_detector,
-	guardrail_direction, guardrail_mid_stream, guardrail_ms, upstream_request_id, reconcile_status`
+	guardrail_direction, guardrail_mid_stream, guardrail_ms, upstream_request_id, reconcile_status, est_prompt_tokens, est_cost_micros`
 
 func insertUsageBatch(ctx context.Context, tx *sql.Tx, rebind func(string) string, records []UsageRecord) error {
 	argsPerRow := len(usageArgs(UsageRecord{}))
@@ -141,28 +141,18 @@ func usageArgs(u UsageRecord) []any {
 		u.CacheWrite1hTokens, u.WebSearchRequests, u.ToolCostNanos,
 		u.GuardrailAction, u.GuardrailDetector, u.GuardrailDirection, boolToInt(u.GuardrailMidStream), u.GuardrailMS,
 		u.UpstreamRequestID, u.ReconcileStatus,
+		u.EstPromptTokens, u.EstCostMicros,
 	}
 }
 
 // SpendSince returns total cost in micros for a budget scope since the given
 // time. Used by the budget engine to enforce hard limits.
 func (r *UsageRepo) SpendSince(ctx context.Context, scope BudgetScope, scopeID string, since time.Time) (int64, error) {
-	column := scopeColumn(scope)
-	if column == "" {
-		return 0, fmt.Errorf("store: unknown budget scope %q", scope)
-	}
-
-	// Every nanos→micros rollup casts the SUM to BIGINT before dividing:
-	// Postgres sums BIGINT into NUMERIC, so an uncast division is fractional
-	// and cannot scan into int64. The cast keeps integer division on both engines.
-	q := r.db.rebind(fmt.Sprintf(
-		`SELECT (CAST(COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000 FROM usage_records WHERE %s = ? AND created_at >= ?`,
-		column))
-	var total int64
-	if err := r.db.sql.QueryRowContext(ctx, q, scopeID, formatTime(since)).Scan(&total); err != nil {
+	cost, _, err := r.SpendAndTokens(ctx, scope, scopeID, since)
+	if err != nil {
 		return 0, fmt.Errorf("store: spend since: %w", err)
 	}
-	return total, nil
+	return cost, nil
 }
 
 // SpendAndTokens returns both cost (micros) and total tokens consumed for a
@@ -173,15 +163,12 @@ func (r *UsageRepo) SpendAndTokens(ctx context.Context, scope BudgetScope, scope
 	if column == "" {
 		return 0, 0, fmt.Errorf("store: unknown budget scope %q", scope)
 	}
-
-	q := r.db.rebind(fmt.Sprintf(
-		`SELECT (CAST(COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000, COALESCE(SUM(prompt_tokens + completion_tokens), 0)
-		 FROM usage_records WHERE %s = ? AND created_at >= ?`,
-		column))
-	if err := r.db.sql.QueryRowContext(ctx, q, scopeID, formatTime(since)).Scan(&costMicros, &tokens); err != nil {
+	q, args := r.spendQuery(scope, column, scopeID, since)
+	var nanos int64
+	if err := r.db.sql.QueryRowContext(ctx, r.db.rebind(q), args...).Scan(&nanos, &tokens); err != nil {
 		return 0, 0, fmt.Errorf("store: spend and tokens: %w", err)
 	}
-	return costMicros, tokens, nil
+	return nanosToMicros(nanos), tokens, nil
 }
 
 // SpendScope identifies a scope for batch spend queries.
@@ -191,9 +178,11 @@ type SpendScope struct {
 	Since   time.Time
 }
 
-// SpendResult holds the result of a single scope's spend query.
+// SpendResult holds the result of a single scope's spend query. CostMicros is
+// CostNanos rounded by the budget rule (half a micro rounds up).
 type SpendResult struct {
 	CostMicros int64
+	CostNanos  int64
 	Tokens     int64
 }
 
@@ -206,28 +195,25 @@ func (r *UsageRepo) SpendAndTokensBatch(ctx context.Context, scopes []SpendScope
 	}
 	results := make([]SpendResult, len(scopes))
 
-	// Build UNION ALL query: one SELECT per scope. Each branch carries an
-	// explicit index column because SQL does not guarantee that UNION ALL
-	// preserves branch order, so results must be mapped by that index rather
-	// than by row position.
-	var query string
-	args := make([]any, 0, len(scopes)*2)
+	// Each branch carries an explicit index column because SQL does not
+	// guarantee that UNION ALL preserves branch order, so results must be
+	// mapped by that index rather than by row position.
+	var b strings.Builder
+	args := make([]any, 0, len(scopes)*3)
 	for i, s := range scopes {
 		column := scopeColumn(s.Kind)
 		if column == "" {
 			return nil, fmt.Errorf("store: unknown budget scope %q", s.Kind)
 		}
 		if i > 0 {
-			query += " UNION ALL "
+			b.WriteString(" UNION ALL ")
 		}
-		query += fmt.Sprintf(
-			"SELECT %d AS idx, (CAST(COALESCE(SUM(CASE WHEN pricing_backfilled=0 THEN cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000, COALESCE(SUM(prompt_tokens + completion_tokens), 0) FROM usage_records WHERE %s = ? AND created_at >= ?",
-			i, column)
-		args = append(args, s.ScopeID, formatTime(s.Since))
+		q, a := r.spendQuery(s.Kind, column, s.ScopeID, s.Since)
+		fmt.Fprintf(&b, "SELECT %d AS idx, q%d.c, q%d.t FROM (%s) q%d", i, i, i, q, i)
+		args = append(args, a...)
 	}
-	query = r.db.rebind(query)
 
-	rows, err := r.db.sql.QueryContext(ctx, query, args...)
+	rows, err := r.db.sql.QueryContext(ctx, r.db.rebind(b.String()), args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: spend batch: %w", err)
 	}
@@ -236,15 +222,14 @@ func (r *UsageRepo) SpendAndTokensBatch(ctx context.Context, scopes []SpendScope
 	seen := 0
 	for rows.Next() {
 		var idx int
-		var cost, tokens int64
-		if err := rows.Scan(&idx, &cost, &tokens); err != nil {
+		var nanos, tokens int64
+		if err := rows.Scan(&idx, &nanos, &tokens); err != nil {
 			return nil, fmt.Errorf("store: spend batch scan: %w", err)
 		}
 		if idx < 0 || idx >= len(results) {
 			return nil, fmt.Errorf("store: spend batch: out-of-range index %d", idx)
 		}
-		results[idx].CostMicros = cost
-		results[idx].Tokens = tokens
+		results[idx] = SpendResult{CostMicros: nanosToMicros(nanos), CostNanos: nanos, Tokens: tokens}
 		seen++
 	}
 	if err := rows.Err(); err != nil {
@@ -962,6 +947,12 @@ type CostBasisPoint struct {
 // and chain. A bucket is floor((unix seconds + offsetSecs) / slotSecs), so an
 // offset of a zone's UTC offset aligns daily buckets to that zone's midnight.
 func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since time.Time, slotSecs, offsetSecs int64) ([]CostBasisPoint, error) {
+	return r.CostBasisSeriesBetween(ctx, tenantID, since, time.Time{}, slotSecs, offsetSecs)
+}
+
+// CostBasisSeriesBetween is CostBasisSeries limited to created_at before
+// until. A zero until means no upper bound.
+func (r *UsageRepo) CostBasisSeriesBetween(ctx context.Context, tenantID string, since, until time.Time, slotSecs, offsetSecs int64) ([]CostBasisPoint, error) {
 	if slotSecs <= 0 {
 		return nil, fmt.Errorf("store: cost basis series: slot must be positive")
 	}
@@ -971,9 +962,13 @@ func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since 
 			COALESCE(SUM(upstream_cost_nanos), 0),
 			COALESCE(SUM(CASE WHEN upstream_cost_nanos = 0 THEN cost_nanos ELSE 0 END), 0)
 		FROM usage_records
-		WHERE tenant_id = ? AND pricing_backfilled = 0 AND created_at >= ?
-		GROUP BY bucket, COALESCE(chain_id, '') ORDER BY bucket, COALESCE(chain_id, '')`, r.db.epochExpr("created_at")))
-	rows, err := r.db.sql.QueryContext(ctx, q, offsetSecs, slotSecs, tenantID, formatTime(since))
+		WHERE tenant_id = ? AND pricing_backfilled = 0 AND created_at >= ?%s
+		GROUP BY bucket, COALESCE(chain_id, '') ORDER BY bucket, COALESCE(chain_id, '')`, r.db.epochExpr("created_at"), untilClause(until)))
+	args := []any{offsetSecs, slotSecs, tenantID, formatTime(since)}
+	if !until.IsZero() {
+		args = append(args, formatTime(until))
+	}
+	rows, err := r.db.sql.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: cost basis series: %w", err)
 	}
@@ -991,17 +986,39 @@ func (r *UsageRepo) CostBasisSeries(ctx context.Context, tenantID string, since 
 
 // CostBasis groups non-backfilled usage since the cut-off by provider and chain.
 func (r *UsageRepo) CostBasis(ctx context.Context, tenantID string, since time.Time) ([]CostBasisRow, error) {
-	return r.queryCostBasis(ctx, "", tenantID, formatTime(since))
+	return r.CostBasisBetween(ctx, tenantID, since, time.Time{})
+}
+
+// CostBasisBetween is CostBasis limited to created_at before until. A zero
+// until means no upper bound.
+func (r *UsageRepo) CostBasisBetween(ctx context.Context, tenantID string, since, until time.Time) ([]CostBasisRow, error) {
+	if until.IsZero() {
+		return r.queryCostBasis(ctx, "", tenantID, formatTime(since))
+	}
+	return r.queryCostBasis(ctx, untilClause(until), tenantID, formatTime(since), formatTime(until))
+}
+
+// untilClause is the exclusive upper bound on created_at, or nothing for a
+// zero until.
+func untilClause(until time.Time) string {
+	if until.IsZero() {
+		return ""
+	}
+	return " AND created_at < ?"
 }
 
 // OutstandingPortalCredit sums the remaining total-period budget of every
 // portal user's key: max(0, limit - spent), spend using the same
 // cost_nanos/1000 rule as SpendAndTokensBatch.
 func (r *UsageRepo) OutstandingPortalCredit(ctx context.Context, tenantID string) (int64, error) {
+	spent := `SELECT CAST(COALESCE(SUM(CASE WHEN u.pricing_backfilled=0 THEN u.cost_nanos ELSE 0 END), 0) AS BIGINT)
+			 FROM usage_records u WHERE u.api_key_id = b.scope_id`
+	if r.db.spendRollup.Load() {
+		spent = `SELECT CAST(COALESCE(SUM(d.cost_nanos), 0) AS BIGINT)
+			 FROM usage_spend_daily d WHERE d.scope_kind = 'api_key' AND d.scope_id = b.scope_id`
+	}
 	q := r.db.rebind(`
-		SELECT b.limit_micros,
-			(SELECT (CAST(COALESCE(SUM(CASE WHEN u.pricing_backfilled=0 THEN u.cost_nanos ELSE 0 END), 0) AS BIGINT) + 500) / 1000
-			 FROM usage_records u WHERE u.api_key_id = b.scope_id)
+		SELECT b.limit_micros, (` + spent + `)
 		FROM budgets b
 		JOIN portal_users p ON p.key_id = b.scope_id
 		WHERE b.tenant_id = ? AND b.scope_kind = 'api_key' AND b.period = 'total'`)
@@ -1012,11 +1029,11 @@ func (r *UsageRepo) OutstandingPortalCredit(ctx context.Context, tenantID string
 	defer rows.Close()
 	var total int64
 	for rows.Next() {
-		var limit, spent int64
-		if err := rows.Scan(&limit, &spent); err != nil {
+		var limit, spentNanos int64
+		if err := rows.Scan(&limit, &spentNanos); err != nil {
 			return 0, fmt.Errorf("store: outstanding portal credit scan: %w", err)
 		}
-		if left := limit - spent; left > 0 {
+		if left := limit - nanosToMicros(spentNanos); left > 0 {
 			total += left
 		}
 	}

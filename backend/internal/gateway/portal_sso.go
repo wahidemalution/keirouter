@@ -264,7 +264,7 @@ func (s *Server) handlePortalPlans(w http.ResponseWriter, r *http.Request) {
 			"limit_usd":      float64(p.LimitMicros) / 1_000_000,
 			"limit_tokens":   p.LimitTokens,
 			"period":         p.Period,
-			"allowed_models": store.GetPlanAllowedModels(p),
+			"allowed_models": s.withoutUnlistedChains(r.Context(), adminTenant, store.GetPlanAllowedModels(p)),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"plans": out})
@@ -316,7 +316,7 @@ func (s *Server) handlePortalCreateKey(w http.ResponseWriter, r *http.Request) {
 		"display":        issued.Record.Display,
 		"plan_id":        plan.ID,
 		"plan_name":      plan.Name,
-		"allowed_models": store.GetPlanAllowedModels(plan),
+		"allowed_models": s.withoutUnlistedChains(r.Context(), adminTenant, store.GetPlanAllowedModels(plan)),
 	})
 }
 
@@ -413,7 +413,7 @@ func (s *Server) portalUserView(ctx context.Context, u store.PortalUser) map[str
 	}
 	// Effective model access: per-key override wins, else the plan (live).
 	if models, source, merr := s.identity.Keys().EffectiveAllowedModels(ctx, u.KeyID, u.PlanID); merr == nil {
-		view["allowed_models"] = models
+		view["allowed_models"] = s.withoutUnlistedChains(ctx, adminTenant, models)
 		view["models_source"] = source
 	}
 	if budgets, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, u.KeyID); err == nil && len(budgets) > 0 {
@@ -750,6 +750,10 @@ func (s *Server) writePortalKeyUsage(w http.ResponseWriter, r *http.Request, key
 		writeError(w, http.StatusInternalServerError, "failed to build usage")
 		return
 	}
+	if models, ok := payload["allowed_models"].([]string); ok {
+		payload["allowed_models"] = s.withoutUnlistedChains(r.Context(), tenantOf(key), models)
+	}
+	redactUsagePayload(payload)
 	if hideCost {
 		stripped, err := withoutCostFields(payload)
 		if err != nil {

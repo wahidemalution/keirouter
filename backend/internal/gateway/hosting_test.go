@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mydisha/keirouter/backend/internal/cloudflare"
 	"github.com/mydisha/keirouter/backend/internal/crypto"
+	"github.com/mydisha/keirouter/backend/internal/currency"
 	"github.com/mydisha/keirouter/backend/internal/dokploy"
 	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/payment"
@@ -504,41 +505,121 @@ func TestHostingSettings_RejectSharedJWTSecret(t *testing.T) {
 	require.ErrorContains(t, st.Normalize(), "JWT_SECRET")
 }
 
-func TestHostingCosts_CRUDAndFinance(t *testing.T) {
+func TestCostPayments_CRUDAndFinance(t *testing.T) {
 	s, _, _ := hostingTestServer(t)
 	r := chi.NewRouter()
 	s.mountHostingOps(r)
-	today := time.Now().In(hosting.Zone).Format("2006-01-02")
 
-	rec := doJSON(t, r, http.MethodPost, "/hosting/costs", `{"name":"VPS 8GB","category":"vps","amount_idr":150000,"period":"monthly","start_date":"`+today+`"}`)
+	usd := `{"name":"OpenRouter credit","category":"upstream_ai","provider":"OpenRouter","currency":"USD","amount":12.5,"payment_method":"crypto"}`
+	rec := doJSON(t, r, http.MethodPost, "/hosting/costs", usd)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "no rate yet: a USD payment is refused, never saved at 0")
+
+	_, err := s.currencySvc.Update(t.Context(), func(c *currency.Settings) { c.OverrideEnabled, c.OverrideRate = true, 16000 })
+	require.NoError(t, err)
+	before := time.Now().Add(-time.Second)
+	rec = doJSON(t, r, http.MethodPost, "/hosting/costs", usd)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	id := decodeBody(t, rec)["id"].(string)
+	created := decodeBody(t, rec)
+	id := created["id"].(string)
+	require.EqualValues(t, 200000, created["amount_idr"], "12.50 USD x 16000")
+	require.EqualValues(t, 16000, created["usd_idr_rate"])
+	paidAt, err := time.Parse(time.RFC3339Nano, created["paid_at"].(string))
+	require.NoError(t, err)
+	require.True(t, paidAt.After(before), "dated when it was recorded")
+
+	rec = doJSON(t, r, http.MethodPost, "/hosting/costs", `{"name":"VPS 8GB","category":"vps","currency":"IDR","amount":150000,"payment_method":"bank_transfer"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	require.Nil(t, decodeBody(t, rec)["amount_usd"])
 
 	for _, bad := range []string{
-		`{"name":"","amount_idr":1,"start_date":"2026-01-01"}`,
-		`{"name":"x","amount_idr":0,"start_date":"2026-01-01"}`,
-		`{"name":"x","amount_idr":1,"start_date":"01-01-2026"}`,
-		`{"name":"x","amount_idr":1,"period":"one_time","start_date":"2026-01-01","end_date":"2026-02-01"}`,
-		`{"name":"x","amount_idr":1,"start_date":"2026-02-01","end_date":"2026-01-01"}`,
-		`{"name":"x","amount_idr":1,"category":"food","start_date":"2026-01-01"}`,
+		`{"name":"","category":"vps","currency":"IDR","amount":1,"payment_method":"crypto"}`,
+		`{"name":"x","category":"vps","currency":"IDR","amount":0,"payment_method":"crypto"}`,
+		`{"name":"x","category":"vps","currency":"IDR","amount":1.5,"payment_method":"crypto"}`,
+		`{"name":"x","category":"food","currency":"IDR","amount":1,"payment_method":"crypto"}`,
+		`{"name":"x","category":"upstream_ai","currency":"USD","amount":1,"payment_method":"crypto"}`,
+		`{"name":"x","category":"vps","currency":"EUR","amount":1,"payment_method":"crypto"}`,
+		`{"name":"x","category":"vps","currency":"IDR","amount":1,"payment_method":"cash"}`,
 	} {
 		require.Equal(t, http.StatusBadRequest, doJSON(t, r, http.MethodPost, "/hosting/costs", bad).Code, bad)
 	}
 
-	rec = doJSON(t, r, http.MethodPut, "/hosting/costs/"+id, `{"name":"VPS 16GB","amount_idr":200000,"period":"monthly","start_date":"`+today+`"}`)
+	// A later rate change never moves a saved payment; an edit re-converts at
+	// the saved rate and keeps the paid time.
+	_, err = s.currencySvc.Update(t.Context(), func(c *currency.Settings) { c.OverrideRate = 17000 })
+	require.NoError(t, err)
+	rec = doJSON(t, r, http.MethodPut, "/hosting/costs/"+id, `{"name":"OpenRouter credit","category":"upstream_ai","provider":"OpenRouter","amount":20,"payment_method":"debit_card"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	updated := decodeBody(t, rec)
+	require.EqualValues(t, 320000, updated["amount_idr"])
+	require.Equal(t, created["paid_at"], updated["paid_at"])
+	require.Equal(t, http.StatusBadRequest, doJSON(t, r, http.MethodPut, "/hosting/costs/"+id,
+		`{"name":"x","category":"vps","currency":"IDR","amount":1,"payment_method":"crypto"}`).Code, "currency is fixed")
 
 	rec = doJSON(t, r, http.MethodGet, "/hosting/finance?months=3", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := decodeBody(t, rec)
-	require.Len(t, body["months"], 3)
+	require.Len(t, body["costs"], 2)
 	cur := body["current"].(map[string]any)
-	require.EqualValues(t, 200000, cur["cost_idr"])
-	require.EqualValues(t, 4, cur["break_even_instances"], "200k cost / 50k price")
+	require.EqualValues(t, 470000, cur["cost_idr"])
+	require.EqualValues(t, 10, cur["break_even_instances"], "470k cost / 50k price")
 	require.Equal(t, http.StatusBadRequest, doJSON(t, r, http.MethodGet, "/hosting/finance?months=99", "").Code)
 
 	require.Equal(t, http.StatusNoContent, doJSON(t, r, http.MethodDelete, "/hosting/costs/"+id, "").Code)
 	require.Equal(t, http.StatusNotFound, doJSON(t, r, http.MethodDelete, "/hosting/costs/"+id, "").Code)
+}
+
+func TestCostPayments_PaidDate(t *testing.T) {
+	s, _, _ := hostingTestServer(t)
+	r := chi.NewRouter()
+	s.mountHostingOps(r)
+
+	now := time.Now().In(hosting.Zone)
+	day := func(t time.Time) string { return t.In(hosting.Zone).Format("2006-01-02") }
+	// The 10th, so a month step never spills into the next month.
+	past := time.Date(now.Year(), now.Month()-2, 10, 9, 0, 0, 0, hosting.Zone)
+	body := func(date string) string {
+		return `{"name":"VPS 8GB","category":"vps","currency":"IDR","amount":150000,"payment_method":"bank_transfer","paid_date":"` + date + `"}`
+	}
+
+	rec := doJSON(t, r, http.MethodPost, "/hosting/costs", body(day(past)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	created := decodeBody(t, rec)
+	paid, err := time.Parse(time.RFC3339Nano, created["paid_at"].(string))
+	require.NoError(t, err)
+	require.Equal(t, day(past), day(paid), "back-dated to the chosen day")
+
+	// It counts in its own month, not the current one.
+	rec = doJSON(t, r, http.MethodGet, "/hosting/finance?months=3", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	fin := decodeBody(t, rec)
+	require.EqualValues(t, 0, fin["current"].(map[string]any)["cost_idr"])
+	months := fin["months"].([]any)
+	require.EqualValues(t, 150000, months[0].(map[string]any)["cost_idr"])
+
+	for _, bad := range []string{day(now.AddDate(0, 0, 1)), "15-03-2026", "1999-12-31", "2026-02-30"} {
+		require.Equal(t, http.StatusBadRequest, doJSON(t, r, http.MethodPost, "/hosting/costs", body(bad)).Code, bad)
+	}
+
+	// An edit without paid_date keeps the saved time; with one, it moves.
+	id := created["id"].(string)
+	rec = doJSON(t, r, http.MethodPut, "/hosting/costs/"+id, `{"name":"VPS 8GB","category":"vps","amount":160000,"payment_method":"bank_transfer"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, created["paid_at"], decodeBody(t, rec)["paid_at"])
+
+	moved := time.Date(now.Year(), now.Month()-1, 10, 9, 0, 0, 0, hosting.Zone)
+	rec = doJSON(t, r, http.MethodPut, "/hosting/costs/"+id, body(day(moved)))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	paid, err = time.Parse(time.RFC3339Nano, decodeBody(t, rec)["paid_at"].(string))
+	require.NoError(t, err)
+	require.Equal(t, day(moved), day(paid))
+
+	// Today on create is dated now, not noon.
+	before := time.Now().Add(-time.Second)
+	rec = doJSON(t, r, http.MethodPost, "/hosting/costs", body(day(now)))
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	paid, err = time.Parse(time.RFC3339Nano, decodeBody(t, rec)["paid_at"].(string))
+	require.NoError(t, err)
+	require.True(t, paid.After(before))
 }
 
 func TestHosting_MultiNodePlacement(t *testing.T) {

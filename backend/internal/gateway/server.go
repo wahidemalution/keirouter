@@ -22,6 +22,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/audit"
 	"github.com/mydisha/keirouter/backend/internal/auth"
+	"github.com/mydisha/keirouter/backend/internal/backupjob"
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/clitools"
 	"github.com/mydisha/keirouter/backend/internal/config"
@@ -77,10 +78,13 @@ type Server struct {
 	budgets          *store.BudgetRepo
 	budgetEngine     *budget.Engine
 	usage            *store.UsageRepo
+	localLatency     localLatencyCache
 	resources        *store.ResourceRepo
 	settings         *store.SettingsRepo
 	currencySvc      *currency.Service
 	vault            *vault.Vault
+	backupJob        *backupjob.Runner
+	newBackupTarget  func(backupjob.Settings) (backupjob.Target, error) // tests replace it
 	codecs           *transform.Registry
 	metrics          *observ.Metrics
 	consoleLog       *consolelog.Buffer
@@ -109,6 +113,14 @@ type Server struct {
 	insightsCache    *ttlCache
 	// pricing caches the live Surplus price list behind /v1/pricing.
 	pricing pricingCache
+	// detail caches the Surplus reads behind /v1/public/model-detail.
+	detail detailCache
+	// surplusLabels caches the provider names behind the chain editor's
+	// Surplus step naming.
+	surplusLabels surplusLabelCache
+	// surplusURL overrides the Surplus feed the detail popup reads; empty
+	// uses market.SurplusAPIURL.
+	surplusURL string
 	// realized caches the 7-day billed totals behind the average prices.
 	realized            realizedCache
 	liveModels          *liveModelCache
@@ -176,6 +188,7 @@ type Deps struct {
 	Codecs               *transform.Registry
 	Metrics              *observ.Metrics
 	ConsoleLog           *consolelog.Buffer
+	BackupJob            *backupjob.Runner // scheduled offsite backups; nil disables the run endpoint
 	CLITools             *clitools.Registry
 	CLITHome             string
 	FrontendDir          string
@@ -246,6 +259,8 @@ func New(d Deps) *Server {
 		resources:           d.Resources,
 		settings:            d.Settings,
 		vault:               d.Vault,
+		backupJob:           d.BackupJob,
+		newBackupTarget:     backupjob.NewTarget,
 		codecs:              d.Codecs,
 		metrics:             d.Metrics,
 		consoleLog:          conLog,
@@ -457,6 +472,10 @@ func (s *Server) routes() chi.Router {
 		r.Get("/portal/api/discounts", s.handlePortalDiscounts)
 		r.Put("/portal/api/discounts/models/{model}", s.handlePortalSetModelDiscount)
 		r.Delete("/portal/api/discounts/models/{model}", s.handlePortalDeleteModelDiscount)
+		r.Get("/portal/api/models", s.handlePortalModels)
+		r.Get("/portal/api/model-settings", s.handlePortalModelSettings)
+		r.Put("/portal/api/model-settings/{model}/providers/{provider}", s.handlePortalSetModelProvider)
+		r.Put("/portal/api/model-settings/{model}/final-fallback", s.handlePortalSetModelFinalFallback)
 		r.Get("/portal/api/topups", s.handlePortalTopups)
 		r.Post("/portal/api/topup/orders", s.handlePortalCreateOrder)
 		r.Get("/portal/api/topup/orders", s.handlePortalListOrders)
@@ -490,6 +509,7 @@ func (s *Server) routes() chi.Router {
 	// Public live prices for the chains an admin published (off by default).
 	// Its own per-IP budget, separate from the landing page's.
 	r.With(s.publicPricingRateLimiter).Get("/v1/public/pricing", s.publicPricing)
+	r.With(s.publicModelDetailRateLimiter).Get("/v1/public/model-detail", s.publicModelDetail)
 
 	// Dashboard auth endpoints (login/logout/status) are loopback-guarded but
 	// do not require a session — they are how a session is obtained.

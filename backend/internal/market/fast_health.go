@@ -45,6 +45,37 @@ func NewFastHealth() *FastHealth {
 	return &FastHealth{now: time.Now, state: map[fastKey]*fastState{}}
 }
 
+// SetClock replaces the clock, so tests can move past a cooldown.
+func (h *FastHealth) SetClock(now func() time.Time) {
+	h.mu.Lock()
+	h.now = now
+	h.mu.Unlock()
+}
+
+// Peek is Filter without side effects: it drops providers still cooling down
+// and keeps the rest, including those in their recovery trial, without
+// counting a request or using up a trial slot. For displays that must not
+// disturb live routing.
+func (h *FastHealth) Peek(model string, providers []string) []string {
+	if h == nil {
+		return providers
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.state) == 0 {
+		return providers
+	}
+	now := h.now()
+	out := make([]string, 0, len(providers))
+	for _, p := range providers {
+		if st := h.state[fastKey{model, strings.ToLower(p)}]; st != nil && now.Before(st.until) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // Observe records one answer from provider for model. ok=false, or ttft above
 // FastSlowTTFT, is a strike.
 func (h *FastHealth) Observe(model, provider string, ttft time.Duration, ok bool) {

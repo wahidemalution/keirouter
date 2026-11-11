@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveCacheRates, makeDraftStep, staticStepPreview, stepKey, stepPayload, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -109,7 +109,7 @@ test("stepPayload for a market step drops leftover static fields", () => {
 test("stepPayload for a static step clears a leftover slug", () => {
   const out = stepPayload({ ...staticDraft({ stepMarkup: "10" }), marketSlug: "y" });
   assert.deepEqual(out, {
-    provider: "openai", model: "gpt-4o", market_slug: "",
+    provider: "openai", model: "gpt-4o", display_name: "", market_slug: "",
     static_input_per_m: 0.5, static_output_per_m: 2,
     static_cache_read_per_m: null, static_cache_write_per_m: null, markup_percent: 10,
   });
@@ -144,4 +144,146 @@ test("stepKey ignores a slug left over on a static step", () => {
 test("staticStepPreview rejects a zero cache override", () => {
   assert.deepEqual(staticStepPreview(staticDraft({ staticCacheReadPerM: "0" }), 0), { ok: false, error: "Cache prices must be above 0, or leave them empty." });
   assert.deepEqual(staticStepPreview(staticDraft({ staticCacheWritePerM: "0" }), 0), { ok: false, error: "Cache prices must be above 0, or leave them empty." });
+});
+
+test("autoMarketSlug pins Surplus providers by alias", () => {
+  const surplus = "https://api.surplusintelligence.ai/min30/v1";
+  assert.equal(surplusProviderOf({ alias: "surplus-dashscope-cn", base_url: surplus }), "dashscope-cn");
+  assert.equal(surplusProviderOf({ alias: "surplus", base_url: surplus }), "");
+  assert.equal(surplusProviderOf({ alias: "surplus-x", base_url: "https://example.com/v1" }), "");
+  assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, "kimi-k3"), "surplus-trusted@openrouter:kimi-k3");
+  assert.equal(autoMarketSlug({ alias: "surplus-openrouter", base_url: surplus }, ""), "");
+  assert.equal(autoMarketSlug(undefined, "kimi-k3"), "");
+});
+
+test("resolveSurplusProvider maps aliases to the id and name Surplus uses", () => {
+  const surplus = "https://api.surplusintelligence.ai/min30/v1";
+  const labels = {
+    bedrock: "Amazon Bedrock",
+    "dashscope-cn": "Alibaba DashScope - China",
+    concentrate: "Concentrate.ai",
+    zai: "Z.ai",
+    "0g": "0G Compute Router",
+    openrouter: "OpenRouter",
+    orcarouter: "OrcaRouter",
+  };
+  const p = (alias: string, display_name = "") => ({ alias, base_url: surplus, display_name });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-amazon-bedrock"), labels), { id: "bedrock", name: "Amazon Bedrock" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-aws", "Surplus Amazon Bedrock"), labels), { id: "bedrock", name: "Amazon Bedrock" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-dashscope-cn"), labels), { id: "dashscope-cn", name: "Alibaba DashScope - China" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-concentrate-ai"), labels), { id: "concentrate", name: "Concentrate.ai" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-zai", "Surplus Z.ai"), labels), { id: "zai", name: "Z.ai" });
+  // "router" is in both OpenRouter and OrcaRouter: no single match, keep the alias.
+  assert.deepEqual(resolveSurplusProvider(p("surplus-router"), labels), { id: "router", name: "" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-unknown"), labels), { id: "unknown", name: "" });
+  assert.deepEqual(resolveSurplusProvider(p("surplus-amazon-bedrock")), { id: "amazon-bedrock", name: "" });
+  assert.equal(autoMarketSlug(p("surplus-amazon-bedrock"), "claude-sonnet-5", labels), "surplus-trusted@bedrock:claude-sonnet-5");
+});
+
+test("stepPayload sends the trimmed portal provider name", () => {
+  const out = stepPayload({ ...makeDraftStep({ provider: "openai", model: "gpt-4o", display_name: "Fast Lane" }), displayName: "  Fast Lane  " });
+  assert.equal(out.display_name, "Fast Lane");
+  assert.equal(makeDraftStep({ provider: "a", model: "b", display_name: "X" }).displayName, "X");
+});
+
+test("fallbackPricePreview bills the manual price plus only the fallback markup", () => {
+  const got = fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10", markup: "20" }, { input_per_m: 9, output_per_m: 9 });
+  assert.ok(got.ok && got.source === "manual");
+  assert.equal(got.inputPerM, 3);
+  assert.equal(got.outputPerM, 12);
+  assert.equal(got.cacheReadPerM, 3, "empty cache read bills the full input price");
+});
+
+test("fallbackPricePreview uses models.dev with no markup when the price is empty", () => {
+  const got = fallbackPricePreview(EMPTY_FALLBACK_PRICE, { input_per_m: 2.5, output_per_m: 10 });
+  assert.ok(got.ok && got.source === "models.dev");
+  assert.equal(got.markup, 0);
+  assert.equal(got.inputPerM, 2.5);
+  assert.deepEqual(fallbackPricePreview(EMPTY_FALLBACK_PRICE, null), { ok: true, source: "none" });
+});
+
+test("fallbackPricePreview refuses half a price, a zero cache rate and a bad markup", () => {
+  assert.equal(fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, inputPerM: "1" }, null).ok, false);
+  assert.equal(fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, inputPerM: "1", outputPerM: "2", cacheReadPerM: "0" }, null).ok, false);
+  assert.equal(fallbackPricePreview({ ...EMPTY_FALLBACK_PRICE, markup: "1001" }, null).ok, false);
+});
+
+test("fallbackPricePayload sends null for empty optional fields and round-trips", () => {
+  const payload = fallbackPricePayload({ ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10" });
+  assert.deepEqual(payload, { input_per_m: 2.5, output_per_m: 10, cache_read_per_m: null, cache_write_per_m: null, markup_percent: null });
+  assert.deepEqual(fallbackPriceDraft({ ...payload, markup_percent: 0, auto: null }), { ...EMPTY_FALLBACK_PRICE, inputPerM: "2.5", outputPerM: "10", markup: "0" });
+});
+
+const discountDraft = (over: Record<string, string> = {}) => ({
+  ...makeDraftStep({ provider: "openai", model: "deepseek-v4-flash" }),
+  priceSource: "discount" as const,
+  staticInputPerM: "0.28",
+  staticOutputPerM: "0.42",
+  staticCacheReadPerM: "0.028",
+  staticCacheWritePerM: "0.35",
+  discountPercent: "90",
+  ...over,
+});
+
+test("discountStepPreview bills list × (100 − discount)/100 and costs list × multiplier", () => {
+  const p = discountStepPreview(discountDraft({ costMultiplier: "0.01" }));
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  close(p.customer.inputPerM, 0.028);
+  close(p.customer.outputPerM, 0.042);
+  close(p.customer.cacheReadPerM, 0.0028);
+  close(p.customer.cacheWritePerM, 0.035);
+  close(p.cost.inputPerM, 0.0028);
+  close(p.cost.outputPerM, 0.0042);
+  close(p.cost.cacheReadPerM, 0.00028);
+  close(p.cost.cacheWritePerM, 0.0035);
+  assert.equal(p.loss, false);
+});
+
+test("discountStepPreview keeps the factor exact", () => {
+  for (const [d, f] of [["0", 1], ["90", 0.1], ["99", 0.01], ["99.5", 0.005], ["33.3", 0.667]] as const) {
+    const p = discountStepPreview(discountDraft({ staticInputPerM: "1", staticOutputPerM: "1", discountPercent: d }));
+    assert.equal(p.ok, true);
+    if (p.ok) assert.ok(Math.abs(p.customer.inputPerM - f) < 1e-15, `${d}: ${p.customer.inputPerM}`);
+  }
+});
+
+test("discountStepPreview: empty cost multiplier means cost = customer price; above it flags a loss", () => {
+  const even = discountStepPreview(discountDraft());
+  assert.equal(even.ok && even.cost.inputPerM === even.customer.inputPerM, true);
+  const loss = discountStepPreview(discountDraft({ costMultiplier: "0.2" }));
+  assert.equal(loss.ok && loss.loss, true);
+});
+
+test("discountStepPreview derives empty cache prices from the list input", () => {
+  const p = discountStepPreview(discountDraft({ staticInputPerM: "2", staticCacheReadPerM: "", staticCacheWritePerM: "" }));
+  assert.equal(p.ok, true);
+  if (!p.ok) return;
+  close(p.customer.cacheReadPerM, 0.02);
+  close(p.customer.cacheWritePerM, 0.25);
+});
+
+test("discountStepPreview rejects a missing or out-of-range discount and multiplier", () => {
+  assert.deepEqual(discountStepPreview(discountDraft({ discountPercent: "" })), { ok: false, error: "Enter a discount from 0 to below 100." });
+  assert.deepEqual(discountStepPreview(discountDraft({ discountPercent: "100" })), { ok: false, error: "Enter a discount from 0 to below 100." });
+  assert.deepEqual(discountStepPreview(discountDraft({ costMultiplier: "0" })), { ok: false, error: "Cost multiplier must be above 0 and at most 100." });
+  assert.deepEqual(discountStepPreview(discountDraft({ staticOutputPerM: "" })), { ok: false, error: "Enter an input and output price above 0." });
+});
+
+test("stepPayload for a discount step sends list prices, discount and multiplier, never markup", () => {
+  const out = stepPayload({ ...discountDraft({ costMultiplier: "0.01", stepMarkup: "25" }), marketSlug: "leftover" });
+  assert.deepEqual(out, {
+    provider: "openai", model: "deepseek-v4-flash", display_name: "", market_slug: "",
+    static_input_per_m: 0.28, static_output_per_m: 0.42,
+    static_cache_read_per_m: 0.028, static_cache_write_per_m: 0.35, markup_percent: null,
+    discount_percent: 90, cost_multiplier: 0.01,
+  });
+});
+
+test("makeDraftStep reads a discount step from the API", () => {
+  const d = makeDraftStep({ provider: "openai", model: "m", static_input_per_m: 1, static_output_per_m: 2, discount_percent: 90, cost_multiplier: null });
+  assert.equal(d.priceSource, "discount");
+  assert.equal(d.discountPercent, "90");
+  assert.equal(d.costMultiplier, "");
+  assert.equal(stepKey(d), stepKey(staticDraft({})).replace("gpt-4o", "m"));
 });

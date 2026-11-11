@@ -58,7 +58,7 @@ func (s *Server) publicPricing(w http.ResponseWriter, r *http.Request) {
 	}
 	allowed := make(map[string]keyPrice, len(cfg.ChainIDs))
 	for _, id := range cfg.ChainIDs {
-		if name, ok := prices.idToName[id]; ok {
+		if name, ok := prices.idToName[id]; ok && !prices.unlisted[id] {
 			allowed[name] = prices.byName[name]
 		}
 	}

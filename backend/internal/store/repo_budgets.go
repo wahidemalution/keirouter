@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -304,10 +305,10 @@ func (r *ChainRepo) Create(ctx context.Context, c Chain) error {
 		return fmt.Errorf("store: create chain: %w", err)
 	}
 	cq := r.db.rebind(`INSERT INTO chains (id, tenant_id, name, strategy, fallback_provider, fallback_model,
-		display_provider, capability_overrides, input_per_m, output_per_m, cache_write_per_m, cache_read_per_m, market_slugs, reorder_by_market, markup_percent, official_input_per_m, official_output_per_m, disabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		display_provider, capability_overrides, input_per_m, output_per_m, cache_write_per_m, cache_read_per_m, market_slugs, reorder_by_market, markup_percent, official_input_per_m, official_output_per_m, fallback_input_per_m, fallback_output_per_m, fallback_cache_read_per_m, fallback_cache_write_per_m, fallback_markup_percent, disabled, hidden, maintenance, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if _, err := tx.ExecContext(ctx, cq, c.ID, c.TenantID, c.Name, c.Strategy, c.FallbackProvider, c.FallbackModel,
-		c.DisplayProvider, c.CapabilityOverrides, c.InputPerM, c.OutputPerM, c.CacheWritePerM, c.CacheReadPerM, slugs, boolToInt(c.ReorderByMarket), nullableFloat(c.MarkupPercent), nullableFloat(c.OfficialInputPerM), nullableFloat(c.OfficialOutputPerM), boolToInt(c.Disabled), formatTime(c.CreatedAt), formatTime(c.UpdatedAt)); err != nil {
+		c.DisplayProvider, c.CapabilityOverrides, c.InputPerM, c.OutputPerM, c.CacheWritePerM, c.CacheReadPerM, slugs, boolToInt(c.ReorderByMarket), nullableFloat(c.MarkupPercent), nullableFloat(c.OfficialInputPerM), nullableFloat(c.OfficialOutputPerM), c.FallbackInputPerM, c.FallbackOutputPerM, nullableFloat(c.FallbackCacheReadPerM), nullableFloat(c.FallbackCacheWritePerM), nullableFloat(c.FallbackMarkupPercent), boolToInt(c.Disabled), boolToInt(c.Hidden), boolToInt(c.Maintenance), formatTime(c.CreatedAt), formatTime(c.UpdatedAt)); err != nil {
 		return fmt.Errorf("store: create chain: %w", err)
 	}
 
@@ -321,18 +322,20 @@ func (r *ChainRepo) Create(ctx context.Context, c Chain) error {
 }
 
 const insertChainStepSQL = `INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug,
-	static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent,
+	discount_percent, cost_multiplier, display_name, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 func chainStepArgs(chainID string, s ChainStep, created time.Time) []any {
 	return []any{s.ID, chainID, s.Position, s.Provider, s.Model, s.MarketSlug,
 		s.StaticInputPerM, s.StaticOutputPerM, nullableFloat(s.StaticCacheReadPerM), nullableFloat(s.StaticCacheWritePerM),
-		nullableFloat(s.MarkupPercent), formatTime(created)}
+		nullableFloat(s.MarkupPercent), nullableFloat(s.DiscountPercent), nullableFloat(s.CostMultiplier),
+		strings.TrimSpace(s.DisplayName), formatTime(created)}
 }
 
 // Get returns a chain with its ordered steps.
 func (r *ChainRepo) Get(ctx context.Context, id string) (Chain, error) {
-	cq := r.db.rebind(`SELECT id, tenant_id, name, strategy, fallback_provider, fallback_model, display_provider, capability_overrides, input_per_m, output_per_m, cache_write_per_m, cache_read_per_m, market_slugs, reorder_by_market, markup_percent, official_input_per_m, official_output_per_m, disabled, created_at, updated_at FROM chains WHERE id = ?`)
+	cq := r.db.rebind(`SELECT id, tenant_id, name, strategy, fallback_provider, fallback_model, display_provider, capability_overrides, input_per_m, output_per_m, cache_write_per_m, cache_read_per_m, market_slugs, reorder_by_market, markup_percent, official_input_per_m, official_output_per_m, fallback_input_per_m, fallback_output_per_m, fallback_cache_read_per_m, fallback_cache_write_per_m, fallback_markup_percent, disabled, hidden, maintenance, created_at, updated_at FROM chains WHERE id = ?`)
 	var (
 		c               Chain
 		slugs           string
@@ -340,11 +343,16 @@ func (r *ChainRepo) Get(ctx context.Context, id string) (Chain, error) {
 		markup          sql.NullFloat64
 		officialIn      sql.NullFloat64
 		officialOut     sql.NullFloat64
+		fbCacheRead     sql.NullFloat64
+		fbCacheWrite    sql.NullFloat64
+		fbMarkup        sql.NullFloat64
 		disabled        int
+		hidden          int
+		maintenance     int
 		created         string
 		updated         string
 	)
-	err := r.db.sql.QueryRowContext(ctx, cq, id).Scan(&c.ID, &c.TenantID, &c.Name, &c.Strategy, &c.FallbackProvider, &c.FallbackModel, &c.DisplayProvider, &c.CapabilityOverrides, &c.InputPerM, &c.OutputPerM, &c.CacheWritePerM, &c.CacheReadPerM, &slugs, &reorderByMarket, &markup, &officialIn, &officialOut, &disabled, &created, &updated)
+	err := r.db.sql.QueryRowContext(ctx, cq, id).Scan(&c.ID, &c.TenantID, &c.Name, &c.Strategy, &c.FallbackProvider, &c.FallbackModel, &c.DisplayProvider, &c.CapabilityOverrides, &c.InputPerM, &c.OutputPerM, &c.CacheWritePerM, &c.CacheReadPerM, &slugs, &reorderByMarket, &markup, &officialIn, &officialOut, &c.FallbackInputPerM, &c.FallbackOutputPerM, &fbCacheRead, &fbCacheWrite, &fbMarkup, &disabled, &hidden, &maintenance, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Chain{}, ErrNotFound
 	}
@@ -356,7 +364,12 @@ func (r *ChainRepo) Get(ctx context.Context, id string) (Chain, error) {
 	c.MarkupPercent = floatPtr(markup)
 	c.OfficialInputPerM = floatPtr(officialIn)
 	c.OfficialOutputPerM = floatPtr(officialOut)
+	c.FallbackCacheReadPerM = floatPtr(fbCacheRead)
+	c.FallbackCacheWritePerM = floatPtr(fbCacheWrite)
+	c.FallbackMarkupPercent = floatPtr(fbMarkup)
 	c.Disabled = disabled != 0
+	c.Hidden = hidden != 0
+	c.Maintenance = maintenance != 0
 	c.CreatedAt = parseTime(created)
 	c.UpdatedAt = parseTime(updated)
 
@@ -370,7 +383,7 @@ func (r *ChainRepo) Get(ctx context.Context, id string) (Chain, error) {
 
 // ListByTenant returns all chains (with steps) for a tenant.
 func (r *ChainRepo) ListByTenant(ctx context.Context, tenantID string) ([]Chain, error) {
-	cq := r.db.rebind(`SELECT id, tenant_id, name, strategy, fallback_provider, fallback_model, display_provider, capability_overrides, input_per_m, output_per_m, cache_write_per_m, cache_read_per_m, market_slugs, reorder_by_market, markup_percent, official_input_per_m, official_output_per_m, disabled, created_at, updated_at FROM chains WHERE tenant_id = ? ORDER BY created_at DESC`)
+	cq := r.db.rebind(`SELECT id, tenant_id, name, strategy, fallback_provider, fallback_model, display_provider, capability_overrides, input_per_m, output_per_m, cache_write_per_m, cache_read_per_m, market_slugs, reorder_by_market, markup_percent, official_input_per_m, official_output_per_m, fallback_input_per_m, fallback_output_per_m, fallback_cache_read_per_m, fallback_cache_write_per_m, fallback_markup_percent, disabled, hidden, maintenance, created_at, updated_at FROM chains WHERE tenant_id = ? ORDER BY created_at DESC`)
 	rows, err := r.db.sql.QueryContext(ctx, cq, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("store: list chains: %w", err)
@@ -386,11 +399,16 @@ func (r *ChainRepo) ListByTenant(ctx context.Context, tenantID string) ([]Chain,
 			markup          sql.NullFloat64
 			officialIn      sql.NullFloat64
 			officialOut     sql.NullFloat64
+			fbCacheRead     sql.NullFloat64
+			fbCacheWrite    sql.NullFloat64
+			fbMarkup        sql.NullFloat64
 			disabled        int
+			hidden          int
+			maintenance     int
 			created         string
 			updated         string
 		)
-		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Strategy, &c.FallbackProvider, &c.FallbackModel, &c.DisplayProvider, &c.CapabilityOverrides, &c.InputPerM, &c.OutputPerM, &c.CacheWritePerM, &c.CacheReadPerM, &slugs, &reorderByMarket, &markup, &officialIn, &officialOut, &disabled, &created, &updated); err != nil {
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.Name, &c.Strategy, &c.FallbackProvider, &c.FallbackModel, &c.DisplayProvider, &c.CapabilityOverrides, &c.InputPerM, &c.OutputPerM, &c.CacheWritePerM, &c.CacheReadPerM, &slugs, &reorderByMarket, &markup, &officialIn, &officialOut, &c.FallbackInputPerM, &c.FallbackOutputPerM, &fbCacheRead, &fbCacheWrite, &fbMarkup, &disabled, &hidden, &maintenance, &created, &updated); err != nil {
 			return nil, err
 		}
 		c.MarketSlugs = decodeMarketSlugs(slugs)
@@ -398,7 +416,12 @@ func (r *ChainRepo) ListByTenant(ctx context.Context, tenantID string) ([]Chain,
 		c.MarkupPercent = floatPtr(markup)
 		c.OfficialInputPerM = floatPtr(officialIn)
 		c.OfficialOutputPerM = floatPtr(officialOut)
+		c.FallbackCacheReadPerM = floatPtr(fbCacheRead)
+		c.FallbackCacheWritePerM = floatPtr(fbCacheWrite)
+		c.FallbackMarkupPercent = floatPtr(fbMarkup)
 		c.Disabled = disabled != 0
+		c.Hidden = hidden != 0
+		c.Maintenance = maintenance != 0
 		c.CreatedAt = parseTime(created)
 		c.UpdatedAt = parseTime(updated)
 		out = append(out, c)
@@ -449,9 +472,9 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 		return fmt.Errorf("store: update chain: %w", err)
 	}
 	uq := r.db.rebind(`UPDATE chains SET name = ?, strategy = ?, fallback_provider = ?, fallback_model = ?, display_provider = ?, capability_overrides = ?,
-		input_per_m = ?, output_per_m = ?, cache_write_per_m = ?, cache_read_per_m = ?, market_slugs = ?, reorder_by_market = ?, markup_percent = ?, official_input_per_m = ?, official_output_per_m = ?, disabled = ?, updated_at = ? WHERE id = ?`)
+		input_per_m = ?, output_per_m = ?, cache_write_per_m = ?, cache_read_per_m = ?, market_slugs = ?, reorder_by_market = ?, markup_percent = ?, official_input_per_m = ?, official_output_per_m = ?, fallback_input_per_m = ?, fallback_output_per_m = ?, fallback_cache_read_per_m = ?, fallback_cache_write_per_m = ?, fallback_markup_percent = ?, disabled = ?, hidden = ?, maintenance = ?, updated_at = ? WHERE id = ?`)
 	if _, err := tx.ExecContext(ctx, uq, c.Name, c.Strategy, c.FallbackProvider, c.FallbackModel, c.DisplayProvider, c.CapabilityOverrides,
-		c.InputPerM, c.OutputPerM, c.CacheWritePerM, c.CacheReadPerM, slugs, boolToInt(c.ReorderByMarket), nullableFloat(c.MarkupPercent), nullableFloat(c.OfficialInputPerM), nullableFloat(c.OfficialOutputPerM), boolToInt(c.Disabled), formatTime(time.Now()), c.ID); err != nil {
+		c.InputPerM, c.OutputPerM, c.CacheWritePerM, c.CacheReadPerM, slugs, boolToInt(c.ReorderByMarket), nullableFloat(c.MarkupPercent), nullableFloat(c.OfficialInputPerM), nullableFloat(c.OfficialOutputPerM), c.FallbackInputPerM, c.FallbackOutputPerM, nullableFloat(c.FallbackCacheReadPerM), nullableFloat(c.FallbackCacheWritePerM), nullableFloat(c.FallbackMarkupPercent), boolToInt(c.Disabled), boolToInt(c.Hidden), boolToInt(c.Maintenance), formatTime(time.Now()), c.ID); err != nil {
 		return fmt.Errorf("store: update chain: %w", err)
 	}
 
@@ -472,7 +495,8 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 
 func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, error) {
 	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, market_slug,
-		static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent, created_at
+		static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent,
+		discount_percent, cost_multiplier, display_name, created_at
 		FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
 	rows, err := r.db.sql.QueryContext(ctx, q, chainID)
 	if err != nil {
@@ -486,14 +510,17 @@ func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, err
 			s                         ChainStep
 			created                   string
 			cacheRead, cacheWrite, mk sql.NullFloat64
+			discount, costMult        sql.NullFloat64
 		)
 		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &s.MarketSlug,
-			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &created); err != nil {
+			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &discount, &costMult, &s.DisplayName, &created); err != nil {
 			return nil, err
 		}
 		s.StaticCacheReadPerM = floatPtr(cacheRead)
 		s.StaticCacheWritePerM = floatPtr(cacheWrite)
 		s.MarkupPercent = floatPtr(mk)
+		s.DiscountPercent = floatPtr(discount)
+		s.CostMultiplier = floatPtr(costMult)
 		s.CreatedAt = parseTime(created)
 		out = append(out, s)
 	}

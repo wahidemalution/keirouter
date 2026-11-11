@@ -414,3 +414,31 @@ func (r *UsageRepo) ChainUsage(ctx context.Context, tenantID string, since time.
 	}
 	return out, rows.Err()
 }
+
+// PerfSample is one successful request's timing, for latency percentiles and
+// generation speed.
+type PerfSample struct {
+	UpstreamMS, TTFTMS, CompletionTokens int64
+}
+
+// PerfSamples returns the timing of one provider and model's successful
+// requests since the given time, newest first, at most limit of them.
+func (r *UsageRepo) PerfSamples(ctx context.Context, tenantID, provider, model string, since time.Time, limit int) ([]PerfSample, error) {
+	q := r.db.rebind(`SELECT upstream_latency_ms, ttft_ms, completion_tokens FROM usage_records
+		WHERE tenant_id = ? AND provider = ? AND model = ? AND created_at >= ? AND upstream_latency_ms > 0 AND status = 'success'
+		ORDER BY created_at DESC LIMIT ?`)
+	rows, err := r.db.sql.QueryContext(ctx, q, tenantID, provider, model, formatTime(since), limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: perf samples: %w", err)
+	}
+	defer rows.Close()
+	var out []PerfSample
+	for rows.Next() {
+		var p PerfSample
+		if err := rows.Scan(&p.UpstreamMS, &p.TTFTMS, &p.CompletionTokens); err != nil {
+			return nil, fmt.Errorf("store: perf samples: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}

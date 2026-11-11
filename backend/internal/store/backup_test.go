@@ -142,3 +142,85 @@ func TestBackupCoversEveryTable(t *testing.T) {
 	require.True(t, got["api_keys"] && got["chains"] && got["usage_records"] && got["portal_users"] && got["key_topups"])
 	require.True(t, got["upstream_accounts"] && got["upstream_account_providers"] && got["upstream_topups"], "finance tables must be in the backup")
 }
+
+func TestBackupRoundTripKeyRouting(t *testing.T) {
+	ctx := context.Background()
+	src := newTestDB(t)
+	seedBackupSource(t, src)
+	repo := src.APIKeys()
+	require.NoError(t, repo.SetAllowedProviders(ctx, "k1", []string{"custom-openai-surplus", "openai"}))
+	require.NoError(t, repo.SetModelProviderEnabled(ctx, "k1", "luna", "openai", false))
+	require.NoError(t, repo.SetModelFinalFallback(ctx, "k1", "luna", true))
+	want, err := repo.KeyRouting(ctx, "k1")
+	require.NoError(t, err)
+	require.NotEmpty(t, want.AllowedProviders)
+
+	b, err := src.ExportBackup(ctx)
+	require.NoError(t, err)
+	b = roundTripJSON(t, b)
+
+	dst := newTestDB(t)
+	_, err = dst.RestoreBackup(ctx, b)
+	require.NoError(t, err)
+	got, err := dst.APIKeys().KeyRouting(ctx, "k1")
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, map[string]int{"luna": FinalFallbackChosen}, got.FinalFallback, "a backup at 0061 or later restores as-is, no reseed")
+}
+
+func TestRestorePre0061BackupSeedsKeptFallback(t *testing.T) {
+	ctx := context.Background()
+	src := newTestDB(t)
+	seedBackupSource(t, src)
+	now := time.Now().UTC()
+	require.NoError(t, src.Chains().Create(ctx, Chain{
+		ID: "c2", TenantID: DefaultTenantID, Name: "Glm-Fast", Strategy: "priority",
+		FallbackProvider: "openai", FallbackModel: "gpt-4o-mini", CreatedAt: now, UpdatedAt: now,
+		Steps: []ChainStep{{ID: "s2", ChainID: "c2", Provider: "openai", Model: "gpt-4o", CreatedAt: now}},
+	}))
+
+	b, err := src.ExportBackup(ctx)
+	require.NoError(t, err)
+	b.SchemaVersion = "0060_chain_step_static_price"
+	kept := b.Tables[:0]
+	for _, tb := range b.Tables {
+		switch tb.Name {
+		case "api_key_allowed_providers", "api_key_model_disabled_providers", "api_key_model_options":
+		default:
+			kept = append(kept, tb)
+		}
+	}
+	b.Tables = kept
+	b = roundTripJSON(t, b)
+
+	dst := newTestDB(t)
+	_, err = dst.RestoreBackup(ctx, b)
+	require.NoError(t, err)
+	got, err := dst.APIKeys().KeyRouting(ctx, "k1")
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"glm-fast": FinalFallbackKept}, got.FinalFallback,
+		"the chain with a fallback is kept as before; the chain without one gets no row")
+	require.Empty(t, got.AllowedProviders)
+	require.Empty(t, got.DisabledProviders)
+}
+
+func TestBackupRoundTripCostPayments(t *testing.T) {
+	ctx := context.Background()
+	src := newTestDB(t)
+	paid := time.Date(2026, 11, 5, 3, 4, 5, 0, time.UTC)
+	want := CostPayment{
+		ID: "p1", Name: "OpenRouter credit", Category: "upstream_ai", Provider: "OpenRouter",
+		Currency: CurrencyUSD, AmountUSDCents: 1250, USDIDRRate: 16234.5, AmountIDR: 202931,
+		PaymentMethod: "crypto", PaidAt: paid, Note: "top-up", CreatedAt: paid, UpdatedAt: paid,
+	}
+	require.NoError(t, src.CostPayments().Create(ctx, want))
+
+	b, err := src.ExportBackup(ctx)
+	require.NoError(t, err)
+	dst := newTestDB(t)
+	_, err = dst.RestoreBackup(ctx, roundTripJSON(t, b))
+	require.NoError(t, err)
+	got, err := dst.CostPayments().Get(ctx, "p1")
+	require.NoError(t, err)
+	require.Equal(t, want, got, "the saved rate and rupiah amount survive a restore unchanged")
+}

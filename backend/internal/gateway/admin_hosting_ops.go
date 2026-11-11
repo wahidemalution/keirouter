@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/mydisha/keirouter/backend/internal/currency"
 	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
@@ -22,12 +24,18 @@ func (s *Server) mountHostingOps(r chi.Router) {
 
 // ─── Finance ────────────────────────────────────────────────────────────────
 
-func hostingCostView(c store.HostingCost) map[string]any {
-	return map[string]any{
-		"id": c.ID, "name": c.Name, "category": c.Category, "amount_idr": c.AmountIDR,
-		"period": c.Period, "start_date": c.StartDate, "end_date": c.EndDate, "note": c.Note,
+func costPaymentView(c store.CostPayment) map[string]any {
+	v := map[string]any{
+		"id": c.ID, "name": c.Name, "category": c.Category, "provider": c.Provider,
+		"currency": c.Currency, "amount_idr": c.AmountIDR, "usd_idr_rate": nil, "amount_usd": nil,
+		"payment_method": c.PaymentMethod, "paid_at": c.PaidAt, "note": c.Note,
 		"created_at": c.CreatedAt, "updated_at": c.UpdatedAt,
 	}
+	if c.Currency == store.CurrencyUSD {
+		v["amount_usd"] = float64(c.AmountUSDCents) / 100
+		v["usd_idr_rate"] = c.USDIDRRate
+	}
+	return v
 }
 
 // adminHostingFinance returns monthly revenue, cost and profit for the last
@@ -49,7 +57,7 @@ func (s *Server) adminHostingFinance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	costs, err := s.db.HostingCosts().List(ctx)
+	costs, err := s.db.CostPayments().List(ctx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
@@ -114,9 +122,7 @@ func (s *Server) adminHostingFinance(w http.ResponseWriter, r *http.Request) {
 	}
 	costViews := make([]map[string]any, 0, len(costs))
 	for _, c := range costs {
-		v := hostingCostView(c)
-		v["this_month_idr"] = hosting.CostInMonth(c, firstOfMonth(now))
-		costViews = append(costViews, v)
+		costViews = append(costViews, costPaymentView(c))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"months": series,
@@ -139,116 +145,185 @@ func (s *Server) adminHostingFinance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func firstOfMonth(t time.Time) time.Time {
-	l := t.In(hosting.Zone)
-	return time.Date(l.Year(), l.Month(), 1, 0, 0, 0, 0, hosting.Zone)
+type costPaymentRequest struct {
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	Provider string `json:"provider"`
+	// Currency is USD or IDR; it is fixed once the payment is saved.
+	Currency string `json:"currency"`
+	// Amount is in Currency: dollars for USD, whole rupiah for IDR.
+	Amount        float64 `json:"amount"`
+	PaymentMethod string  `json:"payment_method"`
+	Note          string  `json:"note"`
+	// PaidDate is the day it was paid, YYYY-MM-DD in the server zone. Empty
+	// keeps the current date: now on create, the saved date on update.
+	PaidDate string `json:"paid_date"`
 }
 
-type hostingCostRequest struct {
-	Name      string `json:"name"`
-	Category  string `json:"category"`
-	AmountIDR int64  `json:"amount_idr"`
-	Period    string `json:"period"`
-	StartDate string `json:"start_date"`
-	EndDate   string `json:"end_date"`
-	Note      string `json:"note"`
-}
+var (
+	costPaymentCategories = map[string]bool{"vps": true, "upstream_ai": true, "domain": true, "software": true, "other": true}
+	costPaymentMethods    = map[string]bool{"debit_card": true, "credit_card": true, "bank_transfer": true, "crypto": true}
+)
 
-var hostingCostCategories = map[string]bool{"vps": true, "domain": true, "software": true, "other": true}
+// earliestCostDate is the oldest paid date accepted, to catch typos like 0202.
+var earliestCostDate = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
-func (b hostingCostRequest) toCost() (store.HostingCost, error) {
-	c := store.HostingCost{
-		Name: strings.TrimSpace(b.Name), Category: strings.TrimSpace(b.Category), AmountIDR: b.AmountIDR,
-		Period: strings.TrimSpace(b.Period), StartDate: strings.TrimSpace(b.StartDate),
-		EndDate: strings.TrimSpace(b.EndDate), Note: strings.TrimSpace(b.Note),
+// paidAt resolves a YYYY-MM-DD paid date against the saved time prev. The
+// same day keeps prev, today uses now, and any other day is set to noon in
+// hosting.Zone so it stays in that day and month. Future days are refused.
+func paidAt(date string, prev, now time.Time) (time.Time, error) {
+	date = strings.TrimSpace(date)
+	if date == "" {
+		return prev, nil
 	}
-	if c.Category == "" {
-		c.Category = "vps"
-	}
-	if c.Period == "" {
-		c.Period = store.CostMonthly
-	}
-	switch {
-	case c.Name == "" || len(c.Name) > 120:
-		return c, errors.New("name is required (max 120 characters)")
-	case !hostingCostCategories[c.Category]:
-		return c, errors.New("category must be vps, domain, software or other")
-	case c.Period != store.CostMonthly && c.Period != store.CostOneTime:
-		return c, errors.New("period must be monthly or one_time")
-	case c.AmountIDR <= 0 || c.AmountIDR > 1_000_000_000_000:
-		return c, errors.New("amount_idr must be positive")
-	case len(c.Note) > 500:
-		return c, errors.New("note must be 500 characters or fewer")
-	}
-	start, err := time.Parse("2006-01-02", c.StartDate)
+	d, err := time.ParseInLocation("2006-01-02", date, hosting.Zone)
 	if err != nil {
-		return c, errors.New("start_date must be YYYY-MM-DD")
+		return time.Time{}, errors.New("paid_date must be a date as YYYY-MM-DD")
 	}
-	if c.EndDate != "" {
-		if c.Period == store.CostOneTime {
-			return c, errors.New("a one-time cost has no end_date")
-		}
-		end, err := time.Parse("2006-01-02", c.EndDate)
-		if err != nil {
-			return c, errors.New("end_date must be YYYY-MM-DD")
-		}
-		if end.Before(start) {
-			return c, errors.New("end_date must not be before start_date")
-		}
+	day := func(t time.Time) string { return t.In(hosting.Zone).Format("2006-01-02") }
+	switch {
+	case date > day(now):
+		return time.Time{}, errors.New("paid_date cannot be in the future")
+	case d.Before(earliestCostDate):
+		return time.Time{}, errors.New("paid_date must be in 2000 or later")
+	case !prev.IsZero() && date == day(prev):
+		return prev, nil
+	case date == day(now):
+		return now, nil
 	}
-	return c, nil
+	return d.Add(12 * time.Hour).UTC(), nil
+}
+
+// maxCostAmountIDR bounds one payment, in rupiah.
+const maxCostAmountIDR = 1_000_000_000_000
+
+// apply validates b and writes it onto p. currency is the payment's currency
+// (the request's on create, the stored one on update) and rate its USD->IDR
+// rate; the amount in rupiah is derived from them.
+func (b costPaymentRequest) apply(p *store.CostPayment, currency string, rate float64) error {
+	p.Name, p.Category = strings.TrimSpace(b.Name), strings.TrimSpace(b.Category)
+	p.Provider, p.PaymentMethod = strings.TrimSpace(b.Provider), strings.TrimSpace(b.PaymentMethod)
+	p.Note = strings.TrimSpace(b.Note)
+	switch {
+	case p.Name == "" || len(p.Name) > 120:
+		return errors.New("name is required (max 120 characters)")
+	case !costPaymentCategories[p.Category]:
+		return errors.New("category must be vps, upstream_ai, domain, software or other")
+	case p.Category == "upstream_ai" && p.Provider == "":
+		return errors.New("provider is required for an upstream AI payment")
+	case len(p.Provider) > 120:
+		return errors.New("provider must be 120 characters or fewer")
+	case !costPaymentMethods[p.PaymentMethod]:
+		return errors.New("payment_method must be debit_card, credit_card, bank_transfer or crypto")
+	case len(p.Note) > 500:
+		return errors.New("note must be 500 characters or fewer")
+	case math.IsNaN(b.Amount) || math.IsInf(b.Amount, 0) || b.Amount <= 0:
+		return errors.New("amount must be positive")
+	}
+	switch currency {
+	case store.CurrencyUSD:
+		cents := int64(math.Round(b.Amount * 100))
+		if cents <= 0 {
+			return errors.New("amount must be at least $0.01")
+		}
+		p.AmountUSDCents = cents
+		p.AmountIDR = int64(math.Round(float64(cents) / 100 * rate))
+	case store.CurrencyIDR:
+		if b.Amount != math.Trunc(b.Amount) {
+			return errors.New("an IDR amount must be whole rupiah")
+		}
+		p.AmountUSDCents, p.AmountIDR = 0, int64(b.Amount)
+	default:
+		return errors.New("currency must be USD or IDR")
+	}
+	if p.AmountIDR <= 0 || p.AmountIDR > maxCostAmountIDR {
+		return errors.New("amount is out of range")
+	}
+	return nil
 }
 
 func (s *Server) adminCreateHostingCost(w http.ResponseWriter, r *http.Request) {
-	var body hostingCostRequest
+	var body costPaymentRequest
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	c, err := body.toCost()
+	ccy := strings.ToUpper(strings.TrimSpace(body.Currency))
+	var rate float64
+	if ccy == store.CurrencyUSD {
+		var ok bool
+		if rate, _, ok = currency.Resolve(s.currencySvc.Load(r.Context())); !ok {
+			writeError(w, http.StatusBadRequest, "no USD to IDR rate is available yet: refresh it or set an override in Currency settings")
+			return
+		}
+	}
+	// Stored to the second, so the response matches what a later read returns.
+	now := time.Now().UTC().Truncate(time.Second)
+	paid, err := paidAt(body.PaidDate, now, now)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	now := time.Now()
-	c.ID, c.CreatedAt, c.UpdatedAt = uuid.NewString(), now, now
-	if err := s.db.HostingCosts().Create(r.Context(), c); err != nil {
+	p := store.CostPayment{ID: uuid.NewString(), Currency: ccy, USDIDRRate: rate, PaidAt: paid, CreatedAt: now, UpdatedAt: now}
+	if err := body.apply(&p, ccy, rate); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.db.CostPayments().Create(r.Context(), p); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	writeJSON(w, http.StatusCreated, hostingCostView(c))
+	writeJSON(w, http.StatusCreated, costPaymentView(p))
 }
 
+// adminUpdateHostingCost edits a payment. Its currency and rate stay as
+// recorded, so a USD amount is re-converted at the saved rate. The paid date
+// can move; without paid_date the saved paid time is kept.
 func (s *Server) adminUpdateHostingCost(w http.ResponseWriter, r *http.Request) {
-	var body hostingCostRequest
+	var body costPaymentRequest
 	if !decodeJSON(w, r, &body) {
 		return
 	}
-	c, err := body.toCost()
+	p, err := s.db.CostPayments().Get(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	c.ID = chi.URLParam(r, "id")
-	if err := s.db.HostingCosts().Update(r.Context(), c); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "cost not found")
+			writeError(w, http.StatusNotFound, "payment not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	updated, err := s.db.HostingCosts().Get(r.Context(), c.ID)
+	if c := strings.TrimSpace(body.Currency); c != "" && !strings.EqualFold(c, p.Currency) {
+		writeError(w, http.StatusBadRequest, "the currency of a saved payment cannot change: delete it and add a new one")
+		return
+	}
+	if p.PaidAt, err = paidAt(body.PaidDate, p.PaidAt, time.Now().UTC().Truncate(time.Second)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := body.apply(&p, p.Currency, p.USDIDRRate); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.db.CostPayments().Update(r.Context(), p); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "payment not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	updated, err := s.db.CostPayments().Get(r.Context(), p.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	writeJSON(w, http.StatusOK, hostingCostView(updated))
+	writeJSON(w, http.StatusOK, costPaymentView(updated))
 }
 
 func (s *Server) adminDeleteHostingCost(w http.ResponseWriter, r *http.Request) {
-	if err := s.db.HostingCosts().Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+	if err := s.db.CostPayments().Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "cost not found")
+			writeError(w, http.StatusNotFound, "payment not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))

@@ -172,6 +172,13 @@ func (db *DB) RestoreBackup(ctx context.Context, b Backup) (RestoreStats, error)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if db.dialect == DialectPostgres {
+		// The rollup is rebuilt from the restored rows below, so skip the
+		// per-row trigger work for this transaction.
+		if _, err := tx.ExecContext(ctx, `SELECT set_config('`+skipSpendRollupSetting+`', 'on', true)`); err != nil {
+			return RestoreStats{}, fmt.Errorf("store: restore: %w", err)
+		}
+	}
 	for i := len(tables) - 1; i >= 0; i-- {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+quoteIdent(tables[i])); err != nil {
 			return RestoreStats{}, fmt.Errorf("store: clear %s: %w", tables[i], err)
@@ -219,10 +226,47 @@ func (db *DB) RestoreBackup(ctx context.Context, b Backup) (RestoreStats, error)
 		}
 		stmt.Close()
 	}
+	// A backup older than per-key routing has none of its tables, and the
+	// clear above wiped the rows migration 0061 seeded, so seed them again
+	// from the restored keys and chains.
+	if migrationNumber(b.SchemaVersion) < keyRoutingMigration {
+		seed, err := keyRoutingSeedSQL()
+		if err != nil {
+			return RestoreStats{}, err
+		}
+		if _, err := tx.ExecContext(ctx, db.rebind(seed)); err != nil {
+			return RestoreStats{}, fmt.Errorf("store: seed key routing: %w", err)
+		}
+	}
+	if err := rebuildSpendRollup(ctx, tx); err != nil {
+		return RestoreStats{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return RestoreStats{}, err
 	}
 	return stats, nil
+}
+
+const (
+	keyRoutingMigration     = 61
+	keyRoutingMigrationFile = "migrations/0061_key_provider_routing.sql"
+	keyRoutingSeedStart     = "INSERT INTO api_key_model_options"
+)
+
+// keyRoutingSeedSQL returns the statement migration 0061 uses to give every
+// existing key the final fallback its chains run today. It is cut from the
+// embedded migration (the statement runs from its INSERT to the end of the
+// file), so restore and migration cannot drift apart.
+func keyRoutingSeedSQL() (string, error) {
+	body, err := migrationsFS.ReadFile(keyRoutingMigrationFile)
+	if err != nil {
+		return "", fmt.Errorf("store: read %s: %w", keyRoutingMigrationFile, err)
+	}
+	i := strings.Index(string(body), keyRoutingSeedStart)
+	if i < 0 {
+		return "", fmt.Errorf("store: %s has no key routing seed statement", keyRoutingMigrationFile)
+	}
+	return strings.TrimSpace(string(body)[i:]), nil
 }
 
 // restoreValue converts a decoded JSON value to the Go type the target column
@@ -305,7 +349,9 @@ func (db *DB) backupTables(ctx context.Context) ([]string, error) {
 			rows.Close()
 			return nil, err
 		}
-		if n != "schema_migrations" {
+		// The spend rollup is derived from usage_records; restore rebuilds it
+		// rather than copying it.
+		if n != "schema_migrations" && n != spendRollupTable {
 			names = append(names, n)
 		}
 	}

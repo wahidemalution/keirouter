@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 	"github.com/mydisha/keirouter/backend/internal/store"
@@ -52,6 +53,10 @@ type Service struct {
 	// (64 MiB + 4 threads each) on every request for the same key.
 	authMu    sync.RWMutex
 	authCache map[string]authCacheEntry
+
+	// authFlight collapses concurrent cache misses for the same key into one
+	// argon2 verification.
+	authFlight singleflight.Group
 }
 
 // authCacheEntry holds a cached authentication result.
@@ -60,13 +65,13 @@ type authCacheEntry struct {
 	expires time.Time
 }
 
-// authCacheTTL bounds how long a successful auth result is cached. Short enough
-// that key disable/deletion takes effect within seconds, long enough to absorb
-// bursty traffic from the same key (Claude Code sends 10+ req/s).
-const authCacheTTL = 5 * time.Second
+// authCacheTTL bounds how long a successful auth result is cached. It outlasts
+// the pause between agent turns; disable, delete, and discount or routing edits
+// invalidate the entry immediately.
+const authCacheTTL = 2 * time.Minute
 
 // authCacheMaxEntries limits the cache size to prevent unbounded memory growth.
-const authCacheMaxEntries = 256
+const authCacheMaxEntries = 4096
 
 // New builds an identity Service.
 func New(keys *store.APIKeyRepo) *Service {
@@ -171,7 +176,20 @@ func (s *Service) Authenticate(ctx context.Context, plaintext string) (store.API
 	}
 	s.authMu.RUnlock()
 
-	// Slow path: full DB lookup + argon2 verification.
+	// The result is shared by every waiting caller, so one client disconnecting
+	// must not cancel the lookup for the rest.
+	v, err, _ := s.authFlight.Do(lookup, func() (any, error) {
+		return s.authenticateSlow(context.WithoutCancel(ctx), plaintext, lookup)
+	})
+	if err != nil {
+		return store.APIKey{}, err
+	}
+	return v.(store.APIKey), nil
+}
+
+// authenticateSlow runs the full DB lookup and argon2 verification, then
+// caches the positive result.
+func (s *Service) authenticateSlow(ctx context.Context, plaintext, lookup string) (store.APIKey, error) {
 	rec, err := s.keys.FindByLookup(ctx, lookup)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -193,6 +211,15 @@ func (s *Service) Authenticate(ctx context.Context, plaintext string) (store.API
 	if rec.ModelDiscounts, err = s.keys.ModelDiscounts(ctx, rec.ID); err != nil {
 		return store.APIKey{}, err
 	}
+	// Provider routing settings ride along for the same reason: dropping them
+	// on a load error would route through providers the customer turned off.
+	routing, err := s.keys.KeyRouting(ctx, rec.ID)
+	if err != nil {
+		return store.APIKey{}, err
+	}
+	rec.AllowedProviders = routing.AllowedProviders
+	rec.ModelDisabledProviders = routing.DisabledProviders
+	rec.ModelFinalFallback = routing.FinalFallback
 
 	// Cache the positive result for subsequent requests.
 	s.cacheAuthResult(lookup, rec)

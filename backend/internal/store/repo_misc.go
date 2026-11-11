@@ -89,6 +89,34 @@ func (r *SettingsRepo) Set(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// ClaimLease takes or renews a lease stored as setting key: value is the
+// holder, updated_at the last claim. It succeeds when the key is free, owner
+// already holds it, or the holder's last claim is older than ttl. One
+// statement, so two claimers cannot both win.
+func (r *SettingsRepo) ClaimLease(ctx context.Context, key, owner string, now time.Time, ttl time.Duration) (bool, error) {
+	q := r.db.rebind(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+		WHERE settings.value = excluded.value OR settings.updated_at < ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, key, owner, formatTime(now), formatTime(now.Add(-ttl)))
+	if err != nil {
+		return false, fmt.Errorf("store: claim lease: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: claim lease: %w", err)
+	}
+	return n == 1, nil
+}
+
+// ReleaseLease frees a lease if owner holds it.
+func (r *SettingsRepo) ReleaseLease(ctx context.Context, key, owner string) error {
+	q := r.db.rebind(`DELETE FROM settings WHERE key = ? AND value = ?`)
+	if _, err := r.db.sql.ExecContext(ctx, q, key, owner); err != nil {
+		return fmt.Errorf("store: release lease: %w", err)
+	}
+	return nil
+}
+
 // Delete removes a setting key. Absent keys are not an error.
 func (r *SettingsRepo) Delete(ctx context.Context, key string) error {
 	q := r.db.rebind(`DELETE FROM settings WHERE key = ?`)

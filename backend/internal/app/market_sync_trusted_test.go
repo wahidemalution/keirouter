@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -226,5 +228,106 @@ func TestSyncDropsTrustedSlugWhenNoOfferClearsFloor(t *testing.T) {
 	}
 	if _, ok := a.MarketCache().Lookup("surplus-trusted:gemini-3.8-flash"); ok {
 		t.Fatal("a slug with no trusted offer clearing min30 must be absent (sold out)")
+	}
+}
+
+// providerBook carries trusted offers from two Surplus providers for one model.
+const providerBook = `{"offers":[
+ {"provider_id":"openrouter","price_input_per_1m":300000,"price_output_per_1m":1200000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true},
+ {"provider_id":"alibaba-cn","price_input_per_1m":500000,"price_output_per_1m":2000000,"direct_input_per_1m":1000000,"direct_output_per_1m":4000000,"available":true,"healthy":true,"trusted":true}
+]}`
+
+func TestMarketSyncFetchesEachBookOnce(t *testing.T) {
+	db := newSyncTestDB(t)
+	ctx := context.Background()
+	var bookHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/m" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		bookHits.Add(1)
+		_, _ = w.Write([]byte(providerBook))
+	}))
+	t.Cleanup(srv.Close)
+
+	steps := []store.ChainStep{
+		{ID: "s1", ChainID: "c1", Position: 0, Provider: "p", Model: "m", MarketSlug: "surplus-trusted:m"},
+		{ID: "s2", ChainID: "c1", Position: 1, Provider: "p", Model: "m", MarketSlug: "surplus-trusted@openrouter:m"},
+		{ID: "s3", ChainID: "c1", Position: 2, Provider: "p", Model: "m", MarketSlug: "surplus-trusted@alibaba-cn:m"},
+		{ID: "s4", ChainID: "c1", Position: 3, Provider: "p", Model: "m", MarketSlug: "surplus-fast:m"},
+	}
+	if err := db.Chains().Create(ctx, store.Chain{
+		ID: "c1", TenantID: store.DefaultTenantID, Name: "m", Strategy: "priority", Steps: steps,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := newSyncTestApp(t, db)
+	a.surplusURL, a.marketURL = srv.URL, srv.URL+"/inferhub"
+	models, err := a.fetchMergedModels(ctx)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if n := bookHits.Load(); n != 1 {
+		t.Fatalf("book hits on /m = %d, want 1", n)
+	}
+	bySlug := map[string]market.Model{}
+	for _, m := range models {
+		bySlug[m.Slug] = m
+	}
+	for slug, wantIn := range map[string]float64{
+		"surplus-trusted:m":            0.3,
+		"surplus-trusted@openrouter:m": 0.3,
+		"surplus-trusted@alibaba-cn:m": 0.5,
+	} {
+		m, ok := bySlug[slug]
+		if !ok {
+			t.Fatalf("snapshot missing %s; have %v", slug, bySlug)
+		}
+		if m.MinAskIn != wantIn {
+			t.Fatalf("%s best input = %v, want %v", slug, m.MinAskIn, wantIn)
+		}
+	}
+	if _, ok := bySlug["surplus-fast:m"]; !ok {
+		t.Fatal("snapshot missing surplus-fast:m")
+	}
+	trusted := 0
+	for slug := range bySlug {
+		if strings.HasPrefix(slug, "surplus-trusted") {
+			trusted++
+		}
+	}
+	if trusted != 3 {
+		t.Fatalf("trusted slugs = %d, want 3: %v", trusted, bySlug)
+	}
+}
+
+func TestEnrichSurplusFailoverReusesSyncBooks(t *testing.T) {
+	const book = `{"offers":[
+ {"price_input_per_1m":1000000,"price_output_per_1m":2000000,"available":true},
+ {"price_input_per_1m":2000000,"price_output_per_1m":4000000,"available":true}
+]}`
+	var mu sync.Mutex
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.Path)
+		mu.Unlock()
+		_, _ = w.Write([]byte(book))
+	}))
+	t.Cleanup(srv.Close)
+	a := newSyncTestApp(t, newSyncTestDB(t))
+	a.surplusURL = srv.URL
+	a.surplusBooks = map[string][]byte{"a": []byte(book)}
+
+	models := []market.Model{{Slug: "surplus:a"}, {Slug: "surplus:b"}}
+	models = a.enrichSurplusFailover(context.Background(), models, map[string]bool{"surplus:a": true, "surplus:b": true})
+	if strings.Join(hits, ",") != "/b" {
+		t.Fatalf("book hits = %v, want only /b", hits)
+	}
+	for _, m := range models {
+		if m.FailoverIn != 2 || m.FailoverOut != 4 {
+			t.Fatalf("%s failover = (%v,%v), want (2,4)", m.Slug, m.FailoverIn, m.FailoverOut)
+		}
 	}
 }

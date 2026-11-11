@@ -89,6 +89,10 @@ func HashAPIKey(plaintext string) (string, error) {
 	), nil
 }
 
+// argonVerifySem caps concurrent verifications so a burst of cold keys holds
+// at most 2 x 64 MiB instead of one 64 MiB block per request.
+var argonVerifySem = make(chan struct{}, 2)
+
 // VerifyAPIKey reports whether plaintext matches the stored argon2id hash,
 // using a constant-time comparison.
 func VerifyAPIKey(plaintext, encodedHash string) (bool, error) {
@@ -96,6 +100,8 @@ func VerifyAPIKey(plaintext, encodedHash string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	argonVerifySem <- struct{}{}
+	defer func() { <-argonVerifySem }()
 	got := argon2.IDKey([]byte(plaintext), salt, time, mem, threads, uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }

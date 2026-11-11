@@ -169,6 +169,27 @@ type Target struct {
 	// StepMarkupPercent overrides the chain markup when StepMarkupSet.
 	StepMarkupPercent float64
 	StepMarkupSet     bool
+	// DiscountPercent, when DiscountSet, makes the Static* rates a list price:
+	// the customer pays list × (100 − DiscountPercent) / 100 and no markup
+	// applies. CostMultiplier, when CostMultiplierSet, is the operator's cost
+	// as a fraction of list; unset means cost equals the customer price.
+	DiscountPercent   float64
+	DiscountSet       bool
+	CostMultiplier    float64
+	CostMultiplierSet bool
+
+	// ChainFallback marks the chain's last-resort fallback target, billed at
+	// the chain price.
+	ChainFallback bool
+	// FallbackFloorExempt marks a chain fallback the key turned on explicitly:
+	// the customer accepted its normal price, so their minimum discount does
+	// not remove it. A fallback kept from before per-key routing is removed
+	// by a minimum discount, as it always was.
+	FallbackFloorExempt bool
+	// BestDiscountPct is how far below list the cheapest ask of MarketSlug
+	// sits, from the cached quote (0 = no list price). A step whose best
+	// discount cannot meet the customer's minimum is dropped before dispatch.
+	BestDiscountPct int
 }
 
 // Attempt describes a single resolved try: the connector, credentials, and the
@@ -833,6 +854,9 @@ func (d *Dispatcher) NoteFailure(ctx context.Context, accountID string, err *cor
 		cooldown = d.exponentialCooldown(ctx, accountID)
 	case core.ErrQuotaExhausted:
 		cooldown = 30 * time.Minute
+		if err.QuotaCooldown > 0 {
+			cooldown = err.QuotaCooldown
+		}
 		if err.CreditsExhausted {
 			// A depleted paid balance is terminal until the user tops up.
 			// Park the account for a day instead of thrashing through
@@ -1351,6 +1375,12 @@ func TargetsFromChain(chain store.Chain) []Target {
 		}
 		if s.MarkupPercent != nil {
 			t.StepMarkupPercent, t.StepMarkupSet = *s.MarkupPercent, true
+		}
+		if s.DiscountPercent != nil {
+			t.DiscountPercent, t.DiscountSet = *s.DiscountPercent, true
+		}
+		if s.CostMultiplier != nil {
+			t.CostMultiplier, t.CostMultiplierSet = *s.CostMultiplier, true
 		}
 		out = append(out, t)
 	}

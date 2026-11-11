@@ -48,5 +48,7 @@ func dropCostKeys(v any) any {
 
 func isCostKey(k string) bool {
 	k = strings.ToLower(k)
-	return strings.Contains(k, "cost") || strings.Contains(k, "usd") || strings.Contains(k, "spent")
+	// discount (discount_pct on recent requests) is a price relative to list.
+	return strings.Contains(k, "cost") || strings.Contains(k, "usd") || strings.Contains(k, "spent") ||
+		strings.Contains(k, "discount")
 }

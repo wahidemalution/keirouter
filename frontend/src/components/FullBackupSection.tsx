@@ -92,6 +92,7 @@ export function FullBackupSection() {
           <li>Credentials are re-encrypted with your passphrase, so the new server may use a different master key.</li>
           <li>Restore <strong>replaces all data</strong> on this server in one step; a wrong passphrase or bad file changes nothing.</li>
           <li>Works across SQLite and Postgres. Restart KeiRouter after a restore.</li>
+          <li>A restore switches scheduled offsite backups off, so a copy never writes into the original server's bucket. Turn them back on after checking the destination.</li>
         </ul>
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setBackupOpen(true)} disabled={busy}>
@@ -105,7 +106,7 @@ export function FullBackupSection() {
           <input
             ref={fileRef}
             type="file"
-            accept=".json,application/json"
+            accept=".json,.gz,application/json,application/gzip"
             className="hidden"
             onChange={(e) => setRestoreFile(e.target.files?.[0] ?? null)}
           />

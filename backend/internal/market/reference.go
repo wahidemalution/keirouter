@@ -20,6 +20,10 @@ const ModelsDevURL = "https://models.dev/api.json"
 type Reference struct {
 	InputPerM  float64
 	OutputPerM float64
+	// CacheReadPerM/CacheWritePerM are the listed cache prices; 0 when the
+	// listing has none.
+	CacheReadPerM  float64
+	CacheWritePerM float64
 	// ContextTokens is the context window; 0 when unknown.
 	ContextTokens int
 	// Provider is the model vendor whose own listing set the price (e.g.
@@ -87,6 +91,8 @@ type modelsDevEntry struct {
 	firstParty bool // listed by the model's own vendor
 	exact      bool // the entry's own id (not only its canonical id) matches
 	in, out    float64
+	cacheRead  float64
+	cacheWrite float64
 	context    int
 }
 
@@ -109,8 +115,10 @@ func ParseModelsDev(r io.Reader) (map[string]Reference, error) {
 			ID        string `json:"id"`
 			Canonical string `json:"canonical_model_id"`
 			Cost      *struct {
-				Input  float64 `json:"input"`
-				Output float64 `json:"output"`
+				Input      float64 `json:"input"`
+				Output     float64 `json:"output"`
+				CacheRead  float64 `json:"cache_read"`
+				CacheWrite float64 `json:"cache_write"`
 			} `json:"cost"`
 			Limit struct {
 				Context int `json:"context"`
@@ -133,6 +141,7 @@ func ParseModelsDev(r io.Reader) (map[string]Reference, error) {
 			e := modelsDevEntry{provider: providerID, context: max(m.Limit.Context, 0)}
 			if m.Cost != nil {
 				e.in, e.out = m.Cost.Input, m.Cost.Output
+				e.cacheRead, e.cacheWrite = cleanRate(m.Cost.CacheRead), cleanRate(m.Cost.CacheWrite)
 			}
 			vendor, _, hasVendor := strings.Cut(m.Canonical, "/")
 			e.firstParty = hasVendor && vendor == providerID
@@ -181,7 +190,8 @@ func pickReference(entries []modelsDevEntry) (Reference, bool) {
 		if ctx == 0 {
 			ctx = mostCommonContext(entries)
 		}
-		return Reference{InputPerM: best.in, OutputPerM: best.out, ContextTokens: ctx, Provider: best.provider}, true
+		return Reference{InputPerM: best.in, OutputPerM: best.out, CacheReadPerM: best.cacheRead, CacheWritePerM: best.cacheWrite,
+			ContextTokens: ctx, Provider: best.provider}, true
 	}
 
 	type pair struct{ in, out float64 }
@@ -200,10 +210,42 @@ func pickReference(entries []modelsDevEntry) (Reference, bool) {
 		}
 	}
 	ref := Reference{InputPerM: bestPair.in, OutputPerM: bestPair.out, ContextTokens: mostCommonContext(entries)}
+	if bestCount > 0 {
+		ref.CacheReadPerM, ref.CacheWritePerM = mostCommonCache(entries, bestPair.in, bestPair.out)
+	}
 	if bestCount == 0 && ref.ContextTokens == 0 {
 		return Reference{}, false
 	}
 	return ref, true
+}
+
+// mostCommonCache returns the cache prices most entries listing the in/out
+// price report, ties to the cheaper; zeros when none list one.
+func mostCommonCache(entries []modelsDevEntry, in, out float64) (float64, float64) {
+	type pair struct{ read, write float64 }
+	counts := map[pair]int{}
+	var best pair
+	bestCount := 0
+	for _, e := range entries {
+		if e.in != in || e.out != out || (e.cacheRead == 0 && e.cacheWrite == 0) {
+			continue
+		}
+		p := pair{e.cacheRead, e.cacheWrite}
+		counts[p]++
+		n := counts[p]
+		if n > bestCount || (n == bestCount && p.read+p.write < best.read+best.write) {
+			best, bestCount = p, n
+		}
+	}
+	return best.read, best.write
+}
+
+// cleanRate keeps a positive finite listed rate and maps anything else to 0.
+func cleanRate(v float64) float64 {
+	if validRate(v) && v > 0 {
+		return v
+	}
+	return 0
 }
 
 // mostCommonContext returns the context window most entries report, ties to

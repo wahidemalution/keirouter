@@ -80,14 +80,22 @@ func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (re
 	if err != nil {
 		return res, err
 	}
+	if res, err = s.priceResolvedFallback(res, model); err != nil {
+		return res, err
+	}
 	// The customer's minimum discount (per model, else the key default)
 	// narrows the route to steps that can guarantee it. Models that cannot
 	// guarantee any discount are exempt: they run at their set price, so a
 	// minimum never blocks them.
-	if key, ok := authedKey(ctx); ok && res.DiscountCapable {
-		if pct := key.EffectiveMinDiscount(model); pct > 0 {
+	if key, ok := authedKey(ctx); ok {
+		if pct := keyDiscountFloor(key, model, res.DiscountCapable); pct > 0 {
 			if res.Targets, err = applyDiscountFloor(res.Targets, pct, model); err != nil {
 				return resolveResult{}, err
+			}
+			// The floor may have removed the fallback; then nothing is pinned,
+			// or round-robin would hold the last step out of rotation.
+			if n := len(res.Targets); n == 0 || !res.Targets[n-1].ChainFallback {
+				res.PlanOpts.PinnedTail = 0
 			}
 		}
 	}
@@ -124,9 +132,9 @@ func resolveTargetsUnstamped(ctx context.Context, chains ChainSource, aliases Al
 	if err == nil {
 		return res, nil
 	}
-	// The chain exists but is sold out: say so rather than falling through to
-	// "unknown model".
-	if bad, ok := err.(badModelError); ok && bad.status == http.StatusServiceUnavailable {
+	// The chain exists but cannot route (sold out, or no provider this key
+	// may use): say so rather than falling through to "unknown model".
+	if bad, ok := err.(badModelError); ok && (bad.status == http.StatusServiceUnavailable || bad.status == http.StatusUnprocessableEntity) {
 		return resolveResult{}, err
 	}
 
@@ -155,6 +163,9 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 	}
 	for _, c := range list {
 		if c.Name == name {
+			if c.Maintenance {
+				return resolveResult{}, errChainMaintenance(name)
+			}
 			if c.Disabled {
 				return resolveResult{}, errChainDisabled(name)
 			}
@@ -162,6 +173,20 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			if len(steps) == 0 {
 				return resolveResult{}, errBadModel("chain has no steps: " + name)
 			}
+			hasFallback := c.FallbackProvider != "" && c.FallbackModel != ""
+			// Without an authenticated key (probes, admin playground) the
+			// chain routes as configured, fallback included.
+			fallbackOn, fallbackExempt := true, false
+			if key, ok := authedKey(ctx); ok {
+				fallbackOn = key.FinalFallbackOn(name)
+				fallbackExempt = key.FinalFallbackExempt(name)
+				var byAdmin bool
+				steps, byAdmin = filterStepsForKey(steps, key, name)
+				if len(steps) == 0 && !(hasFallback && fallbackOn) {
+					return resolveResult{}, errNoEnabledProvider(name, byAdmin)
+				}
+			}
+			useFallback := hasFallback && fallbackOn
 
 			opts := dispatch.PlanOptions{ChainID: c.ID}
 			markupPercent := market.EffectiveMarkup(c.MarkupPercent, markupPercent)
@@ -179,7 +204,10 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			steps = priceMarketSteps(steps, cache, markupPercent)
 			steps = priceStaticSteps(steps, markupPercent)
 			steps = stampSurplusTrusted(steps, c.MarketSlugs, cache, markupPercent)
-			if len(steps) == 0 && (c.FallbackProvider == "" || c.FallbackModel == "") {
+			if len(steps) == 0 && !useFallback {
+				if hasFallback {
+					return resolveResult{}, errSoldOutFallbackOff(name)
+				}
 				return resolveResult{}, errSoldOut(name)
 			}
 			// Ordering strategies reorder the chain steps before the optional
@@ -202,16 +230,11 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			}
 
 			targets := steps
-			// Append fallback model as last-resort target when configured.
-			if c.FallbackProvider != "" && c.FallbackModel != "" {
-				targets = append(targets, dispatch.Target{
-					Provider:       c.FallbackProvider,
-					Model:          c.FallbackModel,
-					InputPerM:      c.InputPerM,
-					OutputPerM:     c.OutputPerM,
-					CacheWritePerM: c.CacheWritePerM,
-					CacheReadPerM:  c.CacheReadPerM,
-				})
+			// Append fallback model as last-resort target when configured and
+			// turned on for this key. Left out, nothing is pinned, so
+			// round-robin rotates every step.
+			if useFallback {
+				targets = append(targets, chainFallbackTarget(c, fallbackExempt))
 				opts.PinnedTail = 1
 			}
 			return resolveResult{Targets: targets, PlanOpts: opts, DiscountCapable: chainCanGuaranteeDiscount(c)}, nil
@@ -288,6 +311,7 @@ func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, ma
 		if out[i].MarketSlug == "" {
 			continue
 		}
+		out[i].MarketSlug = canonicalSlug(out[i].MarketSlug)
 		if r, ok := cache.Rate(out[i].MarketSlug); ok {
 			stampMarketRate(&out[i], r, mult)
 		}
@@ -402,8 +426,18 @@ func stampMarketRate(t *dispatch.Target, r market.Rate, mult float64) {
 // order, fastest first, minus providers FastHealth has set aside (a step
 // left with none is dropped), and a short first-output timeout so a stuck
 // seller hands over to the next step quickly.
+// A step whose slug Surplus reported out of stock (the cache's skip list) is
+// dropped until the next refresh. Each kept step carries its quote's best
+// discount for the customer's minimum-discount check.
 // It runs after any market reordering so the ceiling overrides cheapest-ask stamps.
 func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
+	return stampSurplusTrustedWith(steps, chainSlugs, cache, markupPercent, liveFastProviders)
+}
+
+// stampSurplusTrustedWith is stampSurplusTrusted with the surplus-fast
+// provider filter supplied. Routing passes liveFastProviders, which advances
+// the recovery-trial cadence; read-only callers pass a peeking filter.
+func stampSurplusTrustedWith(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64, fastFilter func(h *market.FastHealth, model string, providers, order []string) ([]string, []string)) []dispatch.Target {
 	byModel := map[string]string{}
 	for _, slug := range chainSlugs {
 		if name, ok := market.CutUpstreamCostSlug(slug); ok {
@@ -419,6 +453,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		if slug == "" && !steps[i].StaticPrice {
 			slug = byModel[steps[i].Model]
 		}
+		slug = canonicalSlug(slug)
 		if !market.IsUpstreamCostSlug(slug) {
 			if copied {
 				out = append(out, steps[i])
@@ -428,6 +463,11 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		if !copied {
 			out = append(make([]dispatch.Target, 0, len(steps)), steps[:i]...)
 			copied = true
+		}
+		// Surplus reported this slug out of stock: skip it until the next
+		// refresh rather than spend a request finding out again.
+		if cache.Skips().Has(slug) {
+			continue
 		}
 		var m market.Model
 		ok := false
@@ -441,7 +481,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		fast := strings.HasPrefix(slug, market.SurplusFastPrefix)
 		if fast {
 			name, _ := market.CutUpstreamCostSlug(slug)
-			if providers, order = liveFastProviders(cache.FastHealth(), name, providers, order); len(providers) == 0 {
+			if providers, order = fastFilter(cache.FastHealth(), name, providers, order); len(providers) == 0 {
 				continue
 			}
 		}
@@ -450,6 +490,7 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 		t.BillUpstreamCost = true
 		t.UpstreamCostMult = mult
 		t.MinDiscountPct = m.MinDiscountPct
+		t.BestDiscountPct = m.BestDiscountPct
 		t.UpstreamProviders = strings.Join(providers, ",")
 		t.UpstreamProviderOrder = strings.Join(order, ",")
 		if fast {
@@ -473,10 +514,29 @@ func stampSurplusTrusted(steps []dispatch.Target, chainSlugs []string, cache *ma
 	return out
 }
 
+// canonicalSlug returns a surplus-trusted@<provider>:<model> slug with its
+// provider lowercased, the form the snapshot cache keys quotes by, so a step
+// stored with a mixed-case provider still finds its quote. Other slugs pass
+// through unchanged.
+func canonicalSlug(slug string) string {
+	if provider, model, ok := market.ParseProviderSlug(slug); ok {
+		return market.ProviderSlug(provider, model)
+	}
+	return slug
+}
+
 // liveFastProviders drops the providers h has set aside for model from the
 // allow-list and the attempt order alike.
 func liveFastProviders(h *market.FastHealth, model string, providers, order []string) ([]string, []string) {
-	kept := h.Filter(model, providers)
+	return narrowFastProviders(h.Filter(model, providers), providers, order)
+}
+
+// peekFastProviders is liveFastProviders without side effects, for displays.
+func peekFastProviders(h *market.FastHealth, model string, providers, order []string) ([]string, []string) {
+	return narrowFastProviders(h.Peek(model, providers), providers, order)
+}
+
+func narrowFastProviders(kept, providers, order []string) ([]string, []string) {
 	if len(kept) == len(providers) {
 		return providers, order
 	}
@@ -499,6 +559,12 @@ func liveFastProviders(h *market.FastHealth, model string, providers, order []st
 type badModelError struct {
 	msg    string
 	status int
+	// noProvider marks the 422 for a model with no provider this key may
+	// use, so the console does not blame the discount floor.
+	noProvider bool
+	// fallbackUnpriced marks the 503 for a route left with only a fallback
+	// that has no price, so the console names the missing price.
+	fallbackUnpriced bool
 }
 
 func (e badModelError) Error() string { return e.msg }
@@ -528,6 +594,13 @@ func errSoldOut(name string) error {
 func errChainDisabled(name string) error {
 	return badModelError{
 		msg:    "model " + name + " is sold out, try again later",
+		status: http.StatusServiceUnavailable,
+	}
+}
+
+func errChainMaintenance(name string) error {
+	return badModelError{
+		msg:    "model " + name + " is temporarily disabled for maintenance, try again later",
 		status: http.StatusServiceUnavailable,
 	}
 }

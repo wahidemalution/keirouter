@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { cn } from "@/lib/utils";
 import { Field, Input } from "../ui";
+import { DiscountPriceFields } from "./DiscountPriceFields";
 import { FieldMessage } from "./FieldMessage";
 import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, type DraftChainStep, type StepPriceSource as Source, staticStepPreview } from "./chainUtils";
 
@@ -9,6 +10,7 @@ const focusRing = "peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500"
 const SOURCES: { value: Source; label: string }[] = [
   { value: "market", label: "Market slug" },
   { value: "static", label: "Static price" },
+  { value: "discount", label: "Discount" },
 ];
 
 // usd prints a per-1M price without trailing noise: 0.65 -> $0.65, 0.0625 -> $0.0625.
@@ -21,8 +23,8 @@ const autoHint = (input: string, factor: number) => {
   return input.trim() !== "" && Number.isFinite(n) && n > 0 ? `auto: ${Number((n * factor).toFixed(6))}` : "auto";
 };
 
-// StepPriceSource picks how one route step is billed: by its market slug, or
-// by a fixed provider price plus markup. For a static price it shows what the
+// StepPriceSource picks how one route step is billed: by its market slug, by
+// a fixed provider price plus markup, or by a discount off the list price. For a static price it shows what the
 // customer pays per 1M tokens, recomputed on every keystroke, so the operator
 // sees the billed rate before saving. inheritedMarkup is null while the
 // global markup is still loading.
@@ -31,9 +33,12 @@ export function StepPriceSource({
   stepNumber,
   inheritedMarkup,
   inheritedLabel,
+  suggestedSlug = "",
   onChange,
 }: {
   step: DraftChainStep;
+  /** The slug this step's provider routes by, offered when the field differs. */
+  suggestedSlug?: string;
   stepNumber: number;
   inheritedMarkup: number | null;
   inheritedLabel: string;
@@ -49,7 +54,7 @@ export function StepPriceSource({
     <div className="space-y-2">
       <fieldset>
         <legend className="mb-1.5 text-[12.5px] font-medium text-fg">Step {stepNumber} price source</legend>
-        <div className="inline-flex rounded-xl border border-line bg-subtle p-0.5">
+        <div className="inline-flex flex-wrap rounded-xl border border-line bg-subtle p-0.5">
           {SOURCES.map((source) => {
             const active = step.priceSource === source.value;
             return (
@@ -78,9 +83,22 @@ export function StepPriceSource({
       </fieldset>
 
       {step.priceSource === "market" ? (
-        <Field label="Market slug" hint="Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:">
-          <Input value={step.marketSlug} onChange={(event) => onChange({ marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
-        </Field>
+        <div>
+          <Field label="Market slug" hint={<>Market slug for this step (optional): an inferhub slug, surplus:, surplus-trusted: or surplus-fast:. Per provider: <span className="font-mono text-fg">surplus-trusted@&lt;provider&gt;:&lt;model&gt;</span>, for example <span className="font-mono text-fg">surplus-trusted@openrouter:deepseek-v4.1-flash</span>.</>}>
+            <Input value={step.marketSlug} onChange={(event) => onChange({ marketSlug: event.target.value })} placeholder="e.g. cbcn/deepseek-v4.1-flash" className="font-mono" />
+          </Field>
+          {suggestedSlug && step.marketSlug.trim() !== suggestedSlug && (
+            <button
+              type="button"
+              onClick={() => onChange({ marketSlug: suggestedSlug })}
+              className="mt-1.5 inline-flex min-h-11 max-w-full items-center gap-1.5 rounded-lg px-2 text-left text-[12.5px] text-link hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 sm:min-h-8"
+            >
+              Use <span className="truncate font-mono">{suggestedSlug}</span>
+            </button>
+          )}
+        </div>
+      ) : step.priceSource === "discount" ? (
+        <DiscountPriceFields step={step} onChange={onChange} />
       ) : (
         <div className="space-y-2">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -124,6 +142,19 @@ export function StepPriceSource({
           </div>
         </div>
       )}
+
+      <Field
+        label="Provider name in portal"
+        optional
+        hint="Shown to customers in Model Settings and Usage. Leave empty to use the provider's own name."
+      >
+        <Input
+          value={step.displayName}
+          onChange={(event) => onChange({ displayName: event.target.value })}
+          maxLength={60}
+          placeholder="e.g. Fast Lane"
+        />
+      </Field>
     </div>
   );
 }
