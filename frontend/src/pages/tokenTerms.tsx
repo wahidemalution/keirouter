@@ -68,7 +68,7 @@ export const TOKEN_SECTIONS: TermsSection[] = [
     body: (
       <>
         <p>
-          Masa aktif tertera di setiap paket, bawaannya 15 hari. Masa aktif mulai dihitung saat pembayaran paket pertama
+          Masa aktif sesuai masa aktif yang tertera di paket. Masa aktif mulai dihitung saat pembayaran paket pertama
           dalam satu periode kami terima.
         </p>
         <p>
@@ -117,18 +117,18 @@ export const TOKEN_SECTIONS: TermsSection[] = [
     body: (
       <ul className="list-disc space-y-2 pl-5">
         <li>
-          Sebelum diteruskan, setiap permintaan butuh sisa token yang cukup untuk perkiraan token input ditambah batas
-          output-nya. Jika tidak cukup, permintaan ditolak dan tidak ada token yang dipotong.
+          Batas output setiap permintaan (misalnya <code className="font-mono text-[13px]">max_tokens</code>) kami
+          turunkan bila perlu, sehingga tidak melebihi sisa token dikurangi perkiraan token input. Jika tidak Anda isi,
+          kami memakai batas output bawaan model, dengan aturan yang sama.
         </li>
         <li>
-          Batas output (misalnya <code className="font-mono text-[13px]">max_tokens</code>) kami turunkan agar
-          perkiraan input ditambah output tidak melebihi sisa token. Jika tidak Anda isi, kami memakai batas output
-          bawaan model.
+          Jika sisa token tidak cukup untuk perkiraan input ditambah minimal 1 token output, permintaan ditolak dan
+          tidak ada token yang dipotong.
         </li>
         <li>Setiap permintaan hanya boleh meminta satu jawaban.</li>
         <li>
           Permintaan yang terputus setelah terkirim ke penyedia, karena Anda menghentikannya, kena timeout, atau
-          koneksinya putus, dihitung sebesar perkiraan token input ditambah seluruh batas output-nya. Jika output yang
+          koneksi Anda terputus, dihitung sebesar perkiraan token input ditambah seluruh batas output-nya. Jika output yang
           sudah terkirim lebih besar, yang dihitung adalah output tersebut. Hal yang sama berlaku untuk stream yang
           selesai tanpa laporan pemakaian dari penyedia.
         </li>

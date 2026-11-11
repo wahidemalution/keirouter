@@ -384,7 +384,7 @@ function PackagesPanel() {
                     <td className="px-4 py-2.5">
                       <span className="flex flex-wrap items-center gap-1.5 font-medium text-fg">
                         {p.name}
-                        {p.featured && <Badge tone="accent">Featured</Badge>}
+                        {p.featured && <Badge tone="accent">Recommended</Badge>}
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-fg-muted">{p.kind === "tokens" ? "Token quota" : "Daily"}</td>
@@ -542,9 +542,9 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p id="pkg-featured" className="text-[13px] font-medium text-fg">
-                Mark as featured
+                Mark as recommended
               </p>
-              <p className="text-[12px] text-fg-muted">The portal shows a Featured label on this package.</p>
+              <p className="text-[12px] text-fg-muted">The portal and the public page show a Recommended label on this package.</p>
             </div>
             <Toggle checked={featured} onChange={setFeatured} aria-labelledby="pkg-featured" />
           </div>

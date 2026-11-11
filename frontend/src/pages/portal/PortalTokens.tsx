@@ -83,7 +83,7 @@ function PackageCard({
     >
       <span className="flex w-full flex-wrap items-center gap-2">
         <span className="text-[14px] font-semibold text-fg">{pkg.name}</span>
-        {pkg.featured && <Badge tone="accent">Most popular</Badge>}
+        {pkg.featured && <Badge tone="accent">Recommended</Badge>}
         {discount > 0 && <Badge tone="success">Save {discount}%</Badge>}
       </span>
       <span className="text-[22px] font-semibold tabular-nums tracking-[-0.015em] text-fg">
@@ -447,7 +447,7 @@ export function PortalTokensPage() {
                   </span>
                 </label>
                 <p className="mt-1.5 pl-[26px] text-[12px] text-fg-muted">
-                  Tokens left when the package expires are forfeited. Version {offers.data.terms_version}.
+                  Tokens left when the package expires are forfeited.{offers.data.terms_version ? ` Version ${offers.data.terms_version}.` : ""}
                 </p>
               </div>
               {termsNotice && (

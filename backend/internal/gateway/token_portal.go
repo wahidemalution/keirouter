@@ -21,7 +21,8 @@ func (s *Server) tokenOnSale(st tokenpkg.Settings) bool {
 }
 
 // handlePortalTokenPackages lists the enabled token packages, the models
-// token keys may call and the terms version checkout needs. It needs no
+// token keys may call and the terms version checkout needs. Packages and
+// models are empty while the product is off. It needs no
 // session so the public page can show them before sign-in. The catalog shows
 // whenever the product is enabled, even while payment is off; on_sale tells
 // whether checkout is open.
@@ -32,13 +33,15 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	plan, err := s.db.Plans().Get(ctx, st.PlanID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
-	}
 	var pkgs []store.TokenPackage
+	models := []string{}
 	if st.Enabled {
+		plan, err := s.db.Plans().Get(ctx, st.PlanID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
+		models = tokenPlanModels(plan)
 		if pkgs, err = s.db.TokenPackages().List(ctx); err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
@@ -55,7 +58,7 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"on_sale": s.tokenOnSale(st), "packages": out, "models": tokenPlanModels(plan),
+		"on_sale": s.tokenOnSale(st), "packages": out, "models": models,
 		"terms_version": tokenpkg.TermsVersion,
 	})
 }

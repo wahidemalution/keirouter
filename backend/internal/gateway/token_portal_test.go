@@ -380,6 +380,8 @@ func TestPortalTokenPackagesListedWhenPaymentOff(t *testing.T) {
 	out = getTokenPackages(t, s)
 	require.Equal(t, false, out["on_sale"])
 	require.Empty(t, out["packages"], "sales closed hides the catalog")
+	require.NotNil(t, out["models"])
+	require.Empty(t, out["models"], "sales closed hides the models")
 }
 
 func TestPortalTokenOrderRequiresTerms(t *testing.T) {

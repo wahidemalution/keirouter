@@ -1,6 +1,7 @@
 // Paket Token landing at `/paket-token`. Reads the public package list
 // (/portal/token/packages): tokens packages as cards, the days package as an
-// add-on, and the models a token key may call. Buying happens in the portal;
+// add-on, and the models a token key may call. Featured packages carry a
+// "Rekomendasi" label. Buying happens in the portal;
 // while checkout is closed the cards show without a buy link.
 
 import { useEffect } from "react";
@@ -151,6 +152,8 @@ export default function PublicTokenPackages() {
           </p>
           {q.isLoading ? (
             <div className="mt-4 h-8 w-2/3 animate-pulse rounded-md bg-[var(--soft)]" aria-hidden="true" />
+          ) : q.isError ? (
+            <p role="alert" className="mt-4 text-[14px] text-[var(--muted)]">Daftar model gagal dimuat. Coba muat ulang halaman.</p>
           ) : models.length === 0 ? (
             <p className="mt-4 text-[14px] text-[var(--muted)]">Daftar model belum tersedia.</p>
           ) : (
@@ -168,7 +171,7 @@ export default function PublicTokenPackages() {
           <h2 className="text-[18px] font-semibold tracking-[-0.3px] text-[var(--ink)]">Aturan singkat</h2>
           <ul className="mt-3 list-disc space-y-2 pl-5 text-[14px] leading-relaxed text-[var(--muted)]">
             <li>Token dihitung dari input ditambah output, termasuk reasoning dan input yang di-cache. 1 token = 1 token untuk semua model.</li>
-            <li>Masa aktif dihitung sejak pembayaran paket pertama. Saat berakhir, sisa token hangus dan key token berhenti bekerja.</li>
+            <li>Masa aktif dihitung sejak pembayaran paket pertama dalam satu periode. Saat berakhir, sisa token hangus dan key token berhenti bekerja.</li>
             <li>Beli paket token lagi saat masih aktif: token bertambah, tanggal berakhir tetap.</li>
             <li>Paket +hari hanya memperpanjang masa aktif, tidak menambah token, dan hanya bisa dibeli saat paket masih aktif.</li>
             <li>Token tidak bisa ditukar menjadi saldo, dan saldo tidak bisa ditukar menjadi token.</li>
@@ -236,7 +239,7 @@ function PackageCard({ pkg: p, discount, onSale }: { pkg: TokenOffer; discount: 
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-[15px] font-semibold text-[var(--ink)]">{p.name}</h3>
         {p.featured && (
-          <span className="rounded-md bg-[var(--accent-bg)] px-2 py-0.5 text-[12px] font-medium text-[var(--green)]">Paling laris</span>
+          <span className="rounded-md bg-[var(--accent-bg)] px-2 py-0.5 text-[12px] font-medium text-[var(--green)]">Rekomendasi</span>
         )}
       </div>
       <p className="mt-4 text-[26px] font-semibold leading-tight tracking-[-0.6px] text-[var(--ink)]">{tokenAmount(p.tokens)} token</p>
