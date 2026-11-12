@@ -61,6 +61,8 @@ func overviewView(o finance.Overview) map[string]any {
 		"credit_in_idr":          o.CreditInIDR,
 		"credit_in_usd":          o.CreditInUSD,
 		"paid_orders":            o.PaidOrders,
+		"token_in_idr":           o.TokenInIDR,
+		"token_orders":           o.TokenOrders,
 		"outstanding_credit_usd": o.OutstandingCreditUSD,
 		"in_flight":              o.InFlight,
 	}

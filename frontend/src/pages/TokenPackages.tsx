@@ -1,10 +1,19 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Loader2, Package, Pencil, Plus, Power, Settings2, ShoppingCart, Trash2, Users } from "lucide-react";
+import { BarChart3, Check, Coins, LayoutDashboard, Loader2, Package, Pencil, Plus, Power, Settings2, ShoppingCart, Trash2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api, type TokenPackage, type TokenPackageInput, type TokenPackageKind, type TokenSettings, type TokenSubscription } from "../lib/api";
+import {
+  api,
+  type TokenOverview,
+  type TokenPackage,
+  type TokenPackageInput,
+  type TokenPackageKind,
+  type TokenSettings,
+  type TokenSubscription,
+} from "../lib/api";
 import { formatTokens } from "../lib/format";
 import { PageHeader } from "../components/Layout";
+import { ChartCard, TimeBars, dayLabel } from "../components/charts/TimeSeries";
 import { useToast } from "../components/Toast";
 import { useConfirm } from "../components/ui/confirm-dialog";
 import {
@@ -14,6 +23,8 @@ import {
   ErrorBanner,
   Field,
   Input,
+  Kpi,
+  KpiGrid,
   LoadingRegion,
   Modal,
   ModalFooter,
@@ -24,17 +35,24 @@ import {
   Toggle,
 } from "../components/ui";
 import { PortalOrders } from "./payments/PortalOrders";
-import { Panel, REFETCH_MS, TH, THEAD, dateID, errorText, idr } from "./payments/shared";
+import { Panel, REFETCH_MS, TH, THEAD, count, dateID, errorText, idr } from "./payments/shared";
 
-const TABS = ["packages", "subscribers", "orders"] as const;
+const TABS = ["overview", "packages", "subscribers", "orders"] as const;
 type Tab = (typeof TABS)[number];
 const TABS_ID = "token-package-tabs";
 
 const QK_PACKAGES = ["token-packages"] as const;
 const QK_SETTINGS = ["token-settings"] as const;
 const QK_SUBSCRIPTIONS = ["token-subscriptions"] as const;
+const QK_OVERVIEW = ["token-overview"] as const;
+
+/** Every digit, Indonesian grouping: 50.000.000, so an operator sees the exact balance. */
+function exactTokens(n: number): string {
+  return n.toLocaleString("id-ID");
+}
 
 const DESCRIPTION: Record<Tab, string> = {
+  overview: "Unspent tokens, subscriber count and daily token usage across all token package keys.",
   packages: "GPT-6 token packages sold in the portal: price, token amount, validity and rate limits.",
   subscribers: "Owners of token package keys: remaining tokens, expiry, and a switch to disable a key.",
   orders: "Token package payments from the portal. Approve one manually if the gateway missed it.",
@@ -61,7 +79,7 @@ function packageInput(p: TokenPackage, patch: Partial<TokenPackageInput> = {}): 
 }
 
 export function TokenPackagesPage() {
-  const [tab, setTab] = useState<Tab>("packages");
+  const [tab, setTab] = useState<Tab>("overview");
   return (
     <div className="space-y-6">
       <PageHeader title="Token Packages" description={DESCRIPTION[tab]} />
@@ -71,13 +89,16 @@ export function TokenPackagesPage() {
         active={tab}
         onChange={setTab}
         tabs={[
+          { value: "overview", label: "Overview", icon: LayoutDashboard },
           { value: "packages", label: "Packages", icon: Package },
           { value: "subscribers", label: "Subscribers", icon: Users },
           { value: "orders", label: "Orders", icon: ShoppingCart },
         ]}
       />
       <TabPanel idPrefix={TABS_ID} value={tab} className="space-y-6">
-        {tab === "packages" ? (
+        {tab === "overview" ? (
+          <OverviewPanel />
+        ) : tab === "packages" ? (
           <>
             <SettingsPanel />
             <PackagesPanel />
@@ -564,6 +585,74 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
   );
 }
 
+// ─── Overview ───────────────────────────────────────────────────────────────
+
+// Days arrive as UTC dates; midnight UTC falls on the same date in the
+// server zone the chart labels use.
+const dayMs = (d: { day: string }) => Date.parse(`${d.day}T00:00:00Z`);
+
+function OverviewPanel() {
+  const overview = useQuery({ queryKey: QK_OVERVIEW, queryFn: api.getTokenOverview, refetchInterval: REFETCH_MS });
+
+  if (overview.isLoading) {
+    return (
+      <LoadingRegion label="Loading token package overview" className="space-y-4">
+        <Skeleton className="h-[104px] w-full rounded-2xl" />
+        <Skeleton className="h-[260px] w-full rounded-2xl" />
+      </LoadingRegion>
+    );
+  }
+  if (!overview.data) {
+    return <ErrorBanner message={`Couldn't load the overview. ${errorText(overview.error)}`} />;
+  }
+  return <OverviewBody o={overview.data} stale={overview.isError ? errorText(overview.error) : null} />;
+}
+
+function OverviewBody({ o, stale }: { o: TokenOverview; stale: string | null }) {
+  return (
+    <div className="space-y-4">
+      {stale && <ErrorBanner message={`The last refresh failed, so these numbers may be out of date. ${stale}`} />}
+      <KpiGrid cols={3} label="Token package totals">
+        <Kpi
+          icon={Coins}
+          label="Unused tokens"
+          value={exactTokens(o.unused_tokens)}
+          hint={`Still spendable on ${count(o.subscribers_active)} active ${o.subscribers_active === 1 ? "subscription" : "subscriptions"}`}
+        />
+        <Kpi
+          icon={Users}
+          label="Subscribers"
+          value={count(o.subscribers_total)}
+          hint={`${count(o.subscribers_active)} active · ${count(o.subscribers_total - o.subscribers_active)} expired${
+            o.subscribers_disabled > 0 ? ` · ${count(o.subscribers_disabled)} key disabled` : ""
+          }`}
+        />
+        <Kpi
+          icon={BarChart3}
+          label={`Tokens used, last ${o.range_days} days`}
+          value={exactTokens(o.used_tokens_range)}
+          hint={`${exactTokens(o.used_tokens_total)} since the first package`}
+        />
+      </KpiGrid>
+      <ChartCard
+        title="Token usage per day"
+        icon={BarChart3}
+        subtitle={`Prompt plus completion tokens of every token package key, last ${o.range_days} days (UTC days).`}
+      >
+        <TimeBars
+          data={o.daily}
+          x={dayMs}
+          xFormat={dayLabel}
+          format={exactTokens}
+          label={`Token package usage per day, last ${o.range_days} days`}
+          height={220}
+          series={[{ key: "tokens", label: "Tokens", color: "var(--color-accent-500)", value: (d) => d.tokens }]}
+        />
+      </ChartCard>
+    </div>
+  );
+}
+
 // ─── Subscribers ────────────────────────────────────────────────────────────
 
 function subscriptionStatus(s: TokenSubscription): { label: string; tone: "success" | "danger" | "neutral" } {
@@ -629,7 +718,7 @@ function SubscribersPanel() {
                     <td className="px-4 py-2.5 text-fg">{s.email || s.google_sub}</td>
                     <td className="px-4 py-2.5 font-mono text-[12px] text-fg-muted">{s.key_display || s.key_id}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
-                      <span className="font-semibold">{formatTokens(remaining)}</span>
+                      <span className="font-semibold">{exactTokens(remaining)}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(s.expires_at, true)}</td>
                     <td className="px-4 py-2.5">

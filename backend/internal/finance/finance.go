@@ -53,11 +53,15 @@ type Overview struct {
 	CreditInIDR                                                      int64
 	CreditInUSD                                                      float64
 	PaidOrders                                                       int64
+	TokenInIDR                                                       int64
+	TokenOrders                                                      int64
 	OutstandingCreditUSD                                             float64
 	InFlight                                                         int64
 }
 
-func BuildOverview(rows []store.CostBasisRow, m Markups, paid store.PaidOrderTotals, outstandingMicros int64, inflight map[string]int64) Overview {
+// BuildOverview sums rows into an Overview. paid holds PAYG credit top-ups and
+// tokenPaid holds token package orders; the two are reported apart.
+func BuildOverview(rows []store.CostBasisRow, m Markups, paid, tokenPaid store.PaidOrderTotals, outstandingMicros int64, inflight map[string]int64) Overview {
 	var billed, exact, est, reqs int64
 	for _, r := range rows {
 		e, s := CostNanos(r, m)
@@ -77,6 +81,8 @@ func BuildOverview(rows []store.CostBasisRow, m Markups, paid store.PaidOrderTot
 		CreditInIDR:          paid.AmountIDR,
 		CreditInUSD:          float64(paid.CreditMicros) / microsPerUSD,
 		PaidOrders:           paid.Count,
+		TokenInIDR:           tokenPaid.AmountIDR,
+		TokenOrders:          tokenPaid.Count,
 		OutstandingCreditUSD: float64(outstandingMicros) / microsPerUSD,
 	}
 	if cost := exact + est; cost > 0 {

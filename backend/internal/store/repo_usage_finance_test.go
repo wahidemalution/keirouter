@@ -71,9 +71,17 @@ func TestPaidTotalsSince(t *testing.T) {
 	h.Status, h.PaidAt, h.Product, h.CreditMicros = PaymentCompleted, formatTime(now), ProductHosting, 0
 	h.CreatedAt, h.UpdatedAt = now, now
 	require.NoError(t, db.PaymentOrders().Create(ctx, h))
+	// A paid token package order is counted apart from credit top-ups.
+	tk := sampleOrder("o6")
+	tk.Status, tk.PaidAt, tk.Product, tk.CreditMicros, tk.AmountIDR = PaymentCompleted, formatTime(now), ProductToken, 0, 139000
+	tk.CreatedAt, tk.UpdatedAt = now, now
+	require.NoError(t, db.PaymentOrders().Create(ctx, tk))
 	got, err := db.PaymentOrders().PaidTotalsSince(ctx, now.Add(-time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, PaidOrderTotals{Count: 2, AmountIDR: 100000, CreditMicros: 6_200_000}, got)
+	tokens, err := db.PaymentOrders().PaidTokenTotalsBetween(ctx, now.Add(-time.Hour), time.Time{})
+	require.NoError(t, err)
+	require.Equal(t, PaidOrderTotals{Count: 1, AmountIDR: 139000}, tokens)
 }
 
 func TestOutstandingPortalCredit(t *testing.T) {

@@ -240,8 +240,18 @@ func (r *PaymentOrderRepo) PaidTotalsSince(ctx context.Context, since time.Time)
 // PaidTotalsBetween is PaidTotalsSince limited to orders paid before until.
 // A zero until means no upper bound.
 func (r *PaymentOrderRepo) PaidTotalsBetween(ctx context.Context, since, until time.Time) (PaidOrderTotals, error) {
+	return r.paidTotals(ctx, ProductCredit, since, until)
+}
+
+// PaidTokenTotalsBetween is PaidTotalsBetween for token package orders.
+// CreditMicros is always zero for them.
+func (r *PaymentOrderRepo) PaidTokenTotalsBetween(ctx context.Context, since, until time.Time) (PaidOrderTotals, error) {
+	return r.paidTotals(ctx, ProductToken, since, until)
+}
+
+func (r *PaymentOrderRepo) paidTotals(ctx context.Context, product string, since, until time.Time) (PaidOrderTotals, error) {
 	where := ""
-	args := []any{ProductCredit, string(PaymentCompleted), string(PaymentManual), formatTime(since)}
+	args := []any{product, string(PaymentCompleted), string(PaymentManual), formatTime(since)}
 	if !until.IsZero() {
 		where = " AND COALESCE(NULLIF(paid_at, ''), created_at) < ?"
 		args = append(args, formatTime(until))
