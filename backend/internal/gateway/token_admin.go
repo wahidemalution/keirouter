@@ -17,6 +17,7 @@ import (
 func (s *Server) mountTokenPackages(r chi.Router) {
 	r.Get("/token-packages/settings", s.adminGetTokenSettings)
 	r.Put("/token-packages/settings", s.adminPutTokenSettings)
+	r.Get("/token-packages/overview", s.adminTokenOverview)
 	r.Get("/token-packages/subscriptions", s.adminListTokenSubscriptions)
 	r.Post("/token-packages/subscriptions/{sub}/key/toggle", s.adminToggleTokenKey)
 	r.Get("/token-packages", s.adminListTokenPackages)
@@ -310,43 +311,122 @@ func (s *Server) adminPutTokenSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tokenSettingsView(st, plan))
 }
 
-func (s *Server) adminListTokenSubscriptions(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// tokenSubscriberRow is one subscriber with their key state and token usage.
+type tokenSubscriberRow struct {
+	sub         store.TokenSubscription
+	email       string
+	keyDisplay  string
+	disabled    bool
+	used, limit int64
+	active      bool
+}
+
+// remaining is the tokens the subscriber can still spend, never negative.
+func (r tokenSubscriberRow) remaining() int64 { return max(0, r.limit-r.used) }
+
+func (s *Server) tokenSubscriberRows(ctx context.Context, now time.Time) ([]tokenSubscriberRow, error) {
 	subs, err := s.db.TokenSubscriptions().List(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
+		return nil, err
 	}
 	users, err := s.db.PortalUsers().List(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
+		return nil, err
 	}
 	emails := make(map[string]string, len(users))
 	for _, u := range users {
 		emails[u.GoogleSub] = u.Email
 	}
-	now := time.Now()
-	out := make([]map[string]any, 0, len(subs))
+	out := make([]tokenSubscriberRow, 0, len(subs))
 	for _, sub := range subs {
 		key, err := s.identity.Get(ctx, sub.KeyID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-			return
+			return nil, err
 		}
 		used, limit, err := s.tokenUsage(ctx, sub.KeyID, now)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-			return
+			return nil, err
 		}
+		out = append(out, tokenSubscriberRow{
+			sub: sub, email: emails[sub.GoogleSub], keyDisplay: key.Display, disabled: key.Disabled,
+			used: used, limit: limit, active: now.Before(sub.ExpiresAt),
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) adminListTokenSubscriptions(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.tokenSubscriberRows(r.Context(), time.Now())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
 		out = append(out, map[string]any{
-			"google_sub": sub.GoogleSub, "email": emails[sub.GoogleSub], "key_id": sub.KeyID,
-			"key_display": key.Display, "used_tokens": used, "limit_tokens": limit,
-			"expires_at": sub.ExpiresAt.UTC().Format(time.RFC3339), "active": now.Before(sub.ExpiresAt),
-			"disabled": key.Disabled,
+			"google_sub": row.sub.GoogleSub, "email": row.email, "key_id": row.sub.KeyID,
+			"key_display": row.keyDisplay, "used_tokens": row.used, "limit_tokens": row.limit,
+			"expires_at": row.sub.ExpiresAt.UTC().Format(time.RFC3339), "active": row.active,
+			"disabled": row.disabled,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// tokenOverviewDays is how many UTC days the overview usage chart covers,
+// today included.
+const tokenOverviewDays = 30
+
+// adminTokenOverview returns the token package totals for the Overview tab:
+// subscriber counts, unspent tokens and daily usage of every token key.
+// Unspent tokens only count active subscriptions: an expired one forfeits
+// its rest when the next package restarts the period.
+func (s *Server) adminTokenOverview(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	now := time.Now()
+	rows, err := s.tokenSubscriberRows(ctx, now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	var active, disabled, unused, used int64
+	for _, row := range rows {
+		used += row.used
+		if row.disabled {
+			disabled++
+		}
+		if row.active {
+			active++
+			unused += row.remaining()
+		}
+	}
+	first := now.UTC().AddDate(0, 0, -(tokenOverviewDays - 1))
+	days, err := s.db.TokenSubscriptions().DailyTokens(ctx, first.Format("2006-01-02"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	byDay := make(map[string]int64, len(days))
+	for _, d := range days {
+		byDay[d.Day] = d.Tokens
+	}
+	series := make([]map[string]any, 0, tokenOverviewDays)
+	var rangeTokens int64
+	for i := range tokenOverviewDays {
+		day := first.AddDate(0, 0, i).Format("2006-01-02")
+		rangeTokens += byDay[day]
+		series = append(series, map[string]any{"day": day, "tokens": byDay[day]})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"subscribers_total":    len(rows),
+		"subscribers_active":   active,
+		"subscribers_disabled": disabled,
+		"unused_tokens":        unused,
+		"used_tokens_total":    used,
+		"used_tokens_range":    rangeTokens,
+		"range_days":           tokenOverviewDays,
+		"daily":                series,
+	})
 }
 
 // adminToggleTokenKey flips the disabled flag of a subscriber's token key.

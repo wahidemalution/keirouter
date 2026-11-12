@@ -1,4 +1,4 @@
-import { Activity, Coins, Percent, Receipt, Wallet, Wrench } from "lucide-react";
+import { Activity, Banknote, Coins, Package, Percent, Receipt, Wallet, Wrench } from "lucide-react";
 import type { FinanceCustomRange, FinanceOverview as Overview, FinanceRange } from "../../lib/api";
 import { ErrorBanner, Kpi, KpiGrid, LoadingRegion, Skeleton } from "../../components/ui";
 import { count, idr, usd } from "./shared";
@@ -41,7 +41,7 @@ export function FinanceOverview({
   if (loading && !overview) {
     return (
       <LoadingRegion label="Loading finance summary">
-        <Skeleton className="h-[188px] w-full rounded-2xl" />
+        <Skeleton className="h-[300px] w-full rounded-2xl" />
       </LoadingRegion>
     );
   }
@@ -53,16 +53,25 @@ export function FinanceOverview({
   const cost = o.cost_exact_usd + o.cost_estimated_usd;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {error && <ErrorBanner message={`The last refresh failed, so the numbers below may be out of date. ${error}`} />}
-      <KpiGrid cols={3} label={`Credit, revenue and provider cost, ${label}`}>
+      <KpiGrid cols={3} label={`Money received from users, ${label}`}>
+        <Kpi
+          icon={Banknote}
+          label="Total received"
+          value={idr(o.credit_in_idr + o.token_in_idr)}
+          hint={`${count(o.paid_orders + o.token_orders)} paid orders`}
+        />
         <Kpi
           icon={Wallet}
-          label="Credit received"
+          label="PAYG credit"
           value={idr(o.credit_in_idr)}
-          hint={`${usd(o.credit_in_usd)} from ${count(o.paid_orders)} orders`}
+          hint={`${usd(o.credit_in_usd)} credit from ${count(o.paid_orders)} orders`}
         />
-        <Kpi icon={Coins} label="Unused user credit" value={usd(o.outstanding_credit_usd)} hint="Current balance across all users" />
+        <Kpi icon={Package} label="Token packages" value={idr(o.token_in_idr)} hint={`${count(o.token_orders)} orders`} />
+      </KpiGrid>
+      <KpiGrid cols={5} label={`Gateway revenue and provider cost, ${label}`}>
+        <Kpi icon={Coins} label="Unused user credit" value={usd(o.outstanding_credit_usd)} hint="PAYG balance across all users right now" />
         <Kpi
           icon={Receipt}
           label="Revenue"

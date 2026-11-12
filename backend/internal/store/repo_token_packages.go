@@ -248,3 +248,37 @@ func scanTokenSubscription(scan func(dest ...any) error) (TokenSubscription, err
 	s.UpdatedAt = parseTime(updated)
 	return s, nil
 }
+
+// DayTokens is the token count of one UTC day.
+type DayTokens struct {
+	Day    string // YYYY-MM-DD
+	Tokens int64
+}
+
+// DailyTokens sums prompt plus completion tokens of every token package key
+// per UTC day, for days on or after sinceDay (YYYY-MM-DD). Days without usage
+// are left out. It counts tokens the same way the token budget does.
+func (r *TokenSubscriptionRepo) DailyTokens(ctx context.Context, sinceDay string) ([]DayTokens, error) {
+	q := `SELECT substr(u.created_at, 1, 10) AS day, CAST(SUM(u.prompt_tokens + u.completion_tokens) AS BIGINT)
+		FROM usage_records u JOIN token_subscriptions s ON s.key_id = u.api_key_id
+		WHERE u.created_at >= ? GROUP BY substr(u.created_at, 1, 10) ORDER BY day`
+	if r.db.spendRollup.Load() {
+		q = `SELECT d.day, CAST(SUM(d.tokens) AS BIGINT)
+			FROM usage_spend_daily d JOIN token_subscriptions s ON s.key_id = d.scope_id
+			WHERE d.scope_kind = 'api_key' AND d.day >= ? GROUP BY d.day ORDER BY d.day`
+	}
+	rows, err := r.db.sql.QueryContext(ctx, r.db.rebind(q), sinceDay)
+	if err != nil {
+		return nil, fmt.Errorf("store: token daily usage: %w", err)
+	}
+	defer rows.Close()
+	var out []DayTokens
+	for rows.Next() {
+		var d DayTokens
+		if err := rows.Scan(&d.Day, &d.Tokens); err != nil {
+			return nil, fmt.Errorf("store: scan token daily usage: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}

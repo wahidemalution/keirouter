@@ -2272,6 +2272,19 @@ export interface TokenPackageInput {
   sort: number;
 }
 
+export interface TokenOverview {
+  subscribers_total: number;
+  subscribers_active: number;
+  subscribers_disabled: number;
+  /** Tokens still spendable on active subscriptions. */
+  unused_tokens: number;
+  used_tokens_total: number;
+  used_tokens_range: number;
+  range_days: number;
+  /** One entry per UTC day, oldest first, days without usage included. */
+  daily: { day: string; tokens: number }[];
+}
+
 export interface TokenSubscription {
   google_sub: string;
   email: string;
@@ -2325,9 +2338,13 @@ export interface FinanceOverview {
   profit_usd: number;
   margin_pct: number;
   requests: number;
+  /** PAYG credit top-ups paid in the range. */
   credit_in_idr: number;
   credit_in_usd: number;
   paid_orders: number;
+  /** Token package orders paid in the range. */
+  token_in_idr: number;
+  token_orders: number;
   outstanding_credit_usd: number;
   in_flight: number;
 }
@@ -3100,6 +3117,7 @@ export const api = {
   updateTokenPackage: (id: string, input: TokenPackageInput) =>
     request<TokenPackage>("PUT", `/token-packages/${encodeURIComponent(id)}`, input),
   deleteTokenPackage: (id: string) => request<void>("DELETE", `/token-packages/${encodeURIComponent(id)}`),
+  getTokenOverview: () => request<TokenOverview>("GET", "/token-packages/overview"),
   listTokenSubscriptions: () => request<TokenSubscription[]>("GET", "/token-packages/subscriptions"),
   toggleTokenKey: (sub: string) =>
     request<{ disabled: boolean }>("POST", `/token-packages/subscriptions/${encodeURIComponent(sub)}/key/toggle`),

@@ -117,6 +117,10 @@ func (l *Loader) build(ctx context.Context, rangeName string, start, until time.
 	if err != nil {
 		return Report{}, err
 	}
+	tokenPaid, err := l.DB.PaymentOrders().PaidTokenTotalsBetween(ctx, start, until)
+	if err != nil {
+		return Report{}, err
+	}
 	outstanding, err := l.DB.Usage().OutstandingPortalCredit(ctx, store.DefaultTenantID)
 	if err != nil {
 		return Report{}, err
@@ -127,7 +131,7 @@ func (l *Loader) build(ctx context.Context, rangeName string, start, until time.
 	}
 	return Report{
 		Range:    rangeName,
-		Overview: BuildOverview(rangeRows, m, paid, outstanding, l.inflight()),
+		Overview: BuildOverview(rangeRows, m, paid, tokenPaid, outstanding, l.inflight()),
 		Series:   BuildSeries(plan, pts, m, now),
 	}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
@@ -143,6 +144,41 @@ func TestAdminTokenSubscriptionsList(t *testing.T) {
 	require.EqualValues(t, 100_000_000, row["limit_tokens"])
 	require.Equal(t, true, row["active"])
 	require.Equal(t, false, row["disabled"])
+}
+
+func TestAdminTokenOverview(t *testing.T) {
+	s, paygKey := newTokenTestServer(t)
+	require.True(t, payTokenOrder(t, s, paygKey, "ov1", "tp-100m"))
+	sub, err := s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
+	require.NoError(t, err)
+	recordTokens(t, s, "ov-u1", sub.KeyID, 0, 1234)
+	recordTokens(t, s, "ov-u2", sub.KeyID, 0, 766)
+	recordTokens(t, s, "ov-payg", paygKey, 0, 99999) // a PAYG key is not counted
+
+	rec := adminTokenCall(s, http.MethodGet, "/token-packages/overview", "", nil, s.adminTokenOverview)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body struct {
+		SubscribersTotal  int64 `json:"subscribers_total"`
+		SubscribersActive int64 `json:"subscribers_active"`
+		UnusedTokens      int64 `json:"unused_tokens"`
+		UsedTokensTotal   int64 `json:"used_tokens_total"`
+		UsedTokensRange   int64 `json:"used_tokens_range"`
+		RangeDays         int   `json:"range_days"`
+		Daily             []struct {
+			Day    string `json:"day"`
+			Tokens int64  `json:"tokens"`
+		} `json:"daily"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.EqualValues(t, 1, body.SubscribersTotal)
+	require.EqualValues(t, 1, body.SubscribersActive)
+	require.EqualValues(t, 100_000_000-2000, body.UnusedTokens)
+	require.EqualValues(t, 2000, body.UsedTokensTotal)
+	require.EqualValues(t, 2000, body.UsedTokensRange)
+	require.Len(t, body.Daily, body.RangeDays)
+	last := body.Daily[len(body.Daily)-1]
+	require.Equal(t, time.Now().UTC().Format("2006-01-02"), last.Day)
+	require.EqualValues(t, 2000, last.Tokens)
 }
 
 func TestAdminTokenKeyToggle(t *testing.T) {

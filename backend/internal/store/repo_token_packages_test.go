@@ -156,3 +156,47 @@ func TestSetTokenLimitOnTx(t *testing.T) {
 	require.Equal(t, int64(50), got.LimitTokens)
 	require.Equal(t, int64(7), got.LimitMicros)
 }
+
+func TestTokenSubscriptionDailyTokens(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, id := range []string{"key-t", "key-payg"} {
+		require.NoError(t, db.APIKeys().Create(ctx, APIKey{
+			ID: id, TenantID: DefaultTenantID, Name: id, KeyHash: "h" + id, LookupHash: "l" + id, Display: "d", CreatedAt: now,
+		}))
+	}
+	require.NoError(t, db.PortalUsers().Upsert(ctx, PortalUser{GoogleSub: "sub-t", Email: "a@example.com", KeyID: "key-payg", CreatedAt: now, UpdatedAt: now}))
+	tx, err := db.SQL().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.TokenSubscriptions().CreateOnTx(ctx, tx, TokenSubscription{
+		GoogleSub: "sub-t", KeyID: "key-t", ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now, UpdatedAt: now,
+	}))
+	require.NoError(t, tx.Commit())
+
+	rec := func(id, key string, prompt, completion int, at time.Time) UsageRecord {
+		return UsageRecord{ID: id, TenantID: DefaultTenantID, APIKeyID: key, Provider: "p", Model: "m", Status: "success",
+			PromptTokens: prompt, CompletionTokens: completion, CreatedAt: at}
+	}
+	yesterday := now.Add(-24 * time.Hour)
+	old := now.Add(-10 * 24 * time.Hour)
+	require.NoError(t, db.Usage().RecordBatch(ctx, []UsageRecord{
+		rec("a", "key-t", 100, 20, now),
+		rec("b", "key-t", 1000, 5, now),
+		rec("c", "key-t", 50, 50, yesterday),
+		rec("d", "key-t", 9, 9, old),          // before the window
+		rec("e", "key-payg", 7000, 7000, now), // not a token key
+	}))
+
+	want := []DayTokens{
+		{Day: yesterday.Format("2006-01-02"), Tokens: 100},
+		{Day: now.Format("2006-01-02"), Tokens: 1125},
+	}
+	since := now.Add(-3 * 24 * time.Hour).Format("2006-01-02")
+	for _, rollup := range []bool{false, true} {
+		db.spendRollup.Store(rollup)
+		got, err := db.TokenSubscriptions().DailyTokens(ctx, since)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "rollup=%v", rollup)
+	}
+}
