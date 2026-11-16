@@ -112,9 +112,10 @@ func (s *Server) buildModelSettings(ctx context.Context, key store.APIKey, chain
 }
 
 func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float64, names map[string]string, latency map[string]map[string]*float64) modelSettingsRow {
+	maxDiscount := chainMaxGuaranteedDiscount(c)
 	row := modelSettingsRow{
 		Model:     c.Name,
-		Supported: chainCanGuaranteeDiscount(c),
+		Supported: maxDiscount > 0,
 		Providers: []modelSettingsProvider{},
 	}
 	// A fallback without a price never runs, so the portal does not offer it.
@@ -125,7 +126,7 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 		}
 	}
 	if row.Supported {
-		row.EffectivePct = keyDiscountFloor(key, c.Name, row.Supported)
+		row.EffectivePct = keyDiscountFloor(key, c.Name, maxDiscount)
 		if pct, ok := key.ModelDiscounts[store.NormalizeDiscountModel(c.Name)]; ok {
 			row.OverridePct = &pct
 		}
@@ -133,7 +134,7 @@ func (s *Server) modelSettingsRow(key store.APIKey, c store.Chain, markup float6
 	setting := key.ModelFinalFallback[store.NormalizeDiscountModel(c.Name)]
 	row.FinalFallback = key.FinalFallbackOn(c.Name)
 	row.FinalFallbackKept = setting == store.FinalFallbackKept
-	row.FallbackRuns = row.HasFallback && finalFallbackRuns(key, c.Name, row.Supported)
+	row.FallbackRuns = row.HasFallback && finalFallbackRuns(key, c.Name, maxDiscount)
 
 	official, hasOfficial := s.chainOfficialPrice(c)
 	discount := func(in, out *float64) *int {

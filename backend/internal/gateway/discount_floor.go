@@ -33,24 +33,25 @@ func upstreamDiscountForFloor(floorPct int, mult float64) int {
 }
 
 // keyDiscountFloor is the minimum discount routing enforces for key on model:
-// the key's effective minimum on a chain that can guarantee a discount, else
-// 0. Chains that cannot guarantee one run at their set price.
-func keyDiscountFloor(key store.APIKey, model string, discountCapable bool) int {
-	if !discountCapable {
-		return 0
+// the key's effective minimum when the chain can guarantee it (maxDiscount,
+// from chainMaxGuaranteedDiscount, is at least the floor), else 0. A chain
+// that cannot guarantee the floor runs at its set price.
+func keyDiscountFloor(key store.APIKey, model string, maxDiscount int) int {
+	if floor := key.EffectiveMinDiscount(model); floor > 0 && floor <= maxDiscount {
+		return floor
 	}
-	return key.EffectiveMinDiscount(model)
+	return 0
 }
 
 // finalFallbackRuns reports whether routing appends the chain fallback for
 // key on model: it is on, and either turned on explicitly (exempt from the
 // floor) or no floor applies. A fallback kept from before per-key routing is
 // dropped by any floor, as applyDiscountFloor does.
-func finalFallbackRuns(key store.APIKey, model string, discountCapable bool) bool {
+func finalFallbackRuns(key store.APIKey, model string, maxDiscount int) bool {
 	if !key.FinalFallbackOn(model) {
 		return false
 	}
-	return key.FinalFallbackExempt(model) || keyDiscountFloor(key, model, discountCapable) <= 0
+	return key.FinalFallbackExempt(model) || keyDiscountFloor(key, model, maxDiscount) <= 0
 }
 
 // applyDiscountFloor keeps only the chain steps that can guarantee the

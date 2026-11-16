@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -175,9 +176,9 @@ func TestStaticStepIsNotDiscountCapable(t *testing.T) {
 		MarketSlugs: []string{"surplus-trusted:gpt-4o"},
 		Steps:       []store.ChainStep{staticStep(nil)},
 	}
-	require.False(t, chainCanGuaranteeDiscount(c), "a static step cannot honour a discount floor")
+	require.Zero(t, chainMaxGuaranteedDiscount(c), "a static step cannot honour a discount floor")
 	c.Steps = append(c.Steps, store.ChainStep{Provider: "openai", Model: "gpt-4o"})
-	require.True(t, chainCanGuaranteeDiscount(c), "a slugless step on the trusted model still adopts the chain slug")
+	require.Equal(t, 100, chainMaxGuaranteedDiscount(c), "a slugless step on the trusted model still adopts the chain slug")
 }
 
 func TestStaticDiscountStepKeptByDiscountFloor(t *testing.T) {
@@ -198,7 +199,65 @@ func TestStaticDiscountStepKeptByDiscountFloor(t *testing.T) {
 func TestStaticDiscountStepIsDiscountCapable(t *testing.T) {
 	s := staticStep(nil)
 	s.DiscountPercent = fptr(90)
-	require.True(t, chainCanGuaranteeDiscount(store.Chain{Steps: []store.ChainStep{s}}))
+	require.Equal(t, 90, chainMaxGuaranteedDiscount(store.Chain{Steps: []store.ChainStep{s}}))
 	s.DiscountPercent = fptr(0)
-	require.False(t, chainCanGuaranteeDiscount(store.Chain{Steps: []store.ChainStep{s}}))
+	require.Zero(t, chainMaxGuaranteedDiscount(store.Chain{Steps: []store.ChainStep{s}}))
+}
+
+func TestChainMaxGuaranteedDiscount(t *testing.T) {
+	disc := func(d float64) store.ChainStep {
+		s := staticStep(nil)
+		s.DiscountPercent = fptr(d)
+		return s
+	}
+	plain := store.ChainStep{Provider: "openai", Model: "gpt-4o"}
+	trusted := store.ChainStep{Provider: "surplus", Model: "glm", MarketSlug: "surplus-trusted:glm"}
+	cases := []struct {
+		name  string
+		steps []store.ChainStep
+		want  int
+	}{
+		{"none", []store.ChainStep{plain}, 0},
+		{"static 90 and 50", []store.ChainStep{disc(50), disc(90), plain}, 90},
+		{"static 10 and trusted", []store.ChainStep{disc(10), trusted}, 100},
+		{"static zero", []store.ChainStep{disc(0)}, 0},
+		{"fraction floors down", []store.ChainStep{disc(12.9)}, 12},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, chainMaxGuaranteedDiscount(store.Chain{Steps: tc.steps}))
+		})
+	}
+}
+
+func TestApplyDiscountFloorMixedStaticAndSurplus(t *testing.T) {
+	static := func(provider string, d float64) dispatch.Target {
+		return dispatch.Target{Provider: provider, Model: "m", StaticInputPerM: 1, StaticOutputPerM: 2, DiscountSet: true, DiscountPercent: d}
+	}
+	in := []dispatch.Target{
+		static("s90", 90), static("s50", 50), trustedStep("glm", 1.2, 0), {Provider: "plain", Model: "m"},
+	}
+	out, err := applyDiscountFloor(in, 80, "chain-x")
+	require.NoError(t, err)
+	require.Equal(t, []string{"s90", "surplus"}, providers(out))
+}
+
+func TestStaticDiscountBelowKeyFloorRunsAtSetPrice(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "mix", TenantID: store.DefaultTenantID, Name: "mix", Strategy: "priority", InputPerM: 1, OutputPerM: 2,
+		Steps: []store.ChainStep{
+			{ID: "s1", Provider: "openai", Model: "gpt-4o", StaticInputPerM: 1, StaticOutputPerM: 2, DiscountPercent: fptr(10), Position: 0},
+			{ID: "s2", Provider: "openai", Model: "gpt-4o-mini", Position: 1},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	gw.marketCache = market.NewSnapshotCache()
+	keyed := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50})
+	res, err := gw.resolveTargets(keyed, store.DefaultTenantID, "mix")
+	require.NoError(t, err, "floor above the chain's best static discount does not apply")
+	require.Len(t, res.Targets, 2)
+	require.Equal(t, 10, res.MaxDiscountPct)
 }

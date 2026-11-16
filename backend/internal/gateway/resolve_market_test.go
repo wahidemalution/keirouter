@@ -81,3 +81,13 @@ func TestOrderStepsByMarketIdentityWhenNoSlugs(t *testing.T) {
 		t.Fatalf("order changed with empty cache: %+v", out)
 	}
 }
+
+func TestOrderStepsByMarketNilCacheStillSortsStatic(t *testing.T) {
+	dear := dispatch.Target{Provider: "dear", StaticInputPerM: 5, StaticOutputPerM: 5}
+	cheap := dispatch.Target{Provider: "cheap", StaticInputPerM: 1, StaticOutputPerM: 1}
+	mkt := dispatch.Target{Provider: "mkt", MarketSlug: "mid"}
+	out := orderStepsByMarket([]dispatch.Target{mkt, dear, cheap}, nil, nil, 0)
+	if got := providers(out); got[0] != "cheap" || got[1] != "dear" || got[2] != "mkt" {
+		t.Fatalf("order = %v, want [cheap dear mkt]", got)
+	}
+}
