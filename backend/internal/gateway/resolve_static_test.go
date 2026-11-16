@@ -242,12 +242,13 @@ func TestApplyDiscountFloorMixedStaticAndSurplus(t *testing.T) {
 	require.Equal(t, []string{"s90", "surplus"}, providers(out))
 }
 
-func TestStaticDiscountBelowKeyFloorRunsAtSetPrice(t *testing.T) {
+func TestStaticDiscountBelowKeyFloorIsRefusedUnlessFallbackChosen(t *testing.T) {
 	db, gw := newPublicTestGatewayWithDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 	require.NoError(t, db.Chains().Create(ctx, store.Chain{
 		ID: "mix", TenantID: store.DefaultTenantID, Name: "mix", Strategy: "priority", InputPerM: 1, OutputPerM: 2,
+		FallbackProvider: "openai", FallbackModel: "gpt-4o", FallbackInputPerM: 3, FallbackOutputPerM: 6,
 		Steps: []store.ChainStep{
 			{ID: "s1", Provider: "openai", Model: "gpt-4o", StaticInputPerM: 1, StaticOutputPerM: 2, DiscountPercent: fptr(10), Position: 0},
 			{ID: "s2", Provider: "openai", Model: "gpt-4o-mini", Position: 1},
@@ -256,8 +257,34 @@ func TestStaticDiscountBelowKeyFloorRunsAtSetPrice(t *testing.T) {
 	}))
 	gw.marketCache = market.NewSnapshotCache()
 	keyed := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50})
-	res, err := gw.resolveTargets(keyed, store.DefaultTenantID, "mix")
-	require.NoError(t, err, "floor above the chain's best static discount does not apply")
-	require.Len(t, res.Targets, 2)
+	_, err := gw.resolveTargets(keyed, store.DefaultTenantID, "mix")
+	require.Error(t, err, "no step meets the 50% floor")
+
+	chosen := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50,
+		ModelFinalFallback: map[string]int{"mix": store.FinalFallbackChosen}})
+	res, err := gw.resolveTargets(chosen, store.DefaultTenantID, "mix")
+	require.NoError(t, err)
+	require.Len(t, res.Targets, 1, "only the fallback the key chose runs")
+	require.True(t, res.Targets[0].ChainFallback)
 	require.Equal(t, 10, res.MaxDiscountPct)
+}
+
+func TestChainWithoutDiscountIgnoresKeyFloor(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(ctx, store.Chain{
+		ID: "plain", TenantID: store.DefaultTenantID, Name: "plain", Strategy: "priority", InputPerM: 1, OutputPerM: 2,
+		Steps: []store.ChainStep{
+			{ID: "s1", Provider: "openai", Model: "gpt-4o", StaticInputPerM: 1, StaticOutputPerM: 2, Position: 0},
+			{ID: "s2", Provider: "openai", Model: "gpt-4o-mini", Position: 1},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	gw.marketCache = market.NewSnapshotCache()
+	keyed := context.WithValue(ctx, apiKeyCtxKey, store.APIKey{ID: "k", MinDiscountPct: 50})
+	res, err := gw.resolveTargets(keyed, store.DefaultTenantID, "plain")
+	require.NoError(t, err, "a chain with no discount runs at its set price")
+	require.Len(t, res.Targets, 2)
+	require.Equal(t, 0, res.MaxDiscountPct)
 }
