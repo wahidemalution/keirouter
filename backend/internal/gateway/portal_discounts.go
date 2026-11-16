@@ -219,14 +219,18 @@ func (s *Server) keyChains(r *http.Request, key store.APIKey, planID string) ([]
 	return out, nil
 }
 
-// chainCanGuaranteeDiscount reports whether any step of the chain routes
-// through a surplus-trusted or surplus-fast slug, the only kind of step applyDiscountFloor
-// keeps. It mirrors how chains bind those slugs (per step, or chain-level
-// slugs matched to a step's model).
+// chainCanGuaranteeDiscount reports whether any step of the chain is a static
+// discount step or routes through a surplus-trusted or surplus-fast slug, the
+// only kinds of step applyDiscountFloor keeps. It mirrors how chains bind
+// those slugs (per step, or chain-level slugs matched to a step's model).
 func chainCanGuaranteeDiscount(c store.Chain) bool {
 	for _, st := range c.Steps {
 		// A static step has its own price and never adopts a chain-level slug.
+		// It guarantees a discount only when it sets one.
 		if st.HasStaticPrice() {
+			if st.DiscountPercent != nil && *st.DiscountPercent > 0 {
+				return true
+			}
 			continue
 		}
 		if market.IsUpstreamCostSlug(st.MarketSlug) {

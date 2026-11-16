@@ -54,7 +54,8 @@ func finalFallbackRuns(key store.APIKey, model string, discountCapable bool) boo
 }
 
 // applyDiscountFloor keeps only the chain steps that can guarantee the
-// customer's floor: surplus-trusted steps, which Surplus refuses (without
+// customer's floor: static discount steps whose discount is at least the
+// floor, and surplus-trusted steps, which Surplus refuses (without
 // charging) when no offer is at least X-Min-Discount below list. Other steps
 // cannot prove a discount and are dropped. A chain fallback the customer or
 // admin turned on explicitly is kept as is: it was chosen knowing it runs at
@@ -73,6 +74,13 @@ func applyDiscountFloor(targets []dispatch.Target, floorPct int, model string) (
 	for _, t := range targets {
 		if t.ChainFallback && t.FallbackFloorExempt {
 			out = append(out, t)
+			continue
+		}
+		if isStaticStep(t) && t.DiscountSet {
+			// A static discount step guarantees exactly its own discount.
+			if t.DiscountPercent >= float64(floorPct) {
+				out = append(out, t)
+			}
 			continue
 		}
 		if !t.BillUpstreamCost || !market.IsUpstreamCostSlug(t.MarketSlug) {

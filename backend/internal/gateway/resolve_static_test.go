@@ -179,3 +179,26 @@ func TestStaticStepIsNotDiscountCapable(t *testing.T) {
 	c.Steps = append(c.Steps, store.ChainStep{Provider: "openai", Model: "gpt-4o"})
 	require.True(t, chainCanGuaranteeDiscount(c), "a slugless step on the trusted model still adopts the chain slug")
 }
+
+func TestStaticDiscountStepKeptByDiscountFloor(t *testing.T) {
+	s := staticStep(nil)
+	s.DiscountPercent = fptr(90)
+	got := resolveStatic(t, store.Chain{Steps: []store.ChainStep{s}}, nil)
+	kept, err := applyDiscountFloor(got, 80, "static")
+	require.NoError(t, err)
+	require.Len(t, kept, 1)
+	require.Zero(t, kept[0].MinDiscountPct, "no X-Min-Discount for a static step")
+	kept, err = applyDiscountFloor(got, 90, "static")
+	require.NoError(t, err)
+	require.Len(t, kept, 1, "exactly at the floor is kept")
+	_, err = applyDiscountFloor(got, 91, "static")
+	require.Error(t, err)
+}
+
+func TestStaticDiscountStepIsDiscountCapable(t *testing.T) {
+	s := staticStep(nil)
+	s.DiscountPercent = fptr(90)
+	require.True(t, chainCanGuaranteeDiscount(store.Chain{Steps: []store.ChainStep{s}}))
+	s.DiscountPercent = fptr(0)
+	require.False(t, chainCanGuaranteeDiscount(store.Chain{Steps: []store.ChainStep{s}}))
+}
