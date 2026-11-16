@@ -26,11 +26,12 @@ const (
 type resolveResult struct {
 	Targets  []dispatch.Target
 	PlanOpts dispatch.PlanOptions
-	// DiscountCapable is true for a chain with a step that can guarantee a
-	// discount (surplus-trusted). It comes from the chain definition, not the
+	// MaxDiscountPct is the highest minimum discount the chain can guarantee
+	// (see chainMaxGuaranteedDiscount): 100 with a surplus-trusted step, else
+	// the best static discount. It comes from the chain definition, not the
 	// live market, so a trusted chain whose quote is momentarily missing still
 	// enforces the customer's minimum instead of routing without it.
-	DiscountCapable bool
+	MaxDiscountPct int
 }
 
 // ChainSource resolves a named chain for a tenant.
@@ -88,7 +89,7 @@ func (s *Server) resolveTargets(ctx context.Context, tenantID, model string) (re
 	// guarantee any discount are exempt: they run at their set price, so a
 	// minimum never blocks them.
 	if key, ok := authedKey(ctx); ok {
-		if pct := keyDiscountFloor(key, model, res.DiscountCapable); pct > 0 {
+		if pct := keyDiscountFloor(key, model, res.MaxDiscountPct); pct > 0 {
 			if res.Targets, err = applyDiscountFloor(res.Targets, pct, model); err != nil {
 				return resolveResult{}, err
 			}
@@ -190,14 +191,13 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 
 			opts := dispatch.PlanOptions{ChainID: c.ID}
 			markupPercent := market.EffectiveMarkup(c.MarkupPercent, markupPercent)
-			// A chain marked ReorderByMarket is ordered cheapest-first by the
-			// live rate of each step's bound slug. Unresolvable/slugless steps
-			// sink last. Runs before the declared strategy switch so it
+			// A chain marked ReorderByMarket is ordered cheapest-first by
+			// customer price: static steps by their own price, market steps by
+			// the live rate of their slug (a slugless step may use the chain's
+			// surplus slug for its model). Unpriced steps sink last. Runs before the declared strategy switch so it
 			// composes with the fallback/round-robin handling below.
 			if c.ReorderByMarket {
-				steps = pinStaticSteps(steps, func(rest []dispatch.Target) []dispatch.Target {
-					return orderStepsByMarket(rest, cache, markupPercent)
-				})
+				steps = orderStepsByMarket(steps, c.MarketSlugs, cache, markupPercent)
 			}
 			// Every slugged step is billed for itself, whatever the ordering; a
 			// step whose slug has no live quote is dropped.
@@ -237,7 +237,7 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 				targets = append(targets, chainFallbackTarget(c, fallbackExempt))
 				opts.PinnedTail = 1
 			}
-			return resolveResult{Targets: targets, PlanOpts: opts, DiscountCapable: chainCanGuaranteeDiscount(c)}, nil
+			return resolveResult{Targets: targets, PlanOpts: opts, MaxDiscountPct: chainMaxGuaranteedDiscount(c)}, nil
 		}
 	}
 	return resolveResult{}, errBadModel("no chain named " + name)
@@ -282,33 +282,47 @@ func orderStepsByLatency(ctx context.Context, latency LatencyReader, tenantID st
 	return out
 }
 
-// orderStepsByMarket orders steps cheapest-first by the live market rate of each
-// step's bound slug and stamps the billable (post-markup) rates onto each slugged
-// target. Steps without a resolvable slug keep their relative order and sink
-// behind priced steps. When no step has a resolvable slug the input order is
-// returned unchanged.
-func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
+// orderStepsByMarket orders steps cheapest-first by the customer price of each
+// step: a static step by its own static price, any other by the live market
+// rate of its bound slug times the markup. A slugless step adopts the chain
+// slug for its model, for the sort key only. Slugged steps get the billable
+// (post-markup) rates stamped. Market steps are ranked on their best
+// (cheapest-offer) price × markup; the actual bill may be higher, up to the
+// step's cap. Steps with no price keep their relative order and sink behind
+// priced steps. When no step is priced the input order is returned
+// unchanged. With a nil cache only static steps are priced.
+func orderStepsByMarket(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
 	out := append([]dispatch.Target(nil), steps...)
-	if cache == nil {
-		return out
-	}
 	mult := 1 + markupPercent/100
+	byModel := map[string]string{}
+	for _, slug := range chainSlugs {
+		if name, ok := market.CutUpstreamCostSlug(slug); ok {
+			byModel[name] = slug
+		}
+	}
 	type key struct {
 		sum float64
 		ok  bool
 	}
 	keyFor := func(t dispatch.Target) key {
-		if t.MarketSlug == "" {
+		if isStaticStep(t) {
+			return key{sum: (t.StaticInputPerM + t.StaticOutputPerM) * staticBillMult(t, markupPercent), ok: true}
+		}
+		slug := t.MarketSlug
+		if slug == "" {
+			slug = byModel[t.Model]
+		}
+		if slug == "" || cache == nil {
 			return key{}
 		}
-		r, ok := cache.Rate(t.MarketSlug)
+		r, ok := cache.Rate(canonicalSlug(slug))
 		if !ok {
 			return key{}
 		}
-		return key{sum: r.InputPerM + r.OutputPerM, ok: true}
+		return key{sum: (r.InputPerM + r.OutputPerM) * mult, ok: true}
 	}
 	for i := range out {
-		if out[i].MarketSlug == "" {
+		if out[i].MarketSlug == "" || isStaticStep(out[i]) || cache == nil {
 			continue
 		}
 		out[i].MarketSlug = canonicalSlug(out[i].MarketSlug)

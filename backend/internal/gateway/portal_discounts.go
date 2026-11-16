@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -61,7 +62,7 @@ func (s *Server) handlePortalDiscounts(w http.ResponseWriter, r *http.Request) {
 
 	models := make([]portalDiscountModel, 0, len(chains))
 	for _, c := range chains {
-		row := portalDiscountModel{Model: c.Name, Supported: chainCanGuaranteeDiscount(c)}
+		row := portalDiscountModel{Model: c.Name, Supported: chainMaxGuaranteedDiscount(c) > 0}
 		if !row.Supported {
 			// No minimum ever applies here: the model runs at its set price.
 			models = append(models, row)
@@ -87,7 +88,7 @@ func (s *Server) handlePortalSetModelDiscount(w http.ResponseWriter, r *http.Req
 		return
 	}
 	model := chain.Name
-	if !chainCanGuaranteeDiscount(chain) {
+	if chainMaxGuaranteedDiscount(chain) <= 0 {
 		writeError(w, http.StatusBadRequest, "model "+model+" has no discount guarantee, so it takes no minimum discount")
 		return
 	}
@@ -219,26 +220,34 @@ func (s *Server) keyChains(r *http.Request, key store.APIKey, planID string) ([]
 	return out, nil
 }
 
-// chainCanGuaranteeDiscount reports whether any step of the chain routes
-// through a surplus-trusted or surplus-fast slug, the only kind of step applyDiscountFloor
-// keeps. It mirrors how chains bind those slugs (per step, or chain-level
-// slugs matched to a step's model).
-func chainCanGuaranteeDiscount(c store.Chain) bool {
+// chainMaxGuaranteedDiscount is the highest minimum discount (0..100) the
+// chain can guarantee. It is 100 when any step routes through a
+// surplus-trusted or surplus-fast slug (Surplus refuses a request it cannot
+// serve at the floor), mirroring how chains bind those slugs (per step, or
+// chain-level slugs matched to a step's model). Otherwise it is the largest
+// whole-percent discount among static discount steps, and 0 when none.
+func chainMaxGuaranteedDiscount(c store.Chain) int {
+	best := 0
 	for _, st := range c.Steps {
 		// A static step has its own price and never adopts a chain-level slug.
+		// It guarantees only the discount it sets.
 		if st.HasStaticPrice() {
+			if st.DiscountPercent != nil {
+				d := int(math.Floor(*st.DiscountPercent + 1e-9))
+				best = max(best, min(d, 100))
+			}
 			continue
 		}
 		if market.IsUpstreamCostSlug(st.MarketSlug) {
-			return true
+			return 100
 		}
 		for _, slug := range c.MarketSlugs {
 			if name, ok := market.CutUpstreamCostSlug(slug); ok && name == st.Model {
-				return true
+				return 100
 			}
 		}
 	}
-	return false
+	return best
 }
 
 // portalUserOrError returns the signed-in portal user, writing the error

@@ -39,13 +39,8 @@ func priceStaticSteps(steps []dispatch.Target, chainMarkup float64) []dispatch.T
 		if t.StaticCacheWriteSet {
 			cacheWrite = t.StaticCacheWritePerM
 		}
-		bill, cost := 1+chainMarkup/100, 1.0
-		if t.StepMarkupSet {
-			bill = 1 + t.StepMarkupPercent/100
-		}
+		bill, cost := staticBillMult(*t, chainMarkup), 1.0
 		if t.DiscountSet {
-			// (100 − d) / 100 keeps 90 at exactly 0.1; 1 − d/100 does not.
-			bill = (100 - t.DiscountPercent) / 100
 			cost = bill
 			if t.CostMultiplierSet {
 				cost = t.CostMultiplier
@@ -60,6 +55,20 @@ func priceStaticSteps(steps []dispatch.Target, chainMarkup float64) []dispatch.T
 		t.StaticPrice = true
 	}
 	return steps
+}
+
+// staticBillMult is the factor the customer price of a static step is its
+// list rate times: the discount remainder, else the step markup, else
+// chainMarkup.
+func staticBillMult(t dispatch.Target, chainMarkup float64) float64 {
+	if t.DiscountSet {
+		// (100 − d) / 100 keeps 90 at exactly 0.1; 1 − d/100 does not.
+		return (100 - t.DiscountPercent) / 100
+	}
+	if t.StepMarkupSet {
+		return 1 + t.StepMarkupPercent/100
+	}
+	return 1 + chainMarkup/100
 }
 
 // pinStaticSteps applies a price-based ordering to the non-static steps only.

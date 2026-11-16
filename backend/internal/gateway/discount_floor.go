@@ -33,28 +33,31 @@ func upstreamDiscountForFloor(floorPct int, mult float64) int {
 }
 
 // keyDiscountFloor is the minimum discount routing enforces for key on model:
-// the key's effective minimum on a chain that can guarantee a discount, else
-// 0. Chains that cannot guarantee one run at their set price.
-func keyDiscountFloor(key store.APIKey, model string, discountCapable bool) int {
-	if !discountCapable {
-		return 0
+// the key's effective minimum when the chain can guarantee any discount
+// (maxDiscount, from chainMaxGuaranteedDiscount, is above 0), else 0. A floor
+// above what the chain offers then refuses the request unless the key turned
+// the final fallback on. A chain with no discount at all runs at its set price.
+func keyDiscountFloor(key store.APIKey, model string, maxDiscount int) int {
+	if floor := key.EffectiveMinDiscount(model); floor > 0 && maxDiscount > 0 {
+		return floor
 	}
-	return key.EffectiveMinDiscount(model)
+	return 0
 }
 
 // finalFallbackRuns reports whether routing appends the chain fallback for
 // key on model: it is on, and either turned on explicitly (exempt from the
 // floor) or no floor applies. A fallback kept from before per-key routing is
 // dropped by any floor, as applyDiscountFloor does.
-func finalFallbackRuns(key store.APIKey, model string, discountCapable bool) bool {
+func finalFallbackRuns(key store.APIKey, model string, maxDiscount int) bool {
 	if !key.FinalFallbackOn(model) {
 		return false
 	}
-	return key.FinalFallbackExempt(model) || keyDiscountFloor(key, model, discountCapable) <= 0
+	return key.FinalFallbackExempt(model) || keyDiscountFloor(key, model, maxDiscount) <= 0
 }
 
 // applyDiscountFloor keeps only the chain steps that can guarantee the
-// customer's floor: surplus-trusted steps, which Surplus refuses (without
+// customer's floor: static discount steps whose discount is at least the
+// floor, and surplus-trusted steps, which Surplus refuses (without
 // charging) when no offer is at least X-Min-Discount below list. Other steps
 // cannot prove a discount and are dropped. A chain fallback the customer or
 // admin turned on explicitly is kept as is: it was chosen knowing it runs at
@@ -73,6 +76,13 @@ func applyDiscountFloor(targets []dispatch.Target, floorPct int, model string) (
 	for _, t := range targets {
 		if t.ChainFallback && t.FallbackFloorExempt {
 			out = append(out, t)
+			continue
+		}
+		if isStaticStep(t) && t.DiscountSet {
+			// A static discount step guarantees exactly its own discount.
+			if t.DiscountPercent >= float64(floorPct) {
+				out = append(out, t)
+			}
 			continue
 		}
 		if !t.BillUpstreamCost || !market.IsUpstreamCostSlug(t.MarketSlug) {
