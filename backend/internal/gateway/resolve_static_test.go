@@ -95,20 +95,62 @@ func TestStaticStepNotAdoptedBySurplusSlug(t *testing.T) {
 	near(t, 0.65, got[0].MarketRateIn, "billable in")
 }
 
-func TestStaticStepKeepsPositionWhenReorderedByMarket(t *testing.T) {
+func orderCache() *market.SnapshotCache {
 	cache := market.NewSnapshotCache()
 	cache.Replace([]market.Model{
-		{Slug: "dear", MinAskIn: 0.02, MinAskOut: 0.02, MaxAskIn: 0.02, MaxAskOut: 0.02},
-		{Slug: "cheap", MinAskIn: 0.001, MinAskOut: 0.001, MaxAskIn: 0.001, MaxAskOut: 0.001},
+		{Slug: "dear", MinAskIn: 2, MinAskOut: 2, MaxAskIn: 2, MaxAskOut: 2},          // key 5.2
+		{Slug: "cheap", MinAskIn: 0.1, MinAskOut: 0.1, MaxAskIn: 0.1, MaxAskOut: 0.1}, // key 0.26
+		{Slug: "mid", MinAskIn: 1, MinAskOut: 1, MaxAskIn: 1, MaxAskOut: 1},           // key 2.6
 	})
-	s := staticStep(nil)
+	return cache
+}
+
+func TestStaticStepSortedByCustomerPriceWhenReorderedByMarket(t *testing.T) {
+	s := staticStep(nil) // (0.5+2) × 1.3 = 3.25
 	s.Provider = "static"
 	got := resolveStatic(t, store.Chain{ReorderByMarket: true, Steps: []store.ChainStep{
 		{Provider: "dear", Model: "x", MarketSlug: "dear"},
 		s,
 		{Provider: "cheap", Model: "x", MarketSlug: "cheap"},
-	}}, cache)
+	}}, orderCache())
 	require.Equal(t, []string{"cheap", "static", "dear"}, providers(got))
+}
+
+func TestStaticDiscountStepBeatsDearerMarketStep(t *testing.T) {
+	s := staticStep(nil)
+	s.Provider = "static"
+	d := staticStep(nil)
+	d.Provider, d.DiscountPercent = "disc", fptr(90) // (0.5+2) × 0.1 = 0.25
+	got := resolveStatic(t, store.Chain{ReorderByMarket: true, Steps: []store.ChainStep{
+		{Provider: "dear", Model: "x", MarketSlug: "dear"},
+		s,
+		{Provider: "cheap", Model: "x", MarketSlug: "cheap"},
+		d,
+	}}, orderCache())
+	require.Equal(t, []string{"disc", "cheap", "static", "dear"}, providers(got))
+}
+
+func TestSluglessStepAdoptsChainSlugForOrdering(t *testing.T) {
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{market.TrustedQuote{Found: true, BestIn: 0.1, BestOut: 0.1, CapIn: 0.2, CapOut: 0.2, MinDiscountPct: 50, Providers: []string{"zai"}}.Model("gpt-4o")}) // key 0.26
+	s := staticStep(nil)
+	s.Provider = "static"
+	got := resolveStatic(t, store.Chain{
+		ReorderByMarket: true,
+		MarketSlugs:     []string{"surplus-trusted:gpt-4o"},
+		Steps:           []store.ChainStep{s, {Provider: "surplus", Model: "gpt-4o"}},
+	}, cache)
+	require.Equal(t, []string{"surplus", "static"}, providers(got))
+}
+
+func TestStaticStepWithSlugSortsAsStatic(t *testing.T) {
+	s := staticStep(nil)
+	s.Provider, s.MarketSlug = "static", "cheap"
+	got := resolveStatic(t, store.Chain{ReorderByMarket: true, Steps: []store.ChainStep{
+		s,
+		{Provider: "mid", Model: "x", MarketSlug: "mid"},
+	}}, orderCache())
+	require.Equal(t, []string{"mid", "static"}, providers(got))
 }
 
 func TestStaticStepKeepsPositionUnderCostStrategy(t *testing.T) {

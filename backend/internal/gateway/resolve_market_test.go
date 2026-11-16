@@ -10,9 +10,9 @@ import (
 func TestOrderStepsByMarketCheapestFirstAndStampsRates(t *testing.T) {
 	cache := market.NewSnapshotCache()
 	cache.Replace([]market.Model{
-		{Slug: "p1", MinAskIn: 0.02, MinAskOut: 0.01}, // sum 0.03
+		{Slug: "p1", MinAskIn: 0.02, MinAskOut: 0.01},   // sum 0.03
 		{Slug: "p2", MinAskIn: 0.005, MinAskOut: 0.005}, // sum 0.01 cheapest
-		{Slug: "p3", MinAskIn: 0.01, MinAskOut: 0.01}, // sum 0.02
+		{Slug: "p3", MinAskIn: 0.01, MinAskOut: 0.01},   // sum 0.02
 	})
 	// Declared non-ascending: p1(3), U(unpriced, middle), p2(1), p3(2).
 	// Requires >=2 moves and must sink U last.
@@ -22,7 +22,7 @@ func TestOrderStepsByMarketCheapestFirstAndStampsRates(t *testing.T) {
 		{Provider: "p2", Model: "x", MarketSlug: "p2"},
 		{Provider: "p3", Model: "x", MarketSlug: "p3"},
 	}
-	out := orderStepsByMarket(steps, cache, 10 /*markupPercent*/)
+	out := orderStepsByMarket(steps, nil, cache, 10 /*markupPercent*/)
 	want := []string{"p2", "p3", "p1", "plain"}
 	for i, w := range want {
 		if out[i].Provider != w {
@@ -47,9 +47,9 @@ func TestOrderStepsByMarketCheapestFirstAndStampsRates(t *testing.T) {
 func TestOrderStepsByMarketReproduction(t *testing.T) {
 	cache := market.NewSnapshotCache()
 	cache.Replace([]market.Model{
-		{Slug: "p1", MinAskIn: 0.02, MinAskOut: 0.01}, // sum 0.03
+		{Slug: "p1", MinAskIn: 0.02, MinAskOut: 0.01},   // sum 0.03
 		{Slug: "p2", MinAskIn: 0.005, MinAskOut: 0.005}, // sum 0.01
-		{Slug: "p3", MinAskIn: 0.01, MinAskOut: 0.01}, // sum 0.02
+		{Slug: "p3", MinAskIn: 0.01, MinAskOut: 0.01},   // sum 0.02
 	})
 	steps := []dispatch.Target{
 		{Provider: "p1", Model: "x", MarketSlug: "p1"},
@@ -57,7 +57,7 @@ func TestOrderStepsByMarketReproduction(t *testing.T) {
 		{Provider: "p2", Model: "x", MarketSlug: "p2"},
 		{Provider: "p3", Model: "x", MarketSlug: "p3"},
 	}
-	out := orderStepsByMarket(steps, cache, 0)
+	out := orderStepsByMarket(steps, nil, cache, 0)
 	want := []string{"p2", "p3", "p1", "U"}
 	for i, w := range want {
 		if out[i].Provider != w {
@@ -76,7 +76,7 @@ func providers(ts []dispatch.Target) []string {
 
 func TestOrderStepsByMarketIdentityWhenNoSlugs(t *testing.T) {
 	steps := []dispatch.Target{{Provider: "a", Model: "1"}, {Provider: "b", Model: "2"}}
-	out := orderStepsByMarket(steps, market.NewSnapshotCache(), 10)
+	out := orderStepsByMarket(steps, nil, market.NewSnapshotCache(), 10)
 	if out[0].Provider != "a" || out[1].Provider != "b" {
 		t.Fatalf("order changed with empty cache: %+v", out)
 	}

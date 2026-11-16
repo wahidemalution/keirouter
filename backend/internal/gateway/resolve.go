@@ -195,9 +195,7 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			// sink last. Runs before the declared strategy switch so it
 			// composes with the fallback/round-robin handling below.
 			if c.ReorderByMarket {
-				steps = pinStaticSteps(steps, func(rest []dispatch.Target) []dispatch.Target {
-					return orderStepsByMarket(rest, cache, markupPercent)
-				})
+				steps = orderStepsByMarket(steps, c.MarketSlugs, cache, markupPercent)
 			}
 			// Every slugged step is billed for itself, whatever the ordering; a
 			// step whose slug has no live quote is dropped.
@@ -282,33 +280,48 @@ func orderStepsByLatency(ctx context.Context, latency LatencyReader, tenantID st
 	return out
 }
 
-// orderStepsByMarket orders steps cheapest-first by the live market rate of each
-// step's bound slug and stamps the billable (post-markup) rates onto each slugged
-// target. Steps without a resolvable slug keep their relative order and sink
-// behind priced steps. When no step has a resolvable slug the input order is
+// orderStepsByMarket orders steps cheapest-first by the customer price of each
+// step: a static step by its own static price, any other by the live market
+// rate of its bound slug times the markup. A slugless step adopts the chain
+// slug for its model, for the sort key only. Slugged steps get the billable
+// (post-markup) rates stamped. Steps with no price keep their relative order
+// and sink behind priced steps. When no step is priced the input order is
 // returned unchanged.
-func orderStepsByMarket(steps []dispatch.Target, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
+func orderStepsByMarket(steps []dispatch.Target, chainSlugs []string, cache *market.SnapshotCache, markupPercent float64) []dispatch.Target {
 	out := append([]dispatch.Target(nil), steps...)
 	if cache == nil {
 		return out
 	}
 	mult := 1 + markupPercent/100
+	byModel := map[string]string{}
+	for _, slug := range chainSlugs {
+		if name, ok := market.CutUpstreamCostSlug(slug); ok {
+			byModel[name] = slug
+		}
+	}
 	type key struct {
 		sum float64
 		ok  bool
 	}
 	keyFor := func(t dispatch.Target) key {
-		if t.MarketSlug == "" {
+		if isStaticStep(t) {
+			return key{sum: (t.StaticInputPerM + t.StaticOutputPerM) * staticBillMult(t, markupPercent), ok: true}
+		}
+		slug := t.MarketSlug
+		if slug == "" {
+			slug = byModel[t.Model]
+		}
+		if slug == "" {
 			return key{}
 		}
-		r, ok := cache.Rate(t.MarketSlug)
+		r, ok := cache.Rate(canonicalSlug(slug))
 		if !ok {
 			return key{}
 		}
-		return key{sum: r.InputPerM + r.OutputPerM, ok: true}
+		return key{sum: (r.InputPerM + r.OutputPerM) * mult, ok: true}
 	}
 	for i := range out {
-		if out[i].MarketSlug == "" {
+		if out[i].MarketSlug == "" || isStaticStep(out[i]) {
 			continue
 		}
 		out[i].MarketSlug = canonicalSlug(out[i].MarketSlug)
