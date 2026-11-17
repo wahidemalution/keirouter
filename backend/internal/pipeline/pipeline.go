@@ -2242,7 +2242,9 @@ func terminalStatusAndKind(err error) (string, string) {
 	if pe != nil && pe.Kind == core.ErrClientCanceled {
 		return "cancelled", string(pe.Kind)
 	}
-	if pe != nil && pe.Kind == core.ErrPolicyBlocked {
+	// A guardrail decision or a key out of credit is not a router or provider
+	// failure, so it stays out of the failure count behind success rate.
+	if pe != nil && (pe.Kind == core.ErrPolicyBlocked || pe.Kind == core.ErrBudgetBlocked) {
 		return "blocked", string(pe.Kind)
 	}
 	if pe != nil {
