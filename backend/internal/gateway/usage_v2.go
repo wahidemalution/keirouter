@@ -163,8 +163,18 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 		keyEmails = s.portalEmailsByKey(ctx)
 	}
 	recentRows := make([]map[string]any, 0, len(recent))
+	var logInfo requestLogInfo
+	if len(recent) > 0 {
+		logInfo = s.newRequestLogInfo(ctx, adminTenant)
+	}
 	for _, record := range recent {
 		display, color, icon := usageProviderMetadata(record.Provider)
+		// discount_pct is the same figure the customer sees in the portal request log.
+		discount := logInfo.discountPct(store.RecentRecord{
+			ChainID: record.ChainID, CostNanos: record.CostNanos,
+			PromptTokens: record.PromptTokens, CompletionTokens: record.CompletionTokens,
+			CachedTokens: record.CachedTokens, CacheWriteTokens: record.CacheWriteTokens,
+		})
 		recentRows = append(recentRows, map[string]any{
 			"id":                     record.ID,
 			"request_id":             record.RequestID,
@@ -196,6 +206,7 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 			"reasoning_cost_usd":     nanosToUSD(record.ReasoningCostNanos),
 			"saved_cost_usd":         nanosToUSD(record.SavedCostNanos),
 			"avoided_cost_usd":       nanosToUSD(record.AvoidedCostNanos),
+			"discount_pct":           discount,
 			"pricing_status":         record.PricingStatus,
 			"pricing_source":         record.PricingSource,
 			"pricing_key":            record.PricingKey,

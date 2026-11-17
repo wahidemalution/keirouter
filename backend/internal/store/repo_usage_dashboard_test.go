@@ -65,7 +65,7 @@ func TestRecentAccurateIncludesKeyAccountAndClient(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	require.NoError(t, db.Usage().RecordBatch(ctx, []UsageRecord{{
-		ID: "r1", TenantID: DefaultTenantID, APIKeyID: "key-1", AccountID: "acc-1", Client: "claude-code",
+		ID: "r1", TenantID: DefaultTenantID, APIKeyID: "key-1", AccountID: "acc-1", Client: "claude-code", ChainID: "chain-1",
 		Provider: "anthropic", Model: "m", Status: "success", CreatedAt: now,
 	}, {
 		ID: "r2", TenantID: DefaultTenantID, Provider: "anthropic", Model: "m", Status: "success", CreatedAt: now.Add(-time.Second),
@@ -77,7 +77,9 @@ func TestRecentAccurateIncludesKeyAccountAndClient(t *testing.T) {
 	require.Equal(t, "key-1", recent[0].APIKeyID)
 	require.Equal(t, "acc-1", recent[0].AccountID)
 	require.Equal(t, "claude-code", recent[0].Client)
+	require.Equal(t, "chain-1", recent[0].ChainID)
 	require.Empty(t, recent[1].APIKeyID)
+	require.Empty(t, recent[1].ChainID)
 }
 
 func TestRollupSnapshotsGroupsByProviderAndBucket(t *testing.T) {
