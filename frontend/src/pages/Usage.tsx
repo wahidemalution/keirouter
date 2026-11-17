@@ -1046,6 +1046,12 @@ function RecentRequests({
                       </span>
                       <span aria-hidden="true">·</span>
                       <span className={cn(r.pricing_status === "missing" ? "text-warn" : "text-fg")}>{requestCharged(r)}</span>
+                      {r.discount_pct != null && r.discount_pct > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-medium text-ok">{r.discount_pct}% off</span>
+                        </>
+                      )}
                       <span aria-hidden="true">·</span>
                       <span>{fmtMs(r.end_to_end_latency_ms)}</span>
                     </span>
@@ -1055,7 +1061,7 @@ function RecentRequests({
               ))}
             </ul>
             <div className="hidden overflow-x-auto md:block">
-              <table className="w-full min-w-[980px] text-[13px]">
+              <table className="w-full min-w-[1060px] text-[13px]">
                 <thead>
                   <tr className={THEAD}>
                     <th scope="col" className={TH}>Time</th>
@@ -1064,6 +1070,7 @@ function RecentRequests({
                     <th scope="col" className={TH}>Model</th>
                     <th scope="col" className={cn(TH, "text-right")}>Tokens in → out</th>
                     <th scope="col" className={cn(TH, "text-right")}>Cost</th>
+                    <th scope="col" className={cn(TH, "text-right")}>Discount</th>
                     <th scope="col" className={cn(TH, "text-right")}>Latency</th>
                   </tr>
                 </thead>
@@ -1128,6 +1135,9 @@ function RecentRequests({
                           <div className={cn(r.pricing_status === "missing" ? "text-warn" : "text-fg")}>{requestCharged(r)}</div>
                           {r.pricing_status !== "priced" && r.pricing_status !== "missing" && <div className="text-[11.5px] text-fg-muted">{humanize(r.pricing_status)}</div>}
                         </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
+                          <RequestDiscount record={r} />
+                        </td>
                         <Cell main={fmtMs(r.end_to_end_latency_ms)} sub={`upstream ${fmtMs(r.upstream_latency_ms)}`} />
                       </tr>
                     );
@@ -1173,6 +1183,23 @@ function RequestUser({ record: r }: { record: RecentActivity }) {
     );
   }
   return <span className="text-fg-faint">—</span>;
+}
+
+// RequestDiscount shows the discount the customer saw for this request in the
+// portal request log, worded the same way.
+function RequestDiscount({ record: r }: { record: RecentActivity }) {
+  if (r.cost_usd === 0 && r.prompt_tokens + r.completion_tokens > 0) {
+    return <span className="font-medium text-ok" title="Cost below $0.000001, nothing billed">Free</span>;
+  }
+  if (r.discount_pct == null) {
+    return (
+      <span className="text-fg-faint" title="No official price for this model, or nothing billed">
+        —<span className="sr-only">No discount figure</span>
+      </span>
+    );
+  }
+  if (r.discount_pct > 0) return <span className="font-medium text-ok">{r.discount_pct}% off</span>;
+  return <span className="text-fg-muted">None</span>;
 }
 
 function requestCharged(r: RecentActivity): string {

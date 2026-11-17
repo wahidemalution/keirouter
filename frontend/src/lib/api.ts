@@ -708,6 +708,8 @@ export interface RecentActivity {
   reasoning_cost_usd: number;
   saved_cost_usd: number;
   avoided_cost_usd: number;
+  /** Discount off the chain's official price, as the customer sees it in the portal request log; null without an official price or a billed cost. */
+  discount_pct: number | null;
   pricing_status: PricingStatus;
   pricing_source: string;
   pricing_key: string;

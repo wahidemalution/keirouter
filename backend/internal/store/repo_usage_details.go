@@ -11,7 +11,7 @@ import (
 // provenance for the request detail drawer.
 type AccurateRecentRecord struct {
 	ID, RequestID, Provider, Model, Status, ErrorKind, UsageSource string
-	APIKeyID, AccountID, Client                                    string
+	APIKeyID, AccountID, Client, ChainID                           string
 	PromptTokens, CompletionTokens, CachedTokens, CacheWriteTokens int
 	ReasoningTokens                                                int
 	CostNanos, InputCostNanos, CachedCostNanos                     int64
@@ -39,7 +39,7 @@ func (r *UsageRepo) RecentAccurate(ctx context.Context, tenantID string, since t
 	}
 	q := r.db.rebind(`
 		SELECT id, request_id, provider, model, status, error_kind, usage_source,
-			COALESCE(api_key_id,''), COALESCE(account_id,''), COALESCE(client,''),
+			COALESCE(api_key_id,''), COALESCE(account_id,''), COALESCE(client,''), COALESCE(chain_id,''),
 			prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens, reasoning_tokens,
 			cost_nanos, input_cost_nanos, cached_cost_nanos, cache_write_cost_nanos,
 			output_cost_nanos, reasoning_cost_nanos, avoided_cost_nanos, saved_cost_nanos,
@@ -65,7 +65,7 @@ func (r *UsageRepo) RecentAccurate(ctx context.Context, tenantID string, since t
 		var createdAt string
 		if err := rows.Scan(
 			&rec.ID, &rec.RequestID, &rec.Provider, &rec.Model, &rec.Status, &rec.ErrorKind, &rec.UsageSource,
-			&rec.APIKeyID, &rec.AccountID, &rec.Client,
+			&rec.APIKeyID, &rec.AccountID, &rec.Client, &rec.ChainID,
 			&rec.PromptTokens, &rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens, &rec.ReasoningTokens,
 			&rec.CostNanos, &rec.InputCostNanos, &rec.CachedCostNanos, &rec.CacheWriteCostNanos,
 			&rec.OutputCostNanos, &rec.ReasoningCostNanos, &rec.AvoidedCostNanos, &rec.SavedCostNanos,
