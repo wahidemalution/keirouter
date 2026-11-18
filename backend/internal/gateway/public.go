@@ -10,6 +10,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
@@ -140,6 +141,35 @@ func (s *Server) anyMarketSlugResolves(slugs []string) bool {
 	return false
 }
 
+// nonSurplusPrice is a step's customer price per 1M tokens, markup included.
+type nonSurplusPrice struct {
+	in, out, cacheRead, cacheWrite float64
+}
+
+// cheapestNonSurplusStep is the cheapest of the chain's steps that sell
+// outside Surplus (static price, inferhub slug), priced the way the model
+// popup prices them (detailExtraRoutes). found is false when it has none.
+func (s *Server) cheapestNonSurplusStep(c store.Chain, settings market.Settings) (best nonSurplusPrice, found bool) {
+	markup := market.EffectiveMarkup(c.MarkupPercent, settings.MarkupPercent)
+	for _, t := range dispatch.TargetsFromChain(c) {
+		if strings.HasPrefix(strings.ToLower(t.MarketSlug), "surplus") {
+			continue
+		}
+		q := s.stepCustomerQuote(c, t, markup)
+		if !q.available || q.in == nil || q.out == nil || *q.in+*q.out <= 0 {
+			continue
+		}
+		if found && !cheaper(*q.in, *q.out, best.in, best.out) {
+			continue
+		}
+		best, found = nonSurplusPrice{in: *q.in, out: *q.out, cacheRead: q.cacheRead, cacheWrite: q.cacheWrite}, true
+		if best.cacheRead <= 0 && best.cacheWrite <= 0 {
+			best.cacheRead, best.cacheWrite = *price(best.in * market.CacheReadMult), *price(best.in * market.CacheWriteMult)
+		}
+	}
+	return best, found
+}
+
 // publicModelRows lists one entry per routing chain, with all-time usage
 // attributed by chain_id. Chains without steps are skipped (nothing routable to
 // advertise). Rows sort by request volume, then name. Purely aggregate; safe to
@@ -170,6 +200,10 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 	live, err := s.surplusPrices(ctx)
 	if err != nil {
 		return nil, err
+	}
+	settings := market.DefaultSettings()
+	if s.settings != nil {
+		settings = market.LoadSettings(ctx, s.settings.Get)
 	}
 	rows := make([]publicModelRow, 0, len(chains))
 	for _, c := range chains {
@@ -233,6 +267,13 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 					if p.CachedPerM != nil && p.CacheWritePerM != nil {
 						cachedPerM, cacheWritePerM = *p.CachedPerM, *p.CacheWritePerM
 					}
+				}
+				// Steps that sell outside Surplus are routed too, and the
+				// popup's best offer counts them, so a cheaper one sets
+				// the card's best case.
+				liveOK := ok && p.Available && p.InputPerM != nil && p.OutputPerM != nil
+				if x, found := s.cheapestNonSurplusStep(c, settings); found && (!liveOK || cheaper(x.in, x.out, inputPerM, outputPerM)) {
+					inputPerM, outputPerM, cachedPerM, cacheWritePerM = x.in, x.out, x.cacheRead, x.cacheWrite
 				}
 				if ok && p.MaxInputPerM != nil && p.MaxOutputPerM != nil {
 					maxIn, maxOut = atLeast(*p.MaxInputPerM, inputPerM), atLeast(*p.MaxOutputPerM, outputPerM)

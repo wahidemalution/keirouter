@@ -193,6 +193,9 @@ type stepQuote struct {
 	in, out *float64
 	// offers is every Surplus offer, cheapest first, markup included.
 	offers []market.OfferPrice
+	// cacheRead/cacheWrite are the cache prices that go with in, zero when
+	// unknown.
+	cacheRead, cacheWrite float64
 }
 
 // stepCustomerQuote prices one chain step the way routing bills it: the same
@@ -212,6 +215,7 @@ func (s *Server) stepCustomerQuote(c store.Chain, t dispatch.Target, markup floa
 	q := stepQuote{available: true}
 	if p.MarketRateIn > 0 || p.MarketRateOut > 0 {
 		q.in, q.out = pricePtr(p.MarketRateIn), pricePtr(p.MarketRateOut)
+		q.cacheRead, q.cacheWrite = p.MarketCacheReadRate, p.MarketCacheWriteRate
 	} else {
 		q.in, q.out = pricePtr(p.InputPerM), pricePtr(p.OutputPerM)
 	}
@@ -229,6 +233,7 @@ func (s *Server) stepCustomerQuote(c store.Chain, t dispatch.Target, markup floa
 	}
 	mult := 1 + markup/100
 	q.in, q.out = pricePtr(m.MinAskIn*mult), pricePtr(m.MinAskOut*mult)
+	q.cacheRead, q.cacheWrite = m.MinAskIn*mult*market.CacheReadMult, m.MinAskIn*mult*market.CacheWriteMult
 	if inferhub {
 		return q
 	}
