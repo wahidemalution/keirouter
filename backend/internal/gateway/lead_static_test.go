@@ -101,3 +101,48 @@ func TestPublicModelsRoundRobinIgnoresLeadStaticStep(t *testing.T) {
 
 	require.Equal(t, "live", publicRowsByName(t, gw)["rr"].PriceBasis)
 }
+
+// A fixed-price step behind a Surplus lead is still routed, so when it is
+// cheaper the card shows its price and best-case discount, as the popup does.
+func TestPublicModelsCheaperStaticBackupSetsUpTo(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	in, out := 1.0, 10.0
+	now := time.Now().UTC()
+	require.NoError(t, db.Chains().Create(context.Background(), store.Chain{
+		ID: "mix", TenantID: store.DefaultTenantID, Name: "mix", Strategy: "priority",
+		OfficialInputPerM: &in, OfficialOutputPerM: &out,
+		Steps: []store.ChainStep{
+			{ID: "mix-s1", Provider: "custom-openai-b", Model: "m", Position: 0, MarketSlug: "surplus-trusted:mix"},
+			{ID: "mix-s2", Provider: "custom-openai-c", Model: "m", Position: 1, StaticInputPerM: 0.1, StaticOutputPerM: 0.9},
+		},
+		CreatedAt: now, UpdatedAt: now,
+	}))
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{
+		market.TrustedQuote{Found: true, BestIn: 0.4, BestOut: 4, CapIn: 0.6, CapOut: 6, MinDiscountPct: 40, Providers: []string{"a"}}.Model("mix"),
+	})
+	gw.marketCache = cache
+
+	row := publicRowsByName(t, gw)["mix"]
+	require.Equal(t, "live", row.PriceBasis)
+	require.InDelta(t, 0.11, row.InputPerM, 1e-9, "static backup with the 10% default markup")
+	require.InDelta(t, 0.99, row.OutputPerM, 1e-9)
+	require.InDelta(t, 0.11*market.CacheReadMult, row.CachedPerM, 1e-9)
+	require.Equal(t, 90, row.UpToDiscountPct, "1.1 of an 11 list")
+	require.GreaterOrEqual(t, row.MaxInputPerM, 0.44, "the market bound stays")
+}
+
+// A Surplus quote cheaper than the static backup keeps the card on Surplus.
+func TestPublicModelsPricierStaticBackupKeepsSurplus(t *testing.T) {
+	db, gw := newPublicTestGatewayWithDB(t)
+	require.NoError(t, db.Chains().Create(context.Background(), staticSurplusStaticChain("rr", "round-robin")))
+	cache := market.NewSnapshotCache()
+	cache.Replace([]market.Model{
+		market.TrustedQuote{Found: true, BestIn: 0.01, BestOut: 0.1, CapIn: 0.4, CapOut: 4, MinDiscountPct: 60, Providers: []string{"a"}}.Model("rr"),
+	})
+	gw.marketCache = cache
+
+	row := publicRowsByName(t, gw)["rr"]
+	require.InDelta(t, 0.011, row.InputPerM, 1e-9)
+	require.Equal(t, 98, row.UpToDiscountPct)
+}
