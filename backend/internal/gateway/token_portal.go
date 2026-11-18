@@ -35,6 +35,9 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 	}
 	var pkgs []store.TokenPackage
 	models := []string{}
+	// The token plan's per-key limits, as set on the admin page; null when
+	// unknown or unlimited.
+	var rpm, concurrency any
 	if st.Enabled {
 		plan, err := s.db.Plans().Get(ctx, st.PlanID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -42,6 +45,12 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		models = tokenPlanModels(plan)
+		if plan.RPMLimit > 0 {
+			rpm = plan.RPMLimit
+		}
+		if plan.ConcurrencyLimit > 0 {
+			concurrency = plan.ConcurrencyLimit
+		}
 		if pkgs, err = s.db.TokenPackages().List(ctx); err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
@@ -59,7 +68,9 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"on_sale": s.tokenOnSale(st), "packages": out, "models": models,
-		"terms_version": tokenpkg.TermsVersion,
+		"terms_version":     tokenpkg.TermsVersion,
+		"rpm_limit":         rpm,
+		"concurrency_limit": concurrency,
 	})
 }
 
