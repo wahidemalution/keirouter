@@ -20,6 +20,9 @@ func (s *Server) mountTokenPackages(r chi.Router) {
 	r.Get("/token-packages/overview", s.adminTokenOverview)
 	r.Get("/token-packages/subscriptions", s.adminListTokenSubscriptions)
 	r.Post("/token-packages/subscriptions/{sub}/key/toggle", s.adminToggleTokenKey)
+	r.Post("/token-packages/subscriptions/{sub}/tokens", s.adminAdjustTokenKey)
+	r.Get("/token-packages/subscriptions/{sub}/token-adjustments", s.adminListTokenAdjustments)
+	r.Get("/token-packages/subscriptions/{sub}/orders", s.adminListTokenSubscriberOrders)
 	r.Get("/token-packages", s.adminListTokenPackages)
 	r.Post("/token-packages", s.adminCreateTokenPackage)
 	r.Put("/token-packages/{id}", s.adminUpdateTokenPackage)
@@ -417,7 +420,13 @@ func (s *Server) adminTokenOverview(w http.ResponseWriter, r *http.Request) {
 		rangeTokens += byDay[day]
 		series = append(series, map[string]any{"day": day, "tokens": byDay[day]})
 	}
+	upstream, err := s.tokenUpstreamCostView(ctx, first)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"upstream_cost":        upstream,
 		"subscribers_total":    len(rows),
 		"subscribers_active":   active,
 		"subscribers_disabled": disabled,
@@ -452,4 +461,74 @@ func (s *Server) adminToggleTokenKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"disabled": disabled})
+}
+
+// tokenUpstreamCostView is what token package usage cost at the upstream
+// providers before markup: all-time, since rangeStart, and per provider.
+func (s *Server) tokenUpstreamCostView(ctx context.Context, rangeStart time.Time) (map[string]any, error) {
+	costs, err := s.db.TokenSubscriptions().UpstreamCost(ctx, rangeStart)
+	if err != nil {
+		return nil, err
+	}
+	var total, inRange, pending, unpriced int64
+	providers := make([]map[string]any, 0, len(costs))
+	for _, c := range costs {
+		total += c.TotalNanos
+		inRange += c.RangeNanos
+		pending += c.Pending
+		unpriced += c.Unpriced
+		providers = append(providers, map[string]any{
+			"provider": c.Provider, "total_usd": nanosToUSD(c.TotalNanos), "range_usd": nanosToUSD(c.RangeNanos),
+			"pending_requests": c.Pending, "unpriced_requests": c.Unpriced,
+		})
+	}
+	return map[string]any{
+		"total_usd": nanosToUSD(total), "range_usd": nanosToUSD(inRange),
+		"pending_requests": pending, "unpriced_requests": unpriced, "providers": providers,
+	}, nil
+}
+
+// adminListTokenSubscriberOrders returns one portal user's token package
+// orders, newest first, with what each order bought, for auditing a balance.
+func (s *Server) adminListTokenSubscriberOrders(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	googleSub := chi.URLParam(r, "sub")
+	if _, err := s.db.TokenSubscriptions().GetBySub(ctx, googleSub); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "token subscription not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	orders, err := s.db.PaymentOrders().ListTokenOrdersBySub(ctx, googleSub)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	pkgs, err := s.db.TokenPackages().List(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	byID := make(map[string]store.TokenPackage, len(pkgs))
+	for _, p := range pkgs {
+		byID[p.ID] = p
+	}
+	out := make([]map[string]any, 0, len(orders))
+	for _, o := range orders {
+		live, found := byID[o.TokenPackageID]
+		kind, tokens, days := o.TokenKind, o.TokenAmount, o.TokenDays
+		if kind == "" && found {
+			// Orders made before checkout copied the package.
+			kind, tokens, days = string(live.Kind), live.Tokens, live.Days
+		}
+		out = append(out, map[string]any{
+			"order_id": o.ID, "status": string(o.Status), "amount_idr": o.AmountIDR,
+			"package_id": o.TokenPackageID, "package_name": live.Name,
+			"token_kind": kind, "tokens": tokens, "days": days,
+			"provider_payment_id": o.ProviderPaymentID, "actor": o.Actor,
+			"created_at": o.CreatedAt, "paid_at": o.PaidAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"orders": out})
 }

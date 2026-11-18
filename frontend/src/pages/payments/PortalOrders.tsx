@@ -1,13 +1,13 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Check, CreditCard, Loader2, ShoppingCart } from "lucide-react";
+import { Ban, Check, CreditCard, Loader2, Search, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, type PaymentOrderAdmin } from "../../lib/api";
 import { useToast } from "../../components/Toast";
-import { Badge, Button, EmptyState, ErrorBanner, LoadingRegion, Modal, ModalFooter, Skeleton, TablePagination, Textarea, useClientPagination } from "../../components/ui";
+import { Badge, Button, EmptyState, ErrorBanner, Input, LoadingRegion, Modal, ModalFooter, Skeleton, TablePagination, Textarea, useClientPagination } from "../../components/ui";
 import { Panel, REFETCH_MS, TH, THEAD, dateID, errorText, idr, usd } from "./shared";
 
-const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+export const ORDER_STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
   completed: "success",
   manual: "success",
   pending: "warning",
@@ -16,7 +16,7 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   cancelled: "neutral",
 };
 
-const STATUS_LABEL: Record<string, string> = {
+export const ORDER_STATUS_LABEL: Record<string, string> = {
   completed: "Paid",
   manual: "Approved manually",
   pending: "Pending",
@@ -30,10 +30,24 @@ const STATUS_LABEL: Record<string, string> = {
 // order's SumoPod link stays payable, so it can be approved too.
 const SETTLEABLE = new Set(["pending", "expired", "failed", "cancelled"]);
 
-/** `product` limits the list to one product's orders; the backend returns all of them. */
-export function PortalOrders({ product }: { product?: "token" } = {}) {
+const STATUS_TONE = ORDER_STATUS_TONE;
+const STATUS_LABEL = ORDER_STATUS_LABEL;
+
+/** Whether an order matches a lowercase search across who paid and which payment it is. */
+function orderMatches(o: PaymentOrderAdmin, q: string): boolean {
+  return [o.user_email, o.google_sub, o.key_display, o.key_id, o.order_id, o.provider_payment_id, STATUS_LABEL[o.status] ?? o.status, String(o.amount_idr)].some((v) =>
+    v?.toLowerCase().includes(q),
+  );
+}
+
+/**
+ * `product` limits the list to one product's orders; the backend returns all
+ * of them. `searchable` adds a search box above the table.
+ */
+export function PortalOrders({ product, searchable = false }: { product?: "token"; searchable?: boolean } = {}) {
   const qc = useQueryClient();
   const toast = useToast();
+  const [search, setSearch] = useState("");
   const [approving, setApproving] = useState<PaymentOrderAdmin | null>(null);
   const [reason, setReason] = useState("");
   const [cancelling, setCancelling] = useState<PaymentOrderAdmin | null>(null);
@@ -75,8 +89,10 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
   };
 
   const allOrders = ordersQuery.data?.orders;
-  const orders = useMemo(() => (product ? (allOrders ?? []).filter((o) => o.product === product) : (allOrders ?? [])), [allOrders, product]);
-  const pending = orders.filter((o) => o.status === "pending").length;
+  const productOrders = useMemo(() => (product ? (allOrders ?? []).filter((o) => o.product === product) : (allOrders ?? [])), [allOrders, product]);
+  const query = searchable ? search.trim().toLowerCase() : "";
+  const orders = useMemo(() => (query ? productOrders.filter((o) => orderMatches(o, query)) : productOrders), [productOrders, query]);
+  const pending = productOrders.filter((o) => o.status === "pending").length;
   const { paged, page, pages, setPage, total } = useClientPagination(orders, 10);
 
   const close = () => {
@@ -105,7 +121,7 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
         <div className="p-4">
           <ErrorBanner message={`Couldn't load portal orders. ${errorText(ordersQuery.error)}`} />
         </div>
-      ) : orders.length === 0 ? (
+      ) : productOrders.length === 0 ? (
         <EmptyState
           icon={ShoppingCart}
           size="sm"
@@ -113,6 +129,28 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
           hint={product === "token" ? "Orders show up here as soon as a customer starts a token package payment." : "Portal top-ups show up here as soon as a user starts a payment."}
         />
       ) : (
+        <>
+          {searchable && (
+            <div className="border-b border-line px-4 py-3" role="search" aria-label="Filter orders">
+              <label className="relative block min-w-0 sm:w-80">
+                <span className="sr-only">Search orders</span>
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-faint" strokeWidth={1.75} aria-hidden="true" />
+                <Input
+                  type="search"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Search email, key, payment ID or status"
+                  className="pl-8"
+                />
+              </label>
+            </div>
+          )}
+          {orders.length === 0 ? (
+            <EmptyState icon={Search} size="sm" title="No order matches" hint={`Nothing matches "${search.trim()}". Search by email, key, payment ID, status or amount, or clear the search.`} />
+          ) : (
         <>
           <div className="overflow-x-auto" role="region" aria-label="Portal orders table" tabIndex={0}>
             <table className="w-full min-w-[960px] text-[13px]">
@@ -171,6 +209,8 @@ export function PortalOrders({ product }: { product?: "token" } = {}) {
             </table>
           </div>
           <TablePagination page={page} pages={pages} total={total} onPage={setPage} label="Portal order pages" />
+        </>
+          )}
         </>
       )}
 

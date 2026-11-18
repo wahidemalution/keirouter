@@ -2285,6 +2285,36 @@ export interface TokenOverview {
   range_days: number;
   /** One entry per UTC day, oldest first, days without usage included. */
   daily: { day: string; tokens: number }[];
+  /** What token package usage cost at the upstream providers, before markup. */
+  upstream_cost: TokenUpstreamCost;
+}
+
+export interface TokenUpstreamCost {
+  total_usd: number;
+  /** Over the overview's range_days. */
+  range_usd: number;
+  /** Requests still priced at the provisional ceiling, waiting for the provider's usage log. */
+  pending_requests: number;
+  /** Requests that used tokens but recorded no upstream cost; left out of the totals. */
+  unpriced_requests: number;
+  providers: { provider: string; total_usd: number; range_usd: number; pending_requests: number; unpriced_requests: number }[];
+}
+
+/** A token package order of one subscriber, with what it bought. */
+export interface TokenSubscriberOrder {
+  order_id: string;
+  status: PaymentOrder["status"];
+  amount_idr: number;
+  package_id: string;
+  /** Empty when the package was deleted since. */
+  package_name: string;
+  token_kind: TokenPackageKind | "";
+  tokens: number;
+  days: number;
+  provider_payment_id: string;
+  actor: string;
+  created_at: string;
+  paid_at?: string;
 }
 
 export interface TokenSubscription {
@@ -2298,6 +2328,18 @@ export interface TokenSubscription {
   expires_at: string;
   active: boolean;
   disabled: boolean;
+}
+
+/** One manual change to a token key's balance. */
+export interface TokenAdjustment {
+  id: string;
+  delta_tokens: number;
+  reason: string;
+  limit_before_tokens: number;
+  limit_after_tokens: number;
+  tokens_left_before: number;
+  tokens_left_after: number;
+  created_at: string;
 }
 
 export interface PaymentOrderAdmin extends PaymentOrder {
@@ -3123,6 +3165,13 @@ export const api = {
   listTokenSubscriptions: () => request<TokenSubscription[]>("GET", "/token-packages/subscriptions"),
   toggleTokenKey: (sub: string) =>
     request<{ disabled: boolean }>("POST", `/token-packages/subscriptions/${encodeURIComponent(sub)}/key/toggle`),
+  listTokenAdjustments: (sub: string) =>
+    request<{ adjustments: TokenAdjustment[] }>("GET", `/token-packages/subscriptions/${encodeURIComponent(sub)}/token-adjustments`),
+  listTokenSubscriberOrders: (sub: string) =>
+    request<{ orders: TokenSubscriberOrder[] }>("GET", `/token-packages/subscriptions/${encodeURIComponent(sub)}/orders`),
+  /** Send tokens_left to set the balance, or delta_tokens to add (negative removes). */
+  adjustTokenKey: (sub: string, input: ({ tokens_left: number } | { delta_tokens: number }) & { reason: string; idempotency_key: string }) =>
+    request<{ adjustment: TokenAdjustment }>("POST", `/token-packages/subscriptions/${encodeURIComponent(sub)}/tokens`, input),
   paymentSummary: () => request<PaymentSummary>("GET", "/payments/summary"),
   paymentEconomics: () => request<UsageEconomics>("GET", "/payments/economics"),
   approvePaymentOrder: (id: string, reason: string) =>
