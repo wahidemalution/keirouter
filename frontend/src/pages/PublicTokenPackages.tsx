@@ -30,6 +30,9 @@ interface TokenCatalog {
   packages: TokenOffer[];
   models: string[];
   terms_version: string;
+  // The token plan's per-key limits; null when unset.
+  rpm_limit: number | null;
+  concurrency_limit: number | null;
 }
 
 async function fetchTokenCatalog(): Promise<TokenCatalog> {
@@ -41,6 +44,8 @@ async function fetchTokenCatalog(): Promise<TokenCatalog> {
     packages: data.packages ?? [],
     models: data.models ?? [],
     terms_version: data.terms_version ?? "",
+    rpm_limit: data.rpm_limit ?? null,
+    concurrency_limit: data.concurrency_limit ?? null,
   };
 }
 
@@ -75,6 +80,7 @@ export default function PublicTokenPackages() {
   const tokenPkgs = (data?.packages ?? []).filter((p) => p.kind === "tokens" && p.tokens > 0);
   const daysPkgs = (data?.packages ?? []).filter((p) => p.kind === "days");
   const models = data?.models ?? [];
+  const limits: Limits = { rpm: data?.rpm_limit ?? null, concurrency: data?.concurrency_limit ?? null };
   const base = tokenPkgs.reduce<TokenOffer | undefined>((a, p) => (!a || p.tokens < a.tokens ? p : a), undefined);
 
   useEffect(() => {
@@ -121,7 +127,7 @@ export default function PublicTokenPackages() {
             )}
             <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {tokenPkgs.map((p) => (
-                <PackageCard key={p.id} pkg={p} discount={discountPct(p, base)} onSale={onSale} />
+                <PackageCard key={p.id} pkg={p} discount={discountPct(p, base)} onSale={onSale} limits={limits} />
               ))}
             </ul>
             {daysPkgs.map((p) => (
@@ -189,7 +195,11 @@ export default function PublicTokenPackages() {
   );
 }
 
-function PackageCard({ pkg: p, discount, onSale }: { pkg: TokenOffer; discount: number; onSale: boolean }) {
+type Limits = { rpm: number | null; concurrency: number | null };
+
+const COUNT = new Intl.NumberFormat("id-ID");
+
+function PackageCard({ pkg: p, discount, onSale, limits }: { pkg: TokenOffer; discount: number; onSale: boolean; limits: Limits }) {
   return (
     <li
       className={`flex flex-col rounded-xl border bg-[var(--paper)] p-5 sm:p-6 ${
@@ -213,6 +223,18 @@ function PackageCard({ pkg: p, discount, onSale }: { pkg: TokenOffer; discount: 
           <dt className="text-[var(--muted)]">Masa aktif</dt>
           <dd className="tabular-nums text-[var(--ink)]">{p.days} hari</dd>
         </div>
+        {limits.rpm != null && (
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--muted)]">Request per menit</dt>
+            <dd className="tabular-nums text-[var(--ink)]">{COUNT.format(limits.rpm)} RPM</dd>
+          </div>
+        )}
+        {limits.concurrency != null && (
+          <div className="flex justify-between gap-3">
+            <dt className="text-[var(--muted)]">Concurrent request</dt>
+            <dd className="tabular-nums text-[var(--ink)]">{COUNT.format(limits.concurrency)}</dd>
+          </div>
+        )}
         {discount > 0 && (
           <div className="flex justify-between gap-3">
             <dt className="text-[var(--muted)]">Dibanding paket terkecil</dt>

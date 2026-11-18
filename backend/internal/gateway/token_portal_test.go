@@ -520,3 +520,22 @@ func TestPortalTokenUsageNoKey(t *testing.T) {
 	s.handlePortalTokenUsage(rec, portalReq(http.MethodGet, "/portal/api/token/usage", "", ""))
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
+
+// The public package list carries the token plan's rate limits, as set on
+// the admin Token Packages page.
+func TestPortalTokenPackagesShowsPlanLimits(t *testing.T) {
+	s, _, _ := tokenPortalServer(t)
+	plan, err := s.db.Plans().Get(t.Context(), tokenpkg.DefaultPlanID)
+	require.NoError(t, err)
+	plan.RPMLimit, plan.ConcurrencyLimit = 60, 4
+	require.NoError(t, s.db.Plans().Update(t.Context(), plan))
+
+	out := getTokenPackages(t, s)
+	require.EqualValues(t, 60, out["rpm_limit"])
+	require.EqualValues(t, 4, out["concurrency_limit"])
+
+	require.NoError(t, tokenpkg.Save(t.Context(), s.db.Settings(), tokenpkg.Settings{Enabled: false}))
+	out = getTokenPackages(t, s)
+	require.Nil(t, out["rpm_limit"], "no plan, no limits")
+	require.Nil(t, out["concurrency_limit"])
+}
