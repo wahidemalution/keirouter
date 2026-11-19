@@ -3235,6 +3235,7 @@ export const api = {
   updateKey: (id: string, patch: { disabled?: boolean; allowed_models?: string[] }) =>
     request<{ id: string; disabled?: boolean; allowed_models?: string[] }>("PATCH", `/keys/${id}`, patch),
   deleteKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
+  rotateKey: (id: string) => request<{ id: string; key: string; display: string }>("POST", `/keys/${encodeURIComponent(id)}/rotate`),
   deleteKeys: (ids: string[]) => Promise.all(ids.map((id) => request<void>("DELETE", `/keys/${id}`))),
 
   getBansos: () => request<Bansos>("GET", "/bansos"),

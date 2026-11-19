@@ -215,6 +215,20 @@ func (r *TokenSubscriptionRepo) SetExpiresOnTx(ctx context.Context, tx *sql.Tx, 
 	return nil
 }
 
+// SetSealedKeyByKey replaces the stored encrypted plaintext of the subscription
+// that owns keyID, so a reveal after a key rotation returns the current key.
+func (r *TokenSubscriptionRepo) SetSealedKeyByKey(ctx context.Context, keyID string, sealed crypto.Sealed) error {
+	q := r.db.rebind(`UPDATE token_subscriptions SET sealed_dek = ?, sealed_ct = ?, updated_at = ? WHERE key_id = ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, sealed.WrappedDEK, sealed.Ciphertext, formatTime(time.Now()), keyID)
+	if err != nil {
+		return fmt.Errorf("store: set token subscription sealed key: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // List returns every subscription, newest first.
 func (r *TokenSubscriptionRepo) List(ctx context.Context) ([]TokenSubscription, error) {
 	rows, err := r.db.sql.QueryContext(ctx, `SELECT `+tokenSubCols+` FROM token_subscriptions ORDER BY created_at DESC, google_sub`)
