@@ -294,3 +294,10 @@ func (r *PaymentOrderRepo) PaidTotalsByKeySince(ctx context.Context, since time.
 	}
 	return out, rows.Err()
 }
+
+// ListTokenOrdersBySub returns a portal user's token package orders, newest
+// first.
+func (r *PaymentOrderRepo) ListTokenOrdersBySub(ctx context.Context, googleSub string) ([]PaymentOrder, error) {
+	q := r.db.rebind(`SELECT ` + paymentOrderCols + ` FROM payment_orders WHERE product = ? AND google_sub = ? ORDER BY created_at DESC, id DESC`)
+	return r.queryList(ctx, q, ProductToken, googleSub)
+}

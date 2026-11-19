@@ -11,6 +11,7 @@ import {
   Link2,
   MoreHorizontal,
   Plus,
+  RotateCw,
   Search,
   SlidersHorizontal,
   Trash2,
@@ -419,6 +420,27 @@ function GeneralTab({
   const acceptId = useId();
   const usageId = useId();
   const lastUsed = usedAt(apiKey.last_used_at);
+  const qc = useQueryClient();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [rotated, setRotated] = useState<string | null>(null);
+  const rotate = useMutation({
+    mutationFn: () => api.rotateKey(apiKey.id),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["keys"] });
+      setRotated(res.key);
+    },
+    onError: (e: Error) => toast.error("Couldn't rotate key", e.message),
+  });
+  const rotateKey = async () => {
+    const ok = await confirm({
+      title: `Rotate the secret for ${apiKey.name}?`,
+      description: "Tools using the current key stop authenticating immediately, until they switch to the new one. Plan, balance, budget and history are kept.",
+      confirmLabel: "Rotate key",
+      tone: "danger",
+    });
+    if (ok) rotate.mutate();
+  };
   // Same query (and cache entry) the owner portal uses for a shared portal ID.
   const usage = useQuery({
     queryKey: ["key-usage", apiKey.id, true, USAGE_DAYS],
@@ -558,6 +580,16 @@ function GeneralTab({
           <SettingsRow label="Accept requests" labelId={acceptId} description="Off rejects every request with this key.">
             <Toggle checked={!apiKey.disabled} onChange={onToggle} disabled={togglePending} aria-labelledby={acceptId} />
           </SettingsRow>
+          <SettingsRow
+            label="Secret key"
+            description="Rotating issues a new secret and the current one stops working right away. Plan, balance, budget, top-ups and usage history stay on this key."
+          >
+            <span className="truncate font-mono text-[12.5px] text-fg">{apiKey.display}</span>
+            <Button variant="secondary" className="shrink-0" onClick={rotateKey} disabled={rotate.isPending}>
+              <RotateCw aria-hidden="true" />
+              {rotate.isPending ? "Rotating…" : "Rotate key"}
+            </Button>
+          </SettingsRow>
           <SettingsRow label="Internal ID">
             <span className="truncate font-mono text-[12.5px] text-fg">{apiKey.id}</span>
             <CopyIconButton label="Copy internal ID" value={apiKey.id} title="Key ID copied" />
@@ -568,7 +600,56 @@ function GeneralTab({
           </SettingsRow>
         </div>
       </PanelCard>
+
+      <RotatedKeyModal secret={rotated} keyName={apiKey.name} onClose={() => setRotated(null)} />
     </div>
+  );
+}
+
+function RotatedKeyModal({ secret, keyName, onClose }: { secret: string | null; keyName: string; onClose: () => void }) {
+  const copy = useCopy();
+  const warnId = useId();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!secret) setCopied(false);
+  }, [secret]);
+
+  return (
+    <Modal
+      open={secret !== null}
+      onClose={onClose}
+      title="New secret key"
+      subtitle={`${keyName} now uses this key. The previous one no longer authenticates.`}
+      footer={
+        <ModalFooter>
+          <Button variant={copied ? "primary" : "ghost"} onClick={onClose}>Done</Button>
+        </ModalFooter>
+      }
+    >
+      <div className="space-y-3 px-5 py-4">
+        <p id={warnId} className="text-[13px] leading-5 text-fg">
+          <span className="font-medium">Copy this key now.</span>{" "}
+          <span className="text-fg-muted">It won't be shown again. Send it to the key owner so their tools keep working.</span>
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+          <code
+            aria-label="New secret key"
+            className="min-w-0 flex-1 select-all break-all rounded-lg border border-line-strong bg-subtle px-3 py-2.5 font-mono text-[13px] leading-5 text-fg"
+          >
+            {secret}
+          </code>
+          <Button
+            variant={copied ? "secondary" : "primary"}
+            className="shrink-0 sm:self-start"
+            aria-describedby={warnId}
+            onClick={() => secret && copy(secret, "Key copied", "Store it somewhere safe.").then((ok) => ok && setCopied(true))}
+          >
+            {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+            {copied ? "Copied" : "Copy key"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

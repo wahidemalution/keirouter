@@ -215,6 +215,20 @@ func (r *TokenSubscriptionRepo) SetExpiresOnTx(ctx context.Context, tx *sql.Tx, 
 	return nil
 }
 
+// SetSealedKeyByKey replaces the stored encrypted plaintext of the subscription
+// that owns keyID, so a reveal after a key rotation returns the current key.
+func (r *TokenSubscriptionRepo) SetSealedKeyByKey(ctx context.Context, keyID string, sealed crypto.Sealed) error {
+	q := r.db.rebind(`UPDATE token_subscriptions SET sealed_dek = ?, sealed_ct = ?, updated_at = ? WHERE key_id = ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, sealed.WrappedDEK, sealed.Ciphertext, formatTime(time.Now()), keyID)
+	if err != nil {
+		return fmt.Errorf("store: set token subscription sealed key: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // List returns every subscription, newest first.
 func (r *TokenSubscriptionRepo) List(ctx context.Context) ([]TokenSubscription, error) {
 	rows, err := r.db.sql.QueryContext(ctx, `SELECT `+tokenSubCols+` FROM token_subscriptions ORDER BY created_at DESC, google_sub`)
@@ -279,6 +293,52 @@ func (r *TokenSubscriptionRepo) DailyTokens(ctx context.Context, sinceDay string
 			return nil, fmt.Errorf("store: scan token daily usage: %w", err)
 		}
 		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ProviderUpstreamCost is what token package keys cost at one upstream
+// provider before markup.
+type ProviderUpstreamCost struct {
+	Provider string
+	// TotalNanos and RangeNanos sum upstream_cost_nanos all-time and since
+	// the range start.
+	TotalNanos int64
+	RangeNanos int64
+	// Pending counts requests whose upstream cost is still the provisional
+	// ceiling, waiting for the provider's usage log.
+	Pending int64
+	// Unpriced counts requests that used tokens but recorded no upstream
+	// cost, so the totals leave them out.
+	Unpriced int64
+}
+
+// UpstreamCost sums the pre-markup upstream cost of every token package
+// key's usage per provider, all-time and since since.
+func (r *TokenSubscriptionRepo) UpstreamCost(ctx context.Context, since time.Time) ([]ProviderUpstreamCost, error) {
+	q := r.db.rebind(`SELECT u.provider,
+		CAST(COALESCE(SUM(u.upstream_cost_nanos), 0) AS BIGINT),
+		CAST(COALESCE(SUM(CASE WHEN u.created_at >= ? THEN u.upstream_cost_nanos ELSE 0 END), 0) AS BIGINT),
+		CAST(COALESCE(SUM(CASE WHEN u.reconcile_status = 'pending' THEN 1 ELSE 0 END), 0) AS BIGINT),
+		CAST(COALESCE(SUM(CASE WHEN u.upstream_cost_nanos = 0 AND u.prompt_tokens + u.completion_tokens > 0 THEN 1 ELSE 0 END), 0) AS BIGINT)
+		FROM usage_records u JOIN token_subscriptions s ON s.key_id = u.api_key_id
+		WHERE u.provider <> ''
+		GROUP BY u.provider ORDER BY u.provider`)
+	rows, err := r.db.sql.QueryContext(ctx, q, formatTime(since))
+	if err != nil {
+		return nil, fmt.Errorf("store: token upstream cost: %w", err)
+	}
+	defer rows.Close()
+	var out []ProviderUpstreamCost
+	for rows.Next() {
+		var c ProviderUpstreamCost
+		if err := rows.Scan(&c.Provider, &c.TotalNanos, &c.RangeNanos, &c.Pending, &c.Unpriced); err != nil {
+			return nil, fmt.Errorf("store: scan token upstream cost: %w", err)
+		}
+		if c.TotalNanos == 0 && c.Pending == 0 && c.Unpriced == 0 {
+			continue
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

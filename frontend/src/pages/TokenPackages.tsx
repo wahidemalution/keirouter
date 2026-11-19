@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, Check, Coins, LayoutDashboard, Loader2, Package, Pencil, Plus, Power, Settings2, ShoppingCart, Trash2, Users } from "lucide-react";
+import { BarChart3, Check, Coins, History, LayoutDashboard, Loader2, Package, Pencil, Plus, Power, Receipt, Search, Settings2, ShoppingCart, SlidersHorizontal, Trash2, Users, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   api,
@@ -9,8 +9,11 @@ import {
   type TokenPackageInput,
   type TokenPackageKind,
   type TokenSettings,
+  type TokenSubscriberOrder,
   type TokenSubscription,
+  type TokenUpstreamCost,
 } from "../lib/api";
+import { formatDateTime } from "../lib/format";
 import { formatTokens } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { ChartCard, TimeBars, dayLabel } from "../components/charts/TimeSeries";
@@ -29,12 +32,15 @@ import {
   Modal,
   ModalFooter,
   Select,
+  SegmentedControl,
   Skeleton,
   TabBar,
+  TablePagination,
   TabPanel,
   Toggle,
+  useClientPagination,
 } from "../components/ui";
-import { PortalOrders } from "./payments/PortalOrders";
+import { ORDER_STATUS_LABEL, ORDER_STATUS_TONE, PortalOrders } from "./payments/PortalOrders";
 import { Panel, REFETCH_MS, TH, THEAD, count, dateID, errorText, idr } from "./payments/shared";
 
 const TABS = ["overview", "packages", "subscribers", "orders"] as const;
@@ -54,7 +60,7 @@ function exactTokens(n: number): string {
 const DESCRIPTION: Record<Tab, string> = {
   overview: "Unspent tokens, subscriber count and daily token usage across all token package keys.",
   packages: "GPT-6 token packages sold in the portal: price, token amount, validity and rate limits.",
-  subscribers: "Owners of token package keys: remaining tokens, expiry, and a switch to disable a key.",
+  subscribers: "Owners of token package keys: remaining tokens, expiry, a balance correction, and a switch to disable a key.",
   orders: "Token package payments from the portal. Approve one manually if the gateway missed it.",
 };
 
@@ -106,7 +112,7 @@ export function TokenPackagesPage() {
         ) : tab === "subscribers" ? (
           <SubscribersPanel />
         ) : (
-          <PortalOrders product="token" />
+          <PortalOrders product="token" searchable />
         )}
       </TabPanel>
     </div>
@@ -612,7 +618,7 @@ function OverviewBody({ o, stale }: { o: TokenOverview; stale: string | null }) 
   return (
     <div className="space-y-4">
       {stale && <ErrorBanner message={`The last refresh failed, so these numbers may be out of date. ${stale}`} />}
-      <KpiGrid cols={3} label="Token package totals">
+      <KpiGrid cols={4} label="Token package totals">
         <Kpi
           icon={Coins}
           label="Unused tokens"
@@ -633,7 +639,9 @@ function OverviewBody({ o, stale }: { o: TokenOverview; stale: string | null }) 
           value={exactTokens(o.used_tokens_range)}
           hint={`${exactTokens(o.used_tokens_total)} since the first package`}
         />
+        <UpstreamCostKpi cost={o.upstream_cost} rangeDays={o.range_days} />
       </KpiGrid>
+      <UpstreamCostNote cost={o.upstream_cost} />
       <ChartCard
         title="Token usage per day"
         icon={BarChart3}
@@ -653,12 +661,55 @@ function OverviewBody({ o, stale }: { o: TokenOverview; stale: string | null }) 
   );
 }
 
+/** Dollars with enough decimals that a few cents of upstream cost still show. */
+function costUSD(n: number): string {
+  const digits = n !== 0 && Math.abs(n) < 10 ? 4 : 2;
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: digits })}`;
+}
+
+/**
+ * What the operator paid upstream for token package usage, before markup.
+ * Provider names come from the usage rows, so spend that fell back to another
+ * provider is named instead of being counted as a6api.
+ */
+function UpstreamCostKpi({ cost, rangeDays }: { cost: TokenUpstreamCost | undefined; rangeDays: number }) {
+  if (!cost) return null;
+  const names = cost.providers.map((p) => p.provider).join(", ");
+  return (
+    <Kpi
+      icon={Wallet}
+      label={names ? `Paid to ${names}` : "Paid upstream"}
+      value={costUSD(cost.total_usd)}
+      hint={`Before markup · ${costUSD(cost.range_usd)} last ${rangeDays} days`}
+    />
+  );
+}
+
+/** Says which requests the upstream total leaves out or still estimates, when there are any. */
+function UpstreamCostNote({ cost }: { cost: TokenUpstreamCost | undefined }) {
+  if (!cost || (cost.pending_requests === 0 && cost.unpriced_requests === 0)) return null;
+  return (
+    <p className="text-[12.5px] text-fg-muted">
+      {cost.unpriced_requests > 0 &&
+        `${count(cost.unpriced_requests)} ${cost.unpriced_requests === 1 ? "request has" : "requests have"} no upstream cost recorded, so the amount paid leaves them out. `}
+      {cost.pending_requests > 0 &&
+        `${count(cost.pending_requests)} ${cost.pending_requests === 1 ? "request still uses" : "requests still use"} the provisional ceiling price until the provider's usage log settles ${cost.pending_requests === 1 ? "it" : "them"}.`}
+    </p>
+  );
+}
+
 // ─── Subscribers ────────────────────────────────────────────────────────────
+
+const SUBSCRIBERS_PER_PAGE = 20;
 
 function subscriptionStatus(s: TokenSubscription): { label: string; tone: "success" | "danger" | "neutral" } {
   if (s.disabled) return { label: "Key disabled", tone: "danger" };
   if (!s.active) return { label: "Inactive", tone: "neutral" };
   return { label: "Active", tone: "success" };
+}
+
+function subscriberMatches(s: TokenSubscription, q: string): boolean {
+  return [s.email, s.google_sub, s.key_display, s.key_id].some((v) => v?.toLowerCase().includes(q));
 }
 
 function SubscribersPanel() {
@@ -677,10 +728,20 @@ function SubscribersPanel() {
     onError: (e) => toast.error("Couldn't change key status", errorText(e)),
   });
 
-  const list = subs.data ?? [];
+  const [adjusting, setAdjusting] = useState<TokenSubscription | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const all = subs.data;
+  const list = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? (all ?? []).filter((s) => subscriberMatches(s, q)) : (all ?? []);
+  }, [all, search]);
+  const { paged, page, pages, setPage, total } = useClientPagination(list, SUBSCRIBERS_PER_PAGE);
+  // Read from the live list so the detail view shows the balance after an adjustment.
+  const viewed = viewing ? (all ?? []).find((s) => s.google_sub === viewing) ?? null : null;
 
   return (
-    <Panel icon={Users} title="Token package subscribers" subtitle="Remaining tokens are the package limit minus usage since the key was issued.">
+    <Panel icon={Users} title="Token package subscribers" subtitle="Remaining tokens are the package limit minus usage since the key was issued. Select a subscriber to see their purchases and balance changes.">
       {subs.isLoading ? (
         <LoadingRegion label="Loading subscribers" className="space-y-2 p-4">
           {[0, 1, 2].map((i) => (
@@ -691,60 +752,368 @@ function SubscribersPanel() {
         <div className="p-4">
           <ErrorBanner message={`Couldn't load subscribers. ${errorText(subs.error)}`} />
         </div>
-      ) : list.length === 0 ? (
+      ) : (all ?? []).length === 0 ? (
         <EmptyState icon={Users} size="sm" title="No subscribers yet" hint="Token package key owners show up here after their first payment completes." />
       ) : (
-        <div className="overflow-x-auto" role="region" aria-label="Token package subscribers table" tabIndex={0}>
-          <table className="w-full min-w-[800px] text-[13px]">
-            <thead>
-              <tr className={THEAD}>
-                <th scope="col" className={TH}>Subscriber</th>
-                <th scope="col" className={TH}>Key</th>
-                <th scope="col" className={cn(TH, "text-right")}>Tokens left</th>
-                <th scope="col" className={TH}>Valid until</th>
-                <th scope="col" className={TH}>Status</th>
-                <th scope="col" className={cn(TH, "text-right")}>
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {list.map((s) => {
-                const status = subscriptionStatus(s);
-                const remaining = Math.max(0, s.limit_tokens - s.used_tokens);
-                const busy = toggle.isPending && toggle.variables === s.google_sub;
-                return (
-                  <tr key={s.google_sub} className="transition-colors hover:bg-hover">
-                    <td className="px-4 py-2.5 text-fg">{s.email || s.google_sub}</td>
-                    <td className="px-4 py-2.5 font-mono text-[12px] text-fg-muted">{s.key_display || s.key_id}</td>
-                    <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
-                      <span className="font-semibold">{exactTokens(remaining)}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(s.expires_at, true)}</td>
-                    <td className="px-4 py-2.5">
-                      <Badge tone={status.tone}>{status.label}</Badge>
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <div className="flex justify-end">
-                        <Button
-                          variant={s.disabled ? "ghost" : "danger"}
-                          onClick={() => toggle.mutate(s.google_sub)}
-                          disabled={toggle.isPending}
-                          title={s.disabled ? "Enable key again" : "Disable key"}
-                          aria-label={`${s.disabled ? "Enable" : "Disable"} key for ${s.email || s.google_sub}`}
-                        >
-                          {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Power aria-hidden="true" />}
-                          {s.disabled ? "Enable" : "Disable"}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="border-b border-line px-4 py-3" role="search" aria-label="Filter subscribers">
+            <label className="relative block min-w-0 sm:w-80">
+              <span className="sr-only">Search subscribers</span>
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-faint" strokeWidth={1.75} aria-hidden="true" />
+              <Input
+                type="search"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search email or key"
+                className="pl-8"
+              />
+            </label>
+          </div>
+          {list.length === 0 ? (
+            <EmptyState icon={Search} size="sm" title="No subscriber matches" hint={`Nothing matches "${search.trim()}". Search by email or key, or clear the search.`} />
+          ) : (
+            <>
+              <div className="overflow-x-auto" role="region" aria-label="Token package subscribers table" tabIndex={0}>
+                <table className="w-full min-w-[940px] text-[13px]">
+                  <thead>
+                    <tr className={THEAD}>
+                      <th scope="col" className={TH}>Subscriber</th>
+                      <th scope="col" className={TH}>Key</th>
+                      <th scope="col" className={cn(TH, "text-right")}>Tokens left</th>
+                      <th scope="col" className={TH}>Valid until</th>
+                      <th scope="col" className={TH}>Status</th>
+                      <th scope="col" className={cn(TH, "text-right")}>
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {paged.map((s) => {
+                      const status = subscriptionStatus(s);
+                      const remaining = Math.max(0, s.limit_tokens - s.used_tokens);
+                      const busy = toggle.isPending && toggle.variables === s.google_sub;
+                      const owner = s.email || s.google_sub;
+                      return (
+                        <tr key={s.google_sub} className="transition-colors hover:bg-hover">
+                          <td className="px-4 py-2.5">
+                            <button
+                              type="button"
+                              onClick={() => setViewing(s.google_sub)}
+                              className="rounded text-left text-fg underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+                              aria-label={`Show purchase and balance history of ${owner}`}
+                            >
+                              {owner}
+                            </button>
+                          </td>
+                          <td className="px-4 py-2.5 font-mono text-[12px] text-fg-muted">{s.key_display || s.key_id}</td>
+                          <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
+                            <span className="font-semibold">{exactTokens(remaining)}</span>
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{dateID(s.expires_at, true)}</td>
+                          <td className="px-4 py-2.5">
+                            <Badge tone={status.tone}>{status.label}</Badge>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <div className="flex justify-end gap-2">
+                              <Button variant="secondary" onClick={() => setAdjusting(s)} aria-label={`Adjust tokens for ${owner}`}>
+                                <SlidersHorizontal aria-hidden="true" />
+                                Adjust tokens
+                              </Button>
+                              <Button
+                                variant={s.disabled ? "ghost" : "danger"}
+                                onClick={() => toggle.mutate(s.google_sub)}
+                                disabled={toggle.isPending}
+                                title={s.disabled ? "Enable key again" : "Disable key"}
+                                aria-label={`${s.disabled ? "Enable" : "Disable"} key for ${owner}`}
+                              >
+                                {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Power aria-hidden="true" />}
+                                {s.disabled ? "Enable" : "Disable"}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <TablePagination page={page} pages={pages} total={total} onPage={setPage} label="Subscriber pages" />
+            </>
+          )}
+        </>
       )}
+      {viewed && (
+        <SubscriberHistoryModal
+          sub={viewed}
+          onClose={() => setViewing(null)}
+          onAdjust={() => {
+            setViewing(null);
+            setAdjusting(viewed);
+          }}
+        />
+      )}
+      {adjusting && <AdjustTokensModal sub={adjusting} onClose={() => setAdjusting(null)} />}
     </Panel>
+  );
+}
+
+const tokenAdjustmentsKey = (sub: string) => ["token-adjustments", sub] as const;
+const tokenSubscriberOrdersKey = (sub: string) => ["token-subscriber-orders", sub] as const;
+
+/** What one order bought, in words: "100.000.000 tokens, 15 days" or "+30 days". */
+function orderContents(o: TokenSubscriberOrder): string {
+  if (o.token_kind === "tokens") return `${exactTokens(o.tokens)} tokens, ${o.days} days`;
+  if (o.token_kind === "days") return `+${o.days} days, no tokens`;
+  return "Package details unknown";
+}
+
+/**
+ * A subscriber's audit trail: every token package order with what it bought,
+ * and every manual balance change with its reason.
+ */
+function SubscriberHistoryModal({ sub, onClose, onAdjust }: { sub: TokenSubscription; onClose: () => void; onAdjust: () => void }) {
+  const orders = useQuery({ queryKey: tokenSubscriberOrdersKey(sub.google_sub), queryFn: () => api.listTokenSubscriberOrders(sub.google_sub) });
+  const adjustments = useQuery({ queryKey: tokenAdjustmentsKey(sub.google_sub), queryFn: () => api.listTokenAdjustments(sub.google_sub) });
+  const owner = sub.email || sub.google_sub;
+  const remaining = Math.max(0, sub.limit_tokens - sub.used_tokens);
+  const paid = (orders.data?.orders ?? []).filter((o) => o.status === "completed" || o.status === "manual");
+  const boughtTokens = paid.reduce((n, o) => n + (o.token_kind === "tokens" ? o.tokens : 0), 0);
+
+  return (
+    <Modal open onClose={onClose} title={owner} subtitle="Token package purchases and manual balance changes, newest first." maxWidth="max-w-2xl">
+      <div className="space-y-5 px-5 py-4">
+        <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line text-[13px] sm:grid-cols-4">
+          {[
+            ["Tokens left", exactTokens(remaining)],
+            ["Used", exactTokens(sub.used_tokens)],
+            ["Limit", exactTokens(sub.limit_tokens)],
+            ["Valid until", dateID(sub.expires_at, true)],
+          ].map(([label, value]) => (
+            <div key={label} className="bg-surface px-3 py-2.5">
+              <dt className="text-[12px] text-fg-muted">{label}</dt>
+              <dd className="mt-0.5 font-semibold tabular-nums text-fg">{value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <section aria-labelledby="sub-history-orders">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <h3 id="sub-history-orders" className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
+              <Receipt className="h-3.5 w-3.5 text-fg-muted" aria-hidden="true" />
+              Purchases
+            </h3>
+            {paid.length > 0 && (
+              <p className="text-[12px] text-fg-muted">
+                {count(paid.length)} paid · {exactTokens(boughtTokens)} tokens bought
+              </p>
+            )}
+          </div>
+          {orders.isLoading ? (
+            <LoadingRegion label="Loading purchases">
+              <Skeleton className="h-10 w-full" />
+            </LoadingRegion>
+          ) : orders.isError ? (
+            <ErrorBanner message={`Couldn't load purchases. ${errorText(orders.error)}`} />
+          ) : !orders.data?.orders.length ? (
+            <p className="text-[12.5px] text-fg-muted">No token package orders from this user.</p>
+          ) : (
+            <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-xl border border-line">
+              {orders.data.orders.map((o) => (
+                <li key={o.order_id} className="flex flex-wrap items-start justify-between gap-2 px-3 py-2.5 text-[13px]">
+                  <div className="min-w-0">
+                    <p className="font-medium text-fg">{o.package_name || "Deleted package"}</p>
+                    <p className="tabular-nums text-[12px] text-fg-muted">
+                      {orderContents(o)} · {idr(o.amount_idr)}
+                    </p>
+                  </div>
+                  <div className="text-right text-[12px] text-fg-muted">
+                    <Badge tone={ORDER_STATUS_TONE[o.status] ?? "neutral"}>{ORDER_STATUS_LABEL[o.status] ?? o.status}</Badge>
+                    <p className="mt-1 tabular-nums">{o.paid_at ? `Paid ${dateID(o.paid_at, true)}` : `Created ${dateID(o.created_at, true)}`}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section aria-labelledby="sub-history-adjustments">
+          <h3 id="sub-history-adjustments" className="mb-2 flex items-center gap-1.5 text-[13px] font-medium text-fg">
+            <History className="h-3.5 w-3.5 text-fg-muted" aria-hidden="true" />
+            Balance changes by admin
+          </h3>
+          {adjustments.isLoading ? (
+            <LoadingRegion label="Loading balance changes">
+              <Skeleton className="h-10 w-full" />
+            </LoadingRegion>
+          ) : adjustments.isError ? (
+            <ErrorBanner message={`Couldn't load balance changes. ${errorText(adjustments.error)}`} />
+          ) : !adjustments.data?.adjustments.length ? (
+            <p className="text-[12.5px] text-fg-muted">No manual changes. Each one shows here with its reason and the balance before and after.</p>
+          ) : (
+            <ul className="max-h-56 divide-y divide-line overflow-y-auto rounded-xl border border-line">
+              {adjustments.data.adjustments.map((a) => (
+                <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-[13px]">
+                  <div className="min-w-0">
+                    <p className={cn("font-medium tabular-nums", a.delta_tokens < 0 ? "text-bad" : "text-fg")}>
+                      {a.delta_tokens < 0 ? "−" : "+"}
+                      {exactTokens(Math.abs(a.delta_tokens))}
+                    </p>
+                    <p className="break-words text-[12px] text-fg-muted">{a.reason}</p>
+                  </div>
+                  <div className="text-right text-[12px] text-fg-muted">
+                    <p className="tabular-nums">
+                      {exactTokens(a.tokens_left_before)} → {exactTokens(a.tokens_left_after)} left
+                    </p>
+                    <p>{formatDateTime(a.created_at)}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+      <ModalFooter>
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+        <Button type="button" variant="secondary" onClick={onAdjust}>
+          <SlidersHorizontal aria-hidden="true" />
+          Adjust tokens
+        </Button>
+      </ModalFooter>
+    </Modal>
+  );
+}
+
+const MAX_TOKENS_LEFT = 1_000_000_000_000;
+
+type AdjustMode = "add" | "remove" | "set";
+
+const ADJUST_MODES: { value: AdjustMode; label: string }[] = [
+  { value: "add", label: "Add" },
+  { value: "remove", label: "Remove" },
+  { value: "set", label: "Set balance" },
+];
+
+/**
+ * Adds tokens to a subscriber's balance, removes them, or sets the balance.
+ * Add and Remove send a delta, so usage while the dialog is open does not
+ * change what is added. Set sends the balance; the server adds the key's usage
+ * at that moment to get the new limit.
+ */
+function AdjustTokensModal({ sub, onClose }: { sub: TokenSubscription; onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const current = Math.max(0, sub.limit_tokens - sub.used_tokens);
+  const [mode, setMode] = useState<AdjustMode>("add");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [idem, setIdem] = useState(() => crypto.randomUUID());
+  const [touched, setTouched] = useState(false);
+
+  const amountStr = amount.trim();
+  const whole = /^\d+$/.test(amountStr);
+  const n = whole ? Number(amountStr) : NaN;
+  const after = mode === "add" ? current + n : mode === "remove" ? current - n : n;
+
+  let amountError: string | null = null;
+  if (!whole || n > MAX_TOKENS_LEFT) amountError = mode === "set" ? "Enter a whole number of tokens, 0 or more." : "Enter a whole number of tokens.";
+  else if (mode !== "set" && n === 0) amountError = "Enter more than 0 tokens.";
+  else if (mode === "remove" && n > current) amountError = `Only ${exactTokens(current)} tokens are left, so at most that many can be removed.`;
+  else if (after === 0 && sub.used_tokens === 0) amountError = "This key has used no tokens, so 0 left would make it unlimited. Disable the key instead.";
+  else if (after > MAX_TOKENS_LEFT) amountError = "That balance is too large.";
+  const unchanged = !amountError && mode === "set" && n === current;
+  const reasonError = touched && !reason.trim() ? "Write why the balance changes. It is kept in the subscriber's history." : null;
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.adjustTokenKey(sub.google_sub, {
+        ...(mode === "set" ? { tokens_left: n } : { delta_tokens: mode === "add" ? n : -n }),
+        reason: reason.trim(),
+        idempotency_key: idem,
+      }),
+    onSuccess: (res) => {
+      toast.success("Tokens adjusted", `${sub.email || sub.google_sub} now has ${exactTokens(res.adjustment.tokens_left_after)} tokens left.`);
+      qc.invalidateQueries({ queryKey: QK_SUBSCRIPTIONS });
+      qc.invalidateQueries({ queryKey: QK_OVERVIEW });
+      qc.invalidateQueries({ queryKey: tokenAdjustmentsKey(sub.google_sub) });
+      onClose();
+    },
+  });
+
+  // A new mode or amount is a new request, not a retry of the last one.
+  const edit = (fn: () => void) => {
+    fn();
+    setIdem(crypto.randomUUID());
+    save.reset();
+  };
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (amountError || !reason.trim() || unchanged || save.isPending) return;
+    save.mutate();
+  };
+
+  const owner = sub.email || sub.google_sub;
+  return (
+    <Modal open onClose={save.isPending ? () => {} : onClose} title="Adjust tokens" subtitle={`Add or remove tokens for ${owner}. Use this to correct a balance, not to sell a package.`}>
+      <form onSubmit={onSubmit} noValidate>
+        <div className="space-y-4 px-5 py-4">
+          <SegmentedControl value={mode} onChange={(m) => edit(() => setMode(m))} options={ADJUST_MODES} label="Adjustment type" />
+          <Field
+            label={mode === "add" ? "Tokens to add" : mode === "remove" ? "Tokens to remove" : "Tokens left"}
+            error={touched || amountStr !== "" ? amountError : null}
+            hint={
+              mode === "set"
+                ? `${exactTokens(sub.used_tokens)} tokens used so far. The new limit is used plus tokens left.`
+                : `${exactTokens(current)} tokens left now.`
+            }
+            required
+          >
+            <Input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              step="1"
+              value={amount}
+              onChange={(e) => edit(() => setAmount(e.target.value))}
+              className="tabular-nums"
+              autoFocus
+            />
+          </Field>
+          {!amountError && (
+            <div className="flex items-center justify-between rounded-xl border border-line bg-subtle px-4 py-3 text-[13px]">
+              <span className="text-fg-muted">Tokens left</span>
+              <span className="font-semibold tabular-nums text-fg">
+                {exactTokens(current)} → {exactTokens(after)}
+              </span>
+            </div>
+          )}
+          {unchanged && touched && <p className="text-[12.5px] text-fg-muted">The balance is already {exactTokens(current)} tokens.</p>}
+          {!sub.active && (
+            <p className="text-[12.5px] text-fg-muted">
+              This subscription has expired. The key cannot spend these tokens, and they are dropped when the next token package starts a new period.
+            </p>
+          )}
+          <Field label="Reason" error={reasonError} required>
+            <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="refund for failed requests" maxLength={500} autoComplete="off" />
+          </Field>
+          {save.isError && <ErrorBanner message={`Couldn't adjust tokens. ${errorText(save.error)}`} />}
+        </div>
+        <ModalFooter>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={save.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={save.isPending || unchanged}>
+            {save.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}
+            {mode === "add" ? "Add tokens" : mode === "remove" ? "Remove tokens" : "Set balance"}
+          </Button>
+        </ModalFooter>
+      </form>
+    </Modal>
   );
 }

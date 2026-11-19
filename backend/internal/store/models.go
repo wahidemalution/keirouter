@@ -492,6 +492,23 @@ type KeyLimitAdjustment struct {
 	CreatedAt         time.Time
 }
 
+// KeyTokenAdjustment is one manual change to a token package key's token
+// limit. UsedTokens is the key's usage when the change was made.
+type KeyTokenAdjustment struct {
+	ID                string
+	TenantID          string
+	KeyID             string
+	BudgetID          string
+	DeltaTokens       int64
+	Reason            string
+	LimitBeforeTokens int64
+	LimitAfterTokens  int64
+	UsedTokens        int64
+	IdempotencyKey    string
+	Actor             string
+	CreatedAt         time.Time
+}
+
 // PaymentOrderStatus is the lifecycle state of a payment-gateway order.
 type PaymentOrderStatus string
 

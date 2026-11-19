@@ -687,30 +687,60 @@ func (s *Server) adminRotatePortalUserKey(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	issued, err := s.identity.Generate(existing.TenantID, existing.ProjectID, existing.Name)
+	issued, err := s.rotateKeyMaterial(r.Context(), existing)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	if err := s.identity.Keys().SetKeyMaterial(r.Context(), u.KeyID, issued.Record.KeyHash, issued.Record.LookupHash, issued.Record.Display); err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
-	}
-	// Refresh the sealed plaintext if this binding was revealable before, so the
-	// stored copy never goes stale relative to the rotated key material.
-	if u.SealedKey.WrappedDEK != "" && s.vault != nil {
-		sealed, err := s.vault.Sealer().SealString(issued.Plaintext)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-			return
-		}
-		if err := s.db.PortalUsers().SetSealedKey(r.Context(), sub, sealed); err != nil {
-			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-			return
-		}
-	}
-	s.identity.InvalidateAuthCacheForKey(u.KeyID)
 	writeJSON(w, http.StatusOK, map[string]any{"google_sub": sub, "key_id": u.KeyID, "key": issued.Plaintext, "display": issued.Record.Display})
+}
+
+// rotateKeyMaterial mints new key material for an existing key in place. The
+// id stays the same, so plan, budget, top-ups, usage, routing and portal
+// bindings all carry over; only the secret changes and the old plaintext stops
+// authenticating. Revealable copies (portal user, token subscription) are
+// resealed with the new plaintext so a reveal never returns the dead key.
+func (s *Server) rotateKeyMaterial(ctx context.Context, existing store.APIKey) (identity.Issued, error) {
+	issued, err := s.identity.Generate(existing.TenantID, existing.ProjectID, existing.Name)
+	if err != nil {
+		return identity.Issued{}, err
+	}
+	portalUser, err := s.db.PortalUsers().GetByKey(ctx, existing.ID)
+	hasPortalCopy := err == nil && portalUser.SealedKey.WrappedDEK != ""
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return identity.Issued{}, err
+	}
+	tokenSub, err := s.db.TokenSubscriptions().GetByKey(ctx, existing.ID)
+	hasTokenCopy := err == nil && tokenSub.SealedKey.WrappedDEK != ""
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return identity.Issued{}, err
+	}
+	// Seal before touching the key row so a sealing failure leaves the old
+	// key fully working instead of half rotated.
+	var sealed crypto.Sealed
+	if (hasPortalCopy || hasTokenCopy) && s.vault != nil {
+		if sealed, err = s.vault.Sealer().SealString(issued.Plaintext); err != nil {
+			return identity.Issued{}, err
+		}
+	}
+	if err := s.identity.Keys().SetKeyMaterial(ctx, existing.ID, issued.Record.KeyHash, issued.Record.LookupHash, issued.Record.Display); err != nil {
+		return identity.Issued{}, err
+	}
+	s.identity.InvalidateAuthCacheForKey(existing.ID)
+	if sealed.WrappedDEK != "" {
+		if hasPortalCopy {
+			if err := s.db.PortalUsers().SetSealedKey(ctx, portalUser.GoogleSub, sealed); err != nil {
+				return identity.Issued{}, err
+			}
+		}
+		if hasTokenCopy {
+			if err := s.db.TokenSubscriptions().SetSealedKeyByKey(ctx, existing.ID, sealed); err != nil {
+				return identity.Issued{}, err
+			}
+		}
+	}
+	issued.Record.ID = existing.ID
+	return issued, nil
 }
 
 // handlePortalUsage returns usage for the caller's claimed key.

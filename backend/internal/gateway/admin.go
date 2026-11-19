@@ -43,6 +43,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/keys", s.adminCreateKey)
 	r.Patch("/keys/{id}", s.adminUpdateKey)
 	r.Delete("/keys/{id}", s.adminDeleteKey)
+	r.Post("/keys/{id}/rotate", s.adminRotateKey)
 	r.Post("/keys/{id}/topup", s.adminTopupKey)
 	r.Get("/keys/{id}/usage", s.adminKeyUsage)
 	r.Get("/keys/{id}/models", s.adminKeyModelUsage)
@@ -809,6 +810,32 @@ func (s *Server) adminDeleteKey(w http.ResponseWriter, r *http.Request) {
 		s.invalidateTokenSub(orphanTokenKey)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminRotateKey replaces a key's secret in place and returns the new
+// plaintext once. Everything tied to the key id (plan, budget, balance,
+// top-ups, usage, routing, portal binding) is kept.
+func (s *Server) adminRotateKey(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == s.bansosKeyID(r.Context()) {
+		writeError(w, http.StatusBadRequest, "the bansos key is managed from the Bansos page")
+		return
+	}
+	existing, err := s.identity.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	issued, err := s.rotateKeyMaterial(r.Context(), existing)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "key": issued.Plaintext, "display": issued.Record.Display})
 }
 
 // adminUpdateKey toggles a key's disabled state and/or updates its model access.
