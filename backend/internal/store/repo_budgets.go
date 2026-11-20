@@ -248,6 +248,13 @@ func (r *BudgetRepo) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteOnTx removes a budget within an existing transaction.
+func (r *BudgetRepo) DeleteOnTx(ctx context.Context, tx *sql.Tx, id string) error {
+	q := r.db.rebind(`DELETE FROM budgets WHERE id = ?`)
+	_, err := tx.ExecContext(ctx, q, id)
+	return err
+}
+
 func (r *BudgetRepo) queryList(ctx context.Context, q string, args ...any) ([]Budget, error) {
 	rows, err := r.db.sql.QueryContext(ctx, q, args...)
 	if err != nil {

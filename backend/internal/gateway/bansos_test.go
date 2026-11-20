@@ -741,3 +741,63 @@ func TestPublicBansosTokenRemaining(t *testing.T) {
 	require.Nil(t, m["token_remaining"])
 	require.Equal(t, 2.0, m["credit_remaining_usd"])
 }
+
+func TestBansosRejectsMixedLimits(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+
+	for _, body := range []string{
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":1000,"credit_limit_usd":5}`,
+		`{"mode":"credit","allowed_models":["claude-*"],"token_limit":1000,"credit_limit_usd":5}`,
+		`{"mode":"unlimited","allowed_models":["claude-*"],"token_limit":1000}`,
+	} {
+		w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos", body)
+		require.Equal(t, http.StatusBadRequest, w.Code, body)
+	}
+	_, ok, err := s.loadBansos(ctx)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	keyID := createBansosKey(t, s, `{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	for _, body := range []string{
+		`{"mode":"token","token_limit":1000,"credit_limit_usd":5}`,
+		`{"mode":"credit","credit_limit_usd":5,"token_limit":1000}`,
+		`{"token_limit":1000}`,
+	} {
+		w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+		require.Equal(t, http.StatusBadRequest, w.Code, body)
+	}
+	budgets, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, keyID)
+	require.NoError(t, err)
+	require.Empty(t, budgets)
+}
+
+func TestAdminUpdateBansosUnlimitedTokenSwitches(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s, `{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	patch := func(body string) {
+		w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	}
+	budgets := func() []store.Budget {
+		b, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, keyID)
+		require.NoError(t, err)
+		return b
+	}
+
+	patch(`{"mode":"token","token_limit":750}`)
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 750, budgets()[0].LimitTokens)
+	require.EqualValues(t, 0, budgets()[0].LimitMicros)
+
+	patch(`{"mode":"unlimited"}`)
+	require.Empty(t, budgets())
+
+	// A same-mode limit edit recreates a missing budget.
+	patch(`{"mode":"token","token_limit":750}`)
+	require.NoError(t, db.Budgets().Delete(ctx, budgets()[0].ID))
+	patch(`{"token_limit":900}`)
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 900, budgets()[0].LimitTokens)
+}

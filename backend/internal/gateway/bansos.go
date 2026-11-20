@@ -320,6 +320,14 @@ func (s *Server) adminCreateBansos(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "rate limits must not be negative")
 		return
 	}
+	if mode != bansosModeCredit && body.CreditLimitUSD != nil {
+		writeError(w, http.StatusBadRequest, "credit_limit_usd is only valid in credit mode")
+		return
+	}
+	if mode != bansosModeToken && body.TokenLimit != nil {
+		writeError(w, http.StatusBadRequest, "token_limit is only valid in token mode")
+		return
+	}
 	var creditMicros int64
 	if mode == bansosModeCredit {
 		if body.CreditLimitUSD == nil {
@@ -524,6 +532,14 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		creditLimitMicros = m
 		creditLimitSet = true
 	}
+	if resultingMode != bansosModeCredit && body.CreditLimitUSD != nil {
+		writeError(w, http.StatusBadRequest, "credit_limit_usd is only valid in credit mode")
+		return
+	}
+	if resultingMode != bansosModeToken && body.TokenLimit != nil {
+		writeError(w, http.StatusBadRequest, "token_limit is only valid in token mode")
+		return
+	}
 	if body.TokenLimit != nil && *body.TokenLimit <= 0 {
 		writeError(w, http.StatusBadRequest, "token_limit must be greater than zero")
 		return
@@ -594,40 +610,56 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if body.Mode != nil && *body.Mode != cfg.Mode {
-		for _, b := range existingBudgets {
-			if err := s.budgets.Delete(ctx, b.ID); err != nil {
-				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-				return
-			}
+	modeChanged := body.Mode != nil && *body.Mode != cfg.Mode
+	limitEdit := (creditLimitSet && resultingMode == bansosModeCredit) || (tokenLimitSet && resultingMode == bansosModeToken)
+	if modeChanged || limitEdit {
+		newBudget := store.Budget{
+			ID: uuid.NewString(), TenantID: adminTenant, ScopeKind: store.ScopeAPIKey,
+			ScopeID: cfg.KeyID, Period: "total", AlertPct: 80, HardCutoff: true,
 		}
-		if *body.Mode != bansosModeUnlimited {
-			now := time.Now()
-			if err := s.budgets.Create(ctx, store.Budget{
-				ID: uuid.NewString(), TenantID: adminTenant, ScopeKind: store.ScopeAPIKey,
-				ScopeID: cfg.KeyID, LimitMicros: creditLimitMicros, LimitTokens: tokenLimit, Period: "total",
-				AlertPct: 80, HardCutoff: true, CreatedAt: now, UpdatedAt: now,
-			}); err != nil {
-				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-				return
-			}
+		if resultingMode == bansosModeToken {
+			newBudget.LimitTokens = tokenLimit
+		} else {
+			newBudget.LimitMicros = creditLimitMicros
 		}
-		cfg.Mode = *body.Mode
-	} else if (creditLimitSet && resultingMode == bansosModeCredit) || (tokenLimitSet && resultingMode == bansosModeToken) {
-		// Absolute limit edit while staying in the same mode.
-		if len(existingBudgets) > 0 {
+		now := time.Now()
+		newBudget.CreatedAt, newBudget.UpdatedAt = now, now
+
+		if !modeChanged && len(existingBudgets) > 0 {
 			b := existingBudgets[0]
-			if resultingMode == bansosModeToken {
-				b.LimitTokens = tokenLimit
-			} else {
-				b.LimitMicros = creditLimitMicros
-			}
-			b.UpdatedAt = time.Now()
+			b.LimitTokens, b.LimitMicros = newBudget.LimitTokens, newBudget.LimitMicros
+			b.UpdatedAt = now
 			if err := s.budgets.Update(ctx, b); err != nil {
 				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 				return
 			}
+		} else {
+			// Delete and create in one transaction so a failed create never
+			// leaves the key without a budget (fail open).
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "transaction start failed")
+				return
+			}
+			defer func() { _ = tx.Rollback() }()
+			for _, b := range existingBudgets {
+				if err := s.budgets.DeleteOnTx(ctx, tx, b.ID); err != nil {
+					writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+					return
+				}
+			}
+			if resultingMode != bansosModeUnlimited {
+				if err := s.budgets.CreateOnTx(ctx, tx, newBudget); err != nil {
+					writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+					return
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				writeError(w, http.StatusInternalServerError, "transaction commit failed")
+				return
+			}
 		}
+		cfg.Mode = resultingMode
 	}
 
 	if body.Active != nil {
