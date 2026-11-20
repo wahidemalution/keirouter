@@ -22,7 +22,12 @@ const bansosSettingsKey = "bansos"
 const (
 	bansosModeUnlimited = "unlimited"
 	bansosModeCredit    = "credit"
+	bansosModeToken     = "token"
 )
+
+func validBansosMode(m string) bool {
+	return m == bansosModeUnlimited || m == bansosModeCredit || m == bansosModeToken
+}
 
 // bansosConfig is the persisted bansos state. It references a dedicated API key
 // plus the resources that key uses (plan, budget, model access). SealedKey is
@@ -168,6 +173,37 @@ type bansosCreateRequest struct {
 	RPM            int64        `json:"rpm"`
 	TPM            int64        `json:"tpm"`
 	CreditLimitUSD *json.Number `json:"credit_limit_usd"`
+	TokenLimit     *int64       `json:"token_limit"`
+}
+
+// bansosTokenView reports the key's token budget usage, or null when the key
+// has no budget.
+func (s *Server) bansosTokenView(ctx context.Context, keyID string) (map[string]any, error) {
+	if keyID == "" {
+		return nil, nil
+	}
+	budgets, err := s.budgets.ListByScope(ctx, store.ScopeAPIKey, keyID)
+	if err != nil {
+		return nil, err
+	}
+	if len(budgets) == 0 {
+		return nil, nil
+	}
+	b := budgets[0]
+	since := budget.PeriodStart(b.Period, time.Now())
+	_, used, err := s.usage.SpendAndTokens(ctx, b.ScopeKind, b.ScopeID, since)
+	if err != nil {
+		return nil, err
+	}
+	remaining := b.LimitTokens - used
+	if remaining < 0 {
+		remaining = 0
+	}
+	return map[string]any{
+		"limit":     b.LimitTokens,
+		"used":      used,
+		"remaining": remaining,
+	}, nil
 }
 
 // bansosCreditView reports the key's api_key budget balances, or null when the
@@ -203,7 +239,14 @@ func (s *Server) bansosCreditView(ctx context.Context, keyID string) (map[string
 
 // bansosStatePayload builds the shared (plaintext-free) state shape.
 func (s *Server) bansosStatePayload(ctx context.Context, cfg bansosConfig) (map[string]any, error) {
-	credit, err := s.bansosCreditView(ctx, cfg.KeyID)
+	var credit, tokens map[string]any
+	var err error
+	switch cfg.Mode {
+	case bansosModeCredit:
+		credit, err = s.bansosCreditView(ctx, cfg.KeyID)
+	case bansosModeToken:
+		tokens, err = s.bansosTokenView(ctx, cfg.KeyID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +268,7 @@ func (s *Server) bansosStatePayload(ctx context.Context, cfg bansosConfig) (map[
 		"notice_text":    cfg.NoticeText,
 		"notice_rate":    cfg.NoticeRate,
 		"credit":         credit,
+		"tokens":         tokens,
 		"updated_at":     cfg.UpdatedAt,
 	}, nil
 }
@@ -268,8 +312,8 @@ func (s *Server) adminCreateBansos(w http.ResponseWriter, r *http.Request) {
 	if mode == "" {
 		mode = bansosModeUnlimited
 	}
-	if mode != bansosModeUnlimited && mode != bansosModeCredit {
-		writeError(w, http.StatusBadRequest, "mode must be credit or unlimited")
+	if !validBansosMode(mode) {
+		writeError(w, http.StatusBadRequest, "mode must be unlimited, credit, or token")
 		return
 	}
 	if body.RPM < 0 || body.TPM < 0 {
@@ -292,6 +336,14 @@ func (s *Server) adminCreateBansos(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		creditMicros = m
+	}
+	var tokenLimit int64
+	if mode == bansosModeToken {
+		if body.TokenLimit == nil || *body.TokenLimit <= 0 {
+			writeError(w, http.StatusBadRequest, "token_limit must be greater than zero in token mode")
+			return
+		}
+		tokenLimit = *body.TokenLimit
 	}
 
 	issued, err := s.identity.Generate(adminTenant, "", "bansos")
@@ -356,10 +408,10 @@ func (s *Server) adminCreateBansos(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-	if mode == bansosModeCredit {
+	if mode == bansosModeCredit || mode == bansosModeToken {
 		if err := s.budgets.CreateOnTx(r.Context(), tx, store.Budget{
 			ID: uuid.NewString(), TenantID: adminTenant, ScopeKind: store.ScopeAPIKey,
-			ScopeID: issued.Record.ID, LimitMicros: creditMicros, Period: "total",
+			ScopeID: issued.Record.ID, LimitMicros: creditMicros, LimitTokens: tokenLimit, Period: "total",
 			AlertPct: 80, HardCutoff: true, CreatedAt: now, UpdatedAt: now,
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -409,6 +461,7 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		RPM            *int64       `json:"rpm"`
 		TPM            *int64       `json:"tpm"`
 		CreditLimitUSD *json.Number `json:"credit_limit_usd"`
+		TokenLimit     *int64       `json:"token_limit"`
 		NoticeEnabled  *bool        `json:"notice_enabled"`
 		NoticeText     *string      `json:"notice_text"`
 		NoticeRate     *int         `json:"notice_rate"`
@@ -426,8 +479,8 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 	}
 	resultingMode := cfg.Mode
 	if body.Mode != nil {
-		if *body.Mode != bansosModeUnlimited && *body.Mode != bansosModeCredit {
-			writeError(w, http.StatusBadRequest, "mode must be credit or unlimited")
+		if !validBansosMode(*body.Mode) {
+			writeError(w, http.StatusBadRequest, "mode must be unlimited, credit, or token")
 			return
 		}
 		resultingMode = *body.Mode
@@ -471,8 +524,13 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		creditLimitMicros = m
 		creditLimitSet = true
 	}
+	if body.TokenLimit != nil && *body.TokenLimit <= 0 {
+		writeError(w, http.StatusBadRequest, "token_limit must be greater than zero")
+		return
+	}
+	tokenLimitSet := body.TokenLimit != nil
 	var existingBudgets []store.Budget
-	if resultingMode == bansosModeCredit || body.Mode != nil || creditLimitSet {
+	if resultingMode != bansosModeUnlimited || body.Mode != nil || creditLimitSet || tokenLimitSet {
 		existingBudgets, err = s.budgets.ListByScope(ctx, store.ScopeAPIKey, cfg.KeyID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -486,6 +544,18 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 		}
 		if effectiveLimit <= 0 {
 			writeError(w, http.StatusBadRequest, "credit_limit_usd must be greater than zero in credit mode")
+			return
+		}
+	}
+	var tokenLimit int64
+	if resultingMode == bansosModeToken {
+		if tokenLimitSet {
+			tokenLimit = *body.TokenLimit
+		} else if len(existingBudgets) > 0 {
+			tokenLimit = existingBudgets[0].LimitTokens
+		}
+		if tokenLimit <= 0 {
+			writeError(w, http.StatusBadRequest, "token_limit must be greater than zero in token mode")
 			return
 		}
 	}
@@ -525,18 +595,17 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Mode != nil && *body.Mode != cfg.Mode {
-		if *body.Mode == bansosModeUnlimited {
-			for _, b := range existingBudgets {
-				if err := s.budgets.Delete(ctx, b.ID); err != nil {
-					writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-					return
-				}
+		for _, b := range existingBudgets {
+			if err := s.budgets.Delete(ctx, b.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+				return
 			}
-		} else if len(existingBudgets) == 0 {
+		}
+		if *body.Mode != bansosModeUnlimited {
 			now := time.Now()
 			if err := s.budgets.Create(ctx, store.Budget{
 				ID: uuid.NewString(), TenantID: adminTenant, ScopeKind: store.ScopeAPIKey,
-				ScopeID: cfg.KeyID, LimitMicros: creditLimitMicros, Period: "total",
+				ScopeID: cfg.KeyID, LimitMicros: creditLimitMicros, LimitTokens: tokenLimit, Period: "total",
 				AlertPct: 80, HardCutoff: true, CreatedAt: now, UpdatedAt: now,
 			}); err != nil {
 				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -544,11 +613,15 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		cfg.Mode = *body.Mode
-	} else if creditLimitSet && resultingMode == bansosModeCredit {
-		// Absolute limit edit while staying in credit mode.
+	} else if (creditLimitSet && resultingMode == bansosModeCredit) || (tokenLimitSet && resultingMode == bansosModeToken) {
+		// Absolute limit edit while staying in the same mode.
 		if len(existingBudgets) > 0 {
 			b := existingBudgets[0]
-			b.LimitMicros = creditLimitMicros
+			if resultingMode == bansosModeToken {
+				b.LimitTokens = tokenLimit
+			} else {
+				b.LimitMicros = creditLimitMicros
+			}
 			b.UpdatedAt = time.Now()
 			if err := s.budgets.Update(ctx, b); err != nil {
 				writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -711,18 +784,30 @@ func (s *Server) publicBansos(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"active": false, "exists": false, "mode": bansosModeUnlimited,
 			"masked_display": "", "allowed_models": []string{}, "rpm": 0, "tpm": 0,
-			"credit_remaining_usd": nil,
+			"credit_remaining_usd": nil, "token_remaining": nil,
 		})
 		return
 	}
-	credit, err := s.bansosCreditView(r.Context(), cfg.KeyID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "bansos unavailable")
-		return
-	}
-	var remaining any
-	if credit != nil {
-		remaining = credit["remaining_usd"]
+	var remaining, tokenRemaining any
+	switch cfg.Mode {
+	case bansosModeCredit:
+		credit, err := s.bansosCreditView(r.Context(), cfg.KeyID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "bansos unavailable")
+			return
+		}
+		if credit != nil {
+			remaining = credit["remaining_usd"]
+		}
+	case bansosModeToken:
+		tokens, err := s.bansosTokenView(r.Context(), cfg.KeyID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "bansos unavailable")
+			return
+		}
+		if tokens != nil {
+			tokenRemaining = tokens["remaining"]
+		}
 	}
 	models := cfg.AllowedModels
 	if models == nil {
@@ -737,6 +822,7 @@ func (s *Server) publicBansos(w http.ResponseWriter, r *http.Request) {
 		"rpm":                  cfg.RPM,
 		"tpm":                  cfg.TPM,
 		"credit_remaining_usd": remaining,
+		"token_remaining":      tokenRemaining,
 		"updated_at":           cfg.UpdatedAt,
 	})
 }

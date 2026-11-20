@@ -8,10 +8,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 	"github.com/mydisha/keirouter/backend/internal/identity"
@@ -589,4 +591,153 @@ func TestPublicBansosEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, kw2.Code, kw2.Body.String())
 	require.Contains(t, kw2.Body.String(), created.Key)
 	require.Equal(t, "no-store", kw2.Header().Get("Cache-Control"))
+}
+
+func createBansosKey(t *testing.T, s *Server, body string) string {
+	t.Helper()
+	w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos", body)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var created struct {
+		KeyID string `json:"key_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	return created.KeyID
+}
+
+func TestAdminCreateBansosTokenMode(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+
+	w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos",
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":500000}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var created struct {
+		KeyID string `json:"key_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+
+	budgets, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, created.KeyID)
+	require.NoError(t, err)
+	require.Len(t, budgets, 1)
+	require.EqualValues(t, 500000, budgets[0].LimitTokens)
+	require.EqualValues(t, 0, budgets[0].LimitMicros)
+	require.Equal(t, "total", budgets[0].Period)
+	require.True(t, budgets[0].HardCutoff)
+
+	g := callBansosHandler(t, s, s.adminGetBansos, http.MethodGet, "/bansos", "")
+	require.Equal(t, http.StatusOK, g.Code, g.Body.String())
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(g.Body.Bytes(), &state))
+	require.Equal(t, "token", state["mode"])
+	require.Nil(t, state["credit"])
+	require.Equal(t, map[string]any{"limit": 500000.0, "used": 0.0, "remaining": 500000.0}, state["tokens"])
+}
+
+func TestAdminCreateBansosTokenModeRequiresLimit(t *testing.T) {
+	for _, body := range []string{
+		`{"mode":"token","allowed_models":["claude-*"]}`,
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":0}`,
+	} {
+		s, db := newBansosTestServer(t)
+		ctx := context.Background()
+		w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos", body)
+		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+		_, ok, err := s.loadBansos(ctx)
+		require.NoError(t, err)
+		require.False(t, ok)
+		keys, err := db.APIKeys().List(ctx, adminTenant)
+		require.NoError(t, err)
+		require.Empty(t, keys)
+		require.Empty(t, bansosPlans(t, db, ctx))
+	}
+}
+
+func TestAdminUpdateBansosTokenModeSwitches(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s,
+		`{"mode":"credit","allowed_models":["claude-*"],"credit_limit_usd":5}`)
+	patch := func(body string) *httptest.ResponseRecorder {
+		return callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+	}
+	budgets := func() []store.Budget {
+		b, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, keyID)
+		require.NoError(t, err)
+		return b
+	}
+
+	w := patch(`{"mode":"token"}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 5_000_000, budgets()[0].LimitMicros)
+
+	w = patch(`{"mode":"token","token_limit":1000}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 1000, budgets()[0].LimitTokens)
+	require.EqualValues(t, 0, budgets()[0].LimitMicros)
+	id := budgets()[0].ID
+
+	w = patch(`{"token_limit":2500}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.Equal(t, id, budgets()[0].ID)
+	require.EqualValues(t, 2500, budgets()[0].LimitTokens)
+
+	w = patch(`{"mode":"credit","credit_limit_usd":3}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 3_000_000, budgets()[0].LimitMicros)
+	require.EqualValues(t, 0, budgets()[0].LimitTokens)
+
+	w = patch(`{"mode":"bogus"}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "mode must be unlimited, credit, or token")
+}
+
+func TestBansosTokenModeBlocksWhenExhausted(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s,
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":100}`)
+
+	engine := budget.New(db.Budgets(), db.Usage())
+	scope := budget.Scope{TenantID: adminTenant, APIKeyID: keyID}
+	dec, err := engine.Check(ctx, scope)
+	require.NoError(t, err)
+	require.True(t, dec.Allowed)
+
+	require.NoError(t, db.Usage().RecordBatch(ctx, []store.UsageRecord{{
+		ID: "u1", TenantID: adminTenant, APIKeyID: keyID, Provider: "p1", Model: "m",
+		Status: "success", PromptTokens: 60, CompletionTokens: 40, CreatedAt: time.Now(),
+	}}))
+	engine.InvalidateBudgetCache()
+	dec, err = engine.Check(ctx, scope)
+	require.NoError(t, err)
+	require.False(t, dec.Allowed)
+	require.True(t, dec.TokensExhausted)
+}
+
+func TestPublicBansosTokenRemaining(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	get := func() map[string]any {
+		rw := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rw, httptest.NewRequest(http.MethodGet, "/v1/public/bansos", nil))
+		require.Equal(t, http.StatusOK, rw.Code, rw.Body.String())
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &m))
+		return m
+	}
+	m := get()
+	require.Equal(t, 1000.0, m["token_remaining"])
+	require.Nil(t, m["credit_remaining_usd"])
+
+	w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos",
+		`{"mode":"credit","credit_limit_usd":2}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	m = get()
+	require.Nil(t, m["token_remaining"])
+	require.Equal(t, 2.0, m["credit_remaining_usd"])
 }
