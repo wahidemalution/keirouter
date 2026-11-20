@@ -59,6 +59,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/bansos", s.adminCreateBansos)
 	r.Patch("/bansos", s.adminUpdateBansos)
 	r.Post("/bansos/topup", s.adminBansosTopup)
+	r.Post("/bansos/reset", s.adminBansosReset)
 	r.Post("/bansos/rotate", s.adminBansosRotate)
 
 	r.Get("/accounts", s.adminListAccounts)

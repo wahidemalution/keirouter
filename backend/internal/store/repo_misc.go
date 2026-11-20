@@ -89,6 +89,16 @@ func (r *SettingsRepo) Set(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// SetOnTx writes (inserts or updates) a setting inside an existing transaction.
+func (r *SettingsRepo) SetOnTx(ctx context.Context, tx *sql.Tx, key, value string) error {
+	q := r.db.rebind(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+	if _, err := tx.ExecContext(ctx, q, key, value, formatTime(time.Now())); err != nil {
+		return fmt.Errorf("store: set setting: %w", err)
+	}
+	return nil
+}
+
 // ClaimLease takes or renews a lease stored as setting key: value is the
 // holder, updated_at the last claim. It succeeds when the key is free, owner
 // already holds it, or the holder's last claim is older than ttl. One
