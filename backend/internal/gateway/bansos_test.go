@@ -923,3 +923,28 @@ func TestAdminBansosResetUnlimited(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, b)
 }
+
+func TestAdminBansosResetCreditWithNewLimit(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"credit","allowed_models":["claude-*"],"credit_limit_usd":5}`)
+	recordTokens(t, s, "r1", keyID, 3_000_000, 10)
+
+	w := bansosReset(t, s, `{"credit_limit_usd":2.5}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, 2.5, decodeMap(t, w)["credit"].(map[string]any)["limit_usd"])
+	require.EqualValues(t, 5_500_000, bansosBudget(t, db, keyID).LimitMicros)
+
+	w = bansosReset(t, s, `{"credit_limit_usd":0}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.EqualValues(t, 5_500_000, bansosBudget(t, db, keyID).LimitMicros)
+}
+
+func TestAdminBansosResetWithoutBudgetConflicts(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":100}`)
+	b := bansosBudget(t, db, keyID)
+	require.NoError(t, db.Budgets().Delete(context.Background(), b.ID))
+
+	w := bansosReset(t, s, `{}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+}

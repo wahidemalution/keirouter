@@ -787,27 +787,10 @@ func (s *Server) adminBansosReset(w http.ResponseWriter, r *http.Request) {
 		budgetRow = budgets[0]
 	}
 
-	var batchMicros, batchTokens int64
-	switch cfg.Mode {
-	case bansosModeCredit:
-		batchMicros = budgetRow.LimitMicros - cfg.BaselineMicros
-		if body.CreditLimitUSD != nil {
-			if batchMicros, err = usdLimitToMicros(*body.CreditLimitUSD); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
-		if batchMicros <= 0 {
-			writeError(w, http.StatusBadRequest, "credit_limit_usd must be greater than zero in credit mode")
-			return
-		}
-	case bansosModeToken:
-		batchTokens = budgetRow.LimitTokens - cfg.BaselineTokens
-		if body.TokenLimit != nil {
-			batchTokens = *body.TokenLimit
-		}
-		if batchTokens <= 0 {
-			writeError(w, http.StatusBadRequest, "token_limit must be greater than zero in token mode")
+	var inputMicros int64
+	if body.CreditLimitUSD != nil {
+		if inputMicros, err = usdLimitToMicros(*body.CreditLimitUSD); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -817,6 +800,7 @@ func (s *Server) adminBansosReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
+	prevBaselineMicros, prevBaselineTokens := cfg.BaselineMicros, cfg.BaselineTokens
 	cfg.BaselineMicros, cfg.BaselineTokens = micros, tokens
 	cfg.ResetAt = time.Now()
 	cfg.UpdatedAt = cfg.ResetAt
@@ -838,10 +822,32 @@ func (s *Server) adminBansosReset(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
 		}
+		// Re-read under the lock so a top-up committed since the pre-read is kept.
+		row, err := s.budgets.GetOnTx(ctx, tx, budgetRow.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
 		if cfg.Mode == bansosModeToken {
-			err = s.budgets.SetTokenLimitOnTx(ctx, tx, budgetRow.ID, tokens+batchTokens)
+			batch := row.LimitTokens - prevBaselineTokens
+			if body.TokenLimit != nil {
+				batch = *body.TokenLimit
+			}
+			if batch <= 0 {
+				writeError(w, http.StatusBadRequest, "token_limit must be greater than zero in token mode")
+				return
+			}
+			err = s.budgets.SetTokenLimitOnTx(ctx, tx, row.ID, tokens+batch)
 		} else {
-			_, _, err = s.budgets.SetLimitOnTx(ctx, tx, budgetRow.ID, micros+batchMicros)
+			batch := row.LimitMicros - prevBaselineMicros
+			if body.CreditLimitUSD != nil {
+				batch = inputMicros
+			}
+			if batch <= 0 {
+				writeError(w, http.StatusBadRequest, "credit_limit_usd must be greater than zero in credit mode")
+				return
+			}
+			_, _, err = s.budgets.SetLimitOnTx(ctx, tx, row.ID, micros+batch)
 		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
