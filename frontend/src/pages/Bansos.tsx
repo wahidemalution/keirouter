@@ -457,7 +457,11 @@ export function BansosPage() {
         open={tokenModalOpen}
         onClose={() => setTokenModalOpen(false)}
         title="Turn on token mode"
-        subtitle="The limit counts tokens used since the last reset."
+        subtitle={
+          data.reset_at
+            ? "The limit counts tokens used since the last reset."
+            : "The limit counts every token this key has used, including usage before this change."
+        }
       >
         <div className="space-y-4 px-6 py-5">
           <Field label="Token limit">

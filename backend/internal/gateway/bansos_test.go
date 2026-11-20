@@ -948,3 +948,40 @@ func TestAdminBansosResetWithoutBudgetConflicts(t *testing.T) {
 	w := bansosReset(t, s, `{}`)
 	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
 }
+
+func TestAdminBansosSequentialResetsKeepBatchLimit(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 0, 400)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+	require.EqualValues(t, 1400, bansosBudget(t, db, keyID).LimitTokens)
+
+	recordTokens(t, s, "r2", keyID, 0, 300)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+	require.EqualValues(t, 1700, bansosBudget(t, db, keyID).LimitTokens)
+
+	cfg, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 700, cfg.BaselineTokens)
+}
+
+func TestAdminBansosPatchAfterResetKeepsBaseline(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 0, 400)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+
+	// Simulate a handler that loaded the config before the reset and saves it after.
+	stale, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	stale.BaselineTokens, stale.BaselineMicros, stale.ResetAt = 0, 0, time.Time{}
+	require.NoError(t, s.keepBansosBaseline(context.Background(), &stale))
+	require.NoError(t, s.saveBansos(context.Background(), stale))
+
+	w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", `{"notice_enabled":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	cfg, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 400, cfg.BaselineTokens)
+	require.False(t, cfg.ResetAt.IsZero())
+}

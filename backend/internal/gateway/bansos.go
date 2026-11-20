@@ -48,7 +48,8 @@ type bansosConfig struct {
 	NoticeRate    int           `json:"notice_rate"`
 	// BaselineTokens and BaselineMicros are the key's lifetime usage at the last
 	// reset. Budgets store absolute lifetime limits, so every batch limit is
-	// stored as baseline plus the batch value. Zero means never reset.
+	// stored as baseline plus the batch value. Zero means never reset. Never prune
+	// usage_records for the bansos key, or used minus baseline goes wrong.
 	BaselineTokens int64     `json:"baseline_tokens"`
 	BaselineMicros int64     `json:"baseline_micros"`
 	ResetAt        time.Time `json:"reset_at"`
@@ -101,6 +102,19 @@ func (s *Server) saveBansos(ctx context.Context, cfg bansosConfig) error {
 		return err
 	}
 	return s.settings.Set(ctx, bansosSettingsKey, string(raw))
+}
+
+// keepBansosBaseline carries the current baseline fields into cfg. Reset is the
+// only writer of them, so any other save must not restore a stale copy.
+func (s *Server) keepBansosBaseline(ctx context.Context, cfg *bansosConfig) error {
+	cur, ok, err := s.loadBansos(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
+		cfg.BaselineTokens, cfg.BaselineMicros, cfg.ResetAt = cur.BaselineTokens, cur.BaselineMicros, cur.ResetAt
+	}
+	return nil
 }
 
 // bansosKeyID returns the bansos API key id, or "" when unconfigured.
@@ -698,6 +712,10 @@ func (s *Server) adminUpdateBansos(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg.UpdatedAt = time.Now()
+	if err := s.keepBansosBaseline(ctx, &cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
 	if err := s.saveBansos(ctx, cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
@@ -795,6 +813,30 @@ func (s *Server) adminBansosReset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "transaction start failed")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize against a concurrent top-up or reset of the same key.
+	if err := s.budgets.LockKeyTopup(ctx, tx, cfg.KeyID); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	// Read the baseline and lifetime usage under the lock, so a concurrent
+	// reset cannot make this one compute its batch from a stale baseline.
+	rawCfg, err := s.settings.GetOnTx(ctx, tx, bansosSettingsKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	var fresh bansosConfig
+	if err := json.Unmarshal([]byte(rawCfg), &fresh); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	cfg = fresh
 	micros, tokens, err := s.bansosLifetimeUsage(ctx, cfg.KeyID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -809,19 +851,7 @@ func (s *Server) adminBansosReset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
 	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "transaction start failed")
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
 	if cfg.Mode != bansosModeUnlimited {
-		// Serialize against a concurrent top-up of the same key.
-		if err := s.budgets.LockKeyTopup(ctx, tx, cfg.KeyID); err != nil {
-			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-			return
-		}
 		// Re-read under the lock so a top-up committed since the pre-read is kept.
 		row, err := s.budgets.GetOnTx(ctx, tx, budgetRow.ID)
 		if err != nil {
@@ -924,6 +954,10 @@ func (s *Server) adminBansosRotate(w http.ResponseWriter, r *http.Request) {
 		cfg.SealedKey = sealed
 		cfg.MaskedDisplay = issued.Record.Display
 		cfg.UpdatedAt = time.Now()
+		if err := s.keepBansosBaseline(r.Context(), &cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+			return
+		}
 		if err := s.saveBansos(r.Context(), cfg); err != nil {
 			writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 			return
@@ -951,6 +985,10 @@ func (s *Server) adminBansosRotate(w http.ResponseWriter, r *http.Request) {
 	cfg.SealedKey = sealed
 	cfg.MaskedDisplay = issued.Record.Display
 	cfg.UpdatedAt = time.Now()
+	if err := s.keepBansosBaseline(r.Context(), &cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
 	if err := s.saveBansos(r.Context(), cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
