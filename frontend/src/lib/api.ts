@@ -632,6 +632,7 @@ export interface Bansos {
   notice_enabled?: boolean;
   notice_text?: string;
   notice_rate?: number;
+  reset_at: string | null;
   updated_at?: string;
   key?: string;
 }
@@ -3268,6 +3269,8 @@ export const api = {
     notice_text?: string;
     notice_rate?: number;
   }) => request<Bansos>("PATCH", "/bansos", patch),
+  resetBansos: (input: { token_limit?: number; credit_limit_usd?: number }) =>
+    request<Bansos>("POST", "/bansos/reset", input),
   topupBansos: (input: { amount_usd: number; reason?: string; idempotency_key: string }) =>
     request<{ topup: KeyTopup }>("POST", "/bansos/topup", input),
   rotateBansos: () =>

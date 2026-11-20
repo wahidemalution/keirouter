@@ -32,6 +32,8 @@ export function BansosPage() {
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
   const [tokenModalLimit, setTokenModalLimit] = useState("");
   const [tokenEdit, setTokenEdit] = useState("");
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetLimit, setResetLimit] = useState("");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["bansos"] });
 
@@ -64,6 +66,16 @@ export function BansosPage() {
     onSuccess: () => {
       toast.success("Credit added");
       setTopupUSD("");
+      invalidate();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const reset = useMutation({
+    mutationFn: (input: Parameters<typeof api.resetBansos>[0]) => api.resetBansos(input),
+    onSuccess: () => {
+      toast.success("New batch started");
+      setResetModalOpen(false);
       invalidate();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -181,7 +193,26 @@ export function BansosPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Limit" />
+            <CardHeader
+              title="Limit"
+              action={
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setResetLimit(
+                      data.mode === "token"
+                        ? String(data.tokens?.limit ?? "")
+                        : data.mode === "credit"
+                          ? String(data.credit?.limit_usd ?? "")
+                          : "",
+                    );
+                    setResetModalOpen(true);
+                  }}
+                >
+                  Reset for new batch
+                </Button>
+              }
+            />
             <div className="p-5 sm:p-6">
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Mode">
@@ -224,6 +255,9 @@ export function BansosPage() {
                   />
                 </Field>
               </div>
+              {data.reset_at && (
+                <p className="mt-4 text-sm text-[var(--muted)]">Last reset: {new Date(data.reset_at).toLocaleString()}</p>
+              )}
               {data.mode === "token" && (
                 <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
                   <p className="text-sm text-[var(--muted)]">
@@ -367,10 +401,63 @@ export function BansosPage() {
       </Modal>
 
       <Modal
+        open={resetModalOpen}
+        onClose={() => setResetModalOpen(false)}
+        title="Start a new batch"
+        subtitle="Usage goes back to 0. The API key stays the same."
+      >
+        <div className="space-y-4 px-6 py-5">
+          {data?.mode === "token" && (
+            <>
+              <p className="text-sm text-[var(--muted)]">This batch used: {fmtInt.format(data.tokens?.used ?? 0)} tokens</p>
+              <Field label="Token limit">
+                <Input value={resetLimit} onChange={(e) => setResetLimit(e.target.value)} inputMode="numeric" data-modal-autofocus />
+              </Field>
+            </>
+          )}
+          {data?.mode === "credit" && (
+            <>
+              <p className="text-sm text-[var(--muted)]">This batch spent: ${data.credit?.spent_usd.toFixed(4) ?? 0}</p>
+              <Field label="Credit (USD)">
+                <Input value={resetLimit} onChange={(e) => setResetLimit(e.target.value)} inputMode="decimal" data-modal-autofocus />
+              </Field>
+            </>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-[var(--border)] px-6 py-4">
+          <Button variant="secondary" onClick={() => setResetModalOpen(false)}>Cancel</Button>
+          <Button
+            onClick={() => {
+              if (data?.mode === "token") {
+                const n = Number(resetLimit);
+                if (!Number.isInteger(n) || n <= 0) {
+                  toast.error("Token limit must be a whole number above 0");
+                  return;
+                }
+                reset.mutate({ token_limit: n });
+              } else if (data?.mode === "credit") {
+                const n = Number(resetLimit);
+                if (!Number.isFinite(n) || n <= 0) {
+                  toast.error("Credit must be more than 0");
+                  return;
+                }
+                reset.mutate({ credit_limit_usd: n });
+              } else {
+                reset.mutate({});
+              }
+            }}
+            disabled={reset.isPending}
+          >
+            Reset
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
         open={tokenModalOpen}
         onClose={() => setTokenModalOpen(false)}
         title="Turn on token mode"
-        subtitle="The limit counts every token this key has used, including usage before this change."
+        subtitle="The limit counts tokens used since the last reset."
       >
         <div className="space-y-4 px-6 py-5">
           <Field label="Token limit">
