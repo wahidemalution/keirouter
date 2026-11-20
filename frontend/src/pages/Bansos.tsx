@@ -458,7 +458,7 @@ export function BansosPage() {
         onClose={() => setTokenModalOpen(false)}
         title="Turn on token mode"
         subtitle={
-          data.reset_at
+          data?.reset_at
             ? "The limit counts tokens used since the last reset."
             : "The limit counts every token this key has used, including usage before this change."
         }
