@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Gift, Plus, RotateCw, Eye, EyeOff } from "lucide-react";
-import { api, type Bansos } from "../lib/api";
+import { api, type Bansos, type BansosMode } from "../lib/api";
+import { fmtInt } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { ModelMultiSelect } from "../components/ModelSelect";
 import { useToast } from "../components/Toast";
@@ -19,14 +20,18 @@ export function BansosPage() {
   const [showCreated, setShowCreated] = useState(false);
   const [rotateKey, setRotateKey] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<"credit" | "unlimited">("unlimited");
+  const [mode, setMode] = useState<BansosMode>("unlimited");
   const [models, setModels] = useState<string[]>([]);
   const [rpm, setRpm] = useState("");
   const [tpm, setTpm] = useState("");
   const [creditUSD, setCreditUSD] = useState("");
+  const [tokenLimit, setTokenLimit] = useState("");
   const [topupUSD, setTopupUSD] = useState("");
   const [creditModalOpen, setCreditModalOpen] = useState(false);
   const [creditModalUSD, setCreditModalUSD] = useState("");
+  const [tokenModalOpen, setTokenModalOpen] = useState(false);
+  const [tokenModalLimit, setTokenModalLimit] = useState("");
+  const [tokenEdit, setTokenEdit] = useState("");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["bansos"] });
 
@@ -38,6 +43,7 @@ export function BansosPage() {
         rpm: rpm ? Number(rpm) : 0,
         tpm: tpm ? Number(tpm) : 0,
         credit_limit_usd: mode === "credit" && creditUSD ? Number(creditUSD) : undefined,
+        token_limit: mode === "token" && tokenLimit ? Number(tokenLimit) : undefined,
       }),
     onSuccess: (res) => {
       setCreatedKey(res.key ?? null);
@@ -114,15 +120,25 @@ export function BansosPage() {
               <Field label="Mode limit">
                 <Select
                   value={mode}
-                  onChange={(e) => setMode(e.target.value as "credit" | "unlimited")}
+                  onChange={(e) => {
+                    setMode(e.target.value as BansosMode);
+                    setCreditUSD("");
+                    setTokenLimit("");
+                  }}
                 >
                   <option value="unlimited">Unlimited</option>
                   <option value="credit">Credit</option>
+                  <option value="token">Token</option>
                 </Select>
               </Field>
               {mode === "credit" && (
                 <Field label="Starting credit (USD)">
                   <Input value={creditUSD} onChange={(e) => setCreditUSD(e.target.value)} inputMode="decimal" placeholder="10" />
+                </Field>
+              )}
+              {mode === "token" && (
+                <Field label="Token limit">
+                  <Input value={tokenLimit} onChange={(e) => setTokenLimit(e.target.value)} inputMode="numeric" placeholder="1000000" />
                 </Field>
               )}
               <Field label="RPM (optional)">
@@ -138,7 +154,7 @@ export function BansosPage() {
               </Field>
             </div>
             <div className="mt-5 flex justify-end">
-              <Button onClick={() => create.mutate()} disabled={models.length === 0 || create.isPending}>
+              <Button onClick={() => create.mutate()} disabled={models.length === 0 || create.isPending || (mode === "token" && !(Number(tokenLimit) > 0))}>
                 <Plus className="h-4 w-4" /> Create Bansos
               </Button>
             </div>
@@ -172,7 +188,12 @@ export function BansosPage() {
                   <Select
                     value={data.mode}
                     onChange={(e) => {
-                      const next = e.target.value as "credit" | "unlimited";
+                      const next = e.target.value as BansosMode;
+                      if (next === "token") {
+                        setTokenModalLimit("");
+                        setTokenModalOpen(true);
+                        return;
+                      }
                       if (next === "credit" && !(data.credit && data.credit.limit_usd > 0)) {
                         // Credit with no positive limit fails closed on the server,
                         // so collect the starting amount in a themed dialog.
@@ -185,6 +206,7 @@ export function BansosPage() {
                   >
                     <option value="unlimited">Unlimited</option>
                     <option value="credit">Credit</option>
+                    <option value="token">Token</option>
                   </Select>
                 </Field>
                 <Field label="RPM">
@@ -202,6 +224,36 @@ export function BansosPage() {
                   />
                 </Field>
               </div>
+              {data.mode === "token" && (
+                <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
+                  <p className="text-sm text-[var(--muted)]">
+                    Limit: {fmtInt.format(data.tokens?.limit ?? 0)} · Used: {fmtInt.format(data.tokens?.used ?? 0)} · Left: {fmtInt.format(data.tokens?.remaining ?? 0)}
+                  </p>
+                  <div className="mt-3 flex items-end gap-2">
+                    <Field label="Token limit">
+                      <Input
+                        value={tokenEdit}
+                        onChange={(e) => setTokenEdit(e.target.value)}
+                        inputMode="numeric"
+                        placeholder={String(data.tokens?.limit ?? 1000000)}
+                      />
+                    </Field>
+                    <Button
+                      onClick={() => {
+                        const n = Number(tokenEdit);
+                        if (!Number.isInteger(n) || n <= 0) {
+                          toast.error("Token limit must be a whole number above 0");
+                          return;
+                        }
+                        update.mutate({ token_limit: n }, { onSuccess: () => setTokenEdit("") });
+                      }}
+                      disabled={!tokenEdit || update.isPending}
+                    >
+                      Save limit
+                    </Button>
+                  </div>
+                </div>
+              )}
               {data.mode === "credit" && (
                 <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
                   <p className="text-sm text-[var(--muted)]">
@@ -305,6 +357,44 @@ export function BansosPage() {
               update.mutate(
                 { mode: "credit", credit_limit_usd: amount },
                 { onSuccess: () => setCreditModalOpen(false) },
+              );
+            }}
+            disabled={update.isPending}
+          >
+            Save
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={tokenModalOpen}
+        onClose={() => setTokenModalOpen(false)}
+        title="Turn on token mode"
+        subtitle="Enter the token limit to cap usage."
+      >
+        <div className="space-y-4 px-6 py-5">
+          <Field label="Token limit">
+            <Input
+              value={tokenModalLimit}
+              onChange={(e) => setTokenModalLimit(e.target.value)}
+              inputMode="numeric"
+              placeholder="1000000"
+              data-modal-autofocus
+            />
+          </Field>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-[var(--border)] px-6 py-4">
+          <Button variant="secondary" onClick={() => setTokenModalOpen(false)}>Cancel</Button>
+          <Button
+            onClick={() => {
+              const n = Number(tokenModalLimit);
+              if (!Number.isInteger(n) || n <= 0) {
+                toast.error("Token limit must be a whole number above 0");
+                return;
+              }
+              update.mutate(
+                { mode: "token", token_limit: n },
+                { onSuccess: () => setTokenModalOpen(false) },
               );
             }}
             disabled={update.isPending}
