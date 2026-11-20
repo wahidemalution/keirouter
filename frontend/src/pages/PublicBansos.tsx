@@ -152,13 +152,22 @@ export default function PublicBansos() {
       value:
         data.mode === "unlimited"
           ? "Tanpa batas"
-          : data.credit_remaining_usd != null
-            ? fmtUSD(data.credit_remaining_usd)
-            : "Habis",
-      sub: data.mode === "unlimited" ? "Kredit tak terbatas" : "Sisa kredit bersama",
+          : data.mode === "token"
+            ? data.token_remaining
+              ? fmtInt(data.token_remaining)
+              : "Habis"
+            : data.credit_remaining_usd != null
+              ? fmtUSD(data.credit_remaining_usd)
+              : "Habis",
+      sub:
+        data.mode === "unlimited"
+          ? "Kredit tak terbatas"
+          : data.mode === "token"
+            ? "Sisa token bersama"
+            : "Sisa kredit bersama",
     });
     if (data.rpm > 0) tiles.push({ icon: Gauge, label: "Laju", value: fmtInt(data.rpm), sub: "Request per menit" });
-    if (data.tpm > 0) tiles.push({ icon: Layers, label: "Token", value: fmtInt(data.tpm), sub: "Token per menit" });
+    if (data.tpm > 0) tiles.push({ icon: Layers, label: "TPM", value: fmtInt(data.tpm), sub: "Token per menit" });
     tiles.push({ icon: Boxes, label: "Model", value: fmtInt(data.allowed_models.length), sub: "Model bisa dipanggil" });
   }
 

@@ -94,12 +94,13 @@ export const fetchPublicNotifications = () =>
 export interface PublicBansos {
   exists: boolean;
   active: boolean;
-  mode: "credit" | "unlimited";
+  mode: "credit" | "unlimited" | "token";
   masked_display: string;
   allowed_models: string[];
   rpm: number;
   tpm: number;
   credit_remaining_usd: number | null;
+  token_remaining: number | null;
   updated_at?: string;
 }
 

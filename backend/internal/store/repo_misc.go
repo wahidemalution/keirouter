@@ -78,12 +78,36 @@ func (r *SettingsRepo) Get(ctx context.Context, key string) (string, error) {
 	return v, nil
 }
 
+// GetOnTx reads a setting inside an existing transaction, or ErrNotFound.
+func (r *SettingsRepo) GetOnTx(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+	q := r.db.rebind(`SELECT value FROM settings WHERE key = ?`)
+	var v string
+	err := tx.QueryRowContext(ctx, q, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: get setting: %w", err)
+	}
+	return v, nil
+}
+
 // Set writes (inserts or updates) a setting value.
 func (r *SettingsRepo) Set(ctx context.Context, key, value string) error {
 	q := r.db.rebind(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
 		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
 	_, err := r.db.sql.ExecContext(ctx, q, key, value, formatTime(time.Now()))
 	if err != nil {
+		return fmt.Errorf("store: set setting: %w", err)
+	}
+	return nil
+}
+
+// SetOnTx writes (inserts or updates) a setting inside an existing transaction.
+func (r *SettingsRepo) SetOnTx(ctx context.Context, tx *sql.Tx, key, value string) error {
+	q := r.db.rebind(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+	if _, err := tx.ExecContext(ctx, q, key, value, formatTime(time.Now())); err != nil {
 		return fmt.Errorf("store: set setting: %w", err)
 	}
 	return nil

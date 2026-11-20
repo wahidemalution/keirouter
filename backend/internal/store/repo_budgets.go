@@ -94,6 +94,20 @@ func (r *BudgetRepo) Get(ctx context.Context, id string) (Budget, error) {
 	return b, err
 }
 
+// GetOnTx returns one budget by id inside an existing transaction, locking the
+// row on Postgres so the caller can compute a new limit from a current value.
+func (r *BudgetRepo) GetOnTx(ctx context.Context, tx *sql.Tx, id string) (Budget, error) {
+	q := `SELECT ` + budgetSelectCols + ` FROM budgets WHERE id = ?`
+	if r.db.Dialect() == DialectPostgres {
+		q += " FOR UPDATE"
+	}
+	b, err := scanBudget(tx.QueryRowContext(ctx, r.db.rebind(q), id).Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Budget{}, ErrNotFound
+	}
+	return b, err
+}
+
 // Update modifies an existing budget's mutable fields.
 func (r *BudgetRepo) Update(ctx context.Context, b Budget) error {
 	q := r.db.rebind(`UPDATE budgets SET limit_micros = ?, limit_tokens = ?, period = ?, alert_pct = ?, hard_cutoff = ?, updated_at = ? WHERE id = ?`)
@@ -245,6 +259,13 @@ func (r *BudgetRepo) LockKeyTopup(ctx context.Context, tx *sql.Tx, keyID string)
 func (r *BudgetRepo) Delete(ctx context.Context, id string) error {
 	q := r.db.rebind(`DELETE FROM budgets WHERE id = ?`)
 	_, err := r.db.sql.ExecContext(ctx, q, id)
+	return err
+}
+
+// DeleteOnTx removes a budget within an existing transaction.
+func (r *BudgetRepo) DeleteOnTx(ctx context.Context, tx *sql.Tx, id string) error {
+	q := r.db.rebind(`DELETE FROM budgets WHERE id = ?`)
+	_, err := tx.ExecContext(ctx, q, id)
 	return err
 }
 

@@ -8,10 +8,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/config"
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 	"github.com/mydisha/keirouter/backend/internal/identity"
@@ -589,4 +591,397 @@ func TestPublicBansosEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, kw2.Code, kw2.Body.String())
 	require.Contains(t, kw2.Body.String(), created.Key)
 	require.Equal(t, "no-store", kw2.Header().Get("Cache-Control"))
+}
+
+func createBansosKey(t *testing.T, s *Server, body string) string {
+	t.Helper()
+	w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos", body)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var created struct {
+		KeyID string `json:"key_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	return created.KeyID
+}
+
+func TestAdminCreateBansosTokenMode(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+
+	w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos",
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":500000}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	var created struct {
+		KeyID string `json:"key_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+
+	budgets, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, created.KeyID)
+	require.NoError(t, err)
+	require.Len(t, budgets, 1)
+	require.EqualValues(t, 500000, budgets[0].LimitTokens)
+	require.EqualValues(t, 0, budgets[0].LimitMicros)
+	require.Equal(t, "total", budgets[0].Period)
+	require.True(t, budgets[0].HardCutoff)
+
+	g := callBansosHandler(t, s, s.adminGetBansos, http.MethodGet, "/bansos", "")
+	require.Equal(t, http.StatusOK, g.Code, g.Body.String())
+	var state map[string]any
+	require.NoError(t, json.Unmarshal(g.Body.Bytes(), &state))
+	require.Equal(t, "token", state["mode"])
+	require.Nil(t, state["credit"])
+	require.Equal(t, map[string]any{"limit": 500000.0, "used": 0.0, "remaining": 500000.0}, state["tokens"])
+}
+
+func TestAdminCreateBansosTokenModeRequiresLimit(t *testing.T) {
+	for _, body := range []string{
+		`{"mode":"token","allowed_models":["claude-*"]}`,
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":0}`,
+	} {
+		s, db := newBansosTestServer(t)
+		ctx := context.Background()
+		w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos", body)
+		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+		_, ok, err := s.loadBansos(ctx)
+		require.NoError(t, err)
+		require.False(t, ok)
+		keys, err := db.APIKeys().List(ctx, adminTenant)
+		require.NoError(t, err)
+		require.Empty(t, keys)
+		require.Empty(t, bansosPlans(t, db, ctx))
+	}
+}
+
+func TestAdminUpdateBansosTokenModeSwitches(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s,
+		`{"mode":"credit","allowed_models":["claude-*"],"credit_limit_usd":5}`)
+	patch := func(body string) *httptest.ResponseRecorder {
+		return callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+	}
+	budgets := func() []store.Budget {
+		b, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, keyID)
+		require.NoError(t, err)
+		return b
+	}
+
+	w := patch(`{"mode":"token"}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 5_000_000, budgets()[0].LimitMicros)
+
+	w = patch(`{"mode":"token","token_limit":1000}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 1000, budgets()[0].LimitTokens)
+	require.EqualValues(t, 0, budgets()[0].LimitMicros)
+	id := budgets()[0].ID
+
+	w = patch(`{"token_limit":2500}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.Equal(t, id, budgets()[0].ID)
+	require.EqualValues(t, 2500, budgets()[0].LimitTokens)
+
+	w = patch(`{"mode":"credit","credit_limit_usd":3}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 3_000_000, budgets()[0].LimitMicros)
+	require.EqualValues(t, 0, budgets()[0].LimitTokens)
+
+	w = patch(`{"mode":"bogus"}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), "mode must be unlimited, credit, or token")
+}
+
+func TestBansosTokenModeBlocksWhenExhausted(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s,
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":100}`)
+
+	engine := budget.New(db.Budgets(), db.Usage())
+	scope := budget.Scope{TenantID: adminTenant, APIKeyID: keyID}
+	dec, err := engine.Check(ctx, scope)
+	require.NoError(t, err)
+	require.True(t, dec.Allowed)
+
+	require.NoError(t, db.Usage().RecordBatch(ctx, []store.UsageRecord{{
+		ID: "u1", TenantID: adminTenant, APIKeyID: keyID, Provider: "p1", Model: "m",
+		Status: "success", PromptTokens: 60, CompletionTokens: 40, CreatedAt: time.Now(),
+	}}))
+	engine.InvalidateBudgetCache()
+	dec, err = engine.Check(ctx, scope)
+	require.NoError(t, err)
+	require.False(t, dec.Allowed)
+	require.True(t, dec.TokensExhausted)
+}
+
+func TestPublicBansosTokenRemaining(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	get := func() map[string]any {
+		rw := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rw, httptest.NewRequest(http.MethodGet, "/v1/public/bansos", nil))
+		require.Equal(t, http.StatusOK, rw.Code, rw.Body.String())
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &m))
+		return m
+	}
+	m := get()
+	require.Equal(t, 1000.0, m["token_remaining"])
+	require.Nil(t, m["credit_remaining_usd"])
+
+	w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos",
+		`{"mode":"credit","credit_limit_usd":2}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	m = get()
+	require.Nil(t, m["token_remaining"])
+	require.Equal(t, 2.0, m["credit_remaining_usd"])
+}
+
+func TestBansosRejectsMixedLimits(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+
+	for _, body := range []string{
+		`{"mode":"token","allowed_models":["claude-*"],"token_limit":1000,"credit_limit_usd":5}`,
+		`{"mode":"credit","allowed_models":["claude-*"],"token_limit":1000,"credit_limit_usd":5}`,
+		`{"mode":"unlimited","allowed_models":["claude-*"],"token_limit":1000}`,
+	} {
+		w := callBansosHandler(t, s, s.adminCreateBansos, http.MethodPost, "/bansos", body)
+		require.Equal(t, http.StatusBadRequest, w.Code, body)
+	}
+	_, ok, err := s.loadBansos(ctx)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	keyID := createBansosKey(t, s, `{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	for _, body := range []string{
+		`{"mode":"token","token_limit":1000,"credit_limit_usd":5}`,
+		`{"mode":"credit","credit_limit_usd":5,"token_limit":1000}`,
+		`{"token_limit":1000}`,
+	} {
+		w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+		require.Equal(t, http.StatusBadRequest, w.Code, body)
+	}
+	budgets, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, keyID)
+	require.NoError(t, err)
+	require.Empty(t, budgets)
+}
+
+func TestAdminUpdateBansosUnlimitedTokenSwitches(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s, `{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	patch := func(body string) {
+		w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	}
+	budgets := func() []store.Budget {
+		b, err := db.Budgets().ListByScope(ctx, store.ScopeAPIKey, keyID)
+		require.NoError(t, err)
+		return b
+	}
+
+	patch(`{"mode":"token","token_limit":750}`)
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 750, budgets()[0].LimitTokens)
+	require.EqualValues(t, 0, budgets()[0].LimitMicros)
+
+	patch(`{"mode":"unlimited"}`)
+	require.Empty(t, budgets())
+
+	// A same-mode limit edit recreates a missing budget.
+	patch(`{"mode":"token","token_limit":750}`)
+	require.NoError(t, db.Budgets().Delete(ctx, budgets()[0].ID))
+	patch(`{"token_limit":900}`)
+	require.Len(t, budgets(), 1)
+	require.EqualValues(t, 900, budgets()[0].LimitTokens)
+}
+
+func bansosReset(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return callBansosHandler(t, s, s.adminBansosReset, http.MethodPost, "/bansos/reset", body)
+}
+
+func bansosBudget(t *testing.T, db *store.DB, keyID string) store.Budget {
+	t.Helper()
+	b, err := db.Budgets().ListByScope(context.Background(), store.ScopeAPIKey, keyID)
+	require.NoError(t, err)
+	require.Len(t, b, 1)
+	return b[0]
+}
+
+func decodeMap(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
+	return m
+}
+
+func TestAdminBansosResetTokenMode(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	ctx := context.Background()
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 0, 400)
+
+	w := bansosReset(t, s, `{}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	m := decodeMap(t, w)
+	require.Equal(t, map[string]any{"limit": 1000.0, "used": 0.0, "remaining": 1000.0}, m["tokens"])
+	require.NotNil(t, m["reset_at"])
+	require.EqualValues(t, 1400, bansosBudget(t, db, keyID).LimitTokens)
+
+	engine := budget.New(db.Budgets(), db.Usage())
+	scope := budget.Scope{TenantID: adminTenant, APIKeyID: keyID}
+	dec, err := engine.Check(ctx, scope)
+	require.NoError(t, err)
+	require.True(t, dec.Allowed)
+
+	recordTokens(t, s, "r2", keyID, 0, 1000)
+	engine.InvalidateBudgetCache()
+	dec, err = engine.Check(ctx, scope)
+	require.NoError(t, err)
+	require.False(t, dec.Allowed)
+	require.True(t, dec.TokensExhausted)
+}
+
+func TestAdminBansosResetWithNewLimit(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 0, 400)
+
+	w := bansosReset(t, s, `{"token_limit":5000}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	tokens := decodeMap(t, w)["tokens"].(map[string]any)
+	require.Equal(t, 5000.0, tokens["limit"])
+	require.EqualValues(t, 5400, bansosBudget(t, db, keyID).LimitTokens)
+
+	w = bansosReset(t, s, `{"credit_limit_usd":1}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.EqualValues(t, 5400, bansosBudget(t, db, keyID).LimitTokens)
+	cfg, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 400, cfg.BaselineTokens)
+}
+
+func TestAdminBansosLimitEditsAreBatchRelative(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 2_000_000, 400)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+
+	patch := func(body string) map[string]any {
+		w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", body)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		return decodeMap(t, w)
+	}
+	m := patch(`{"token_limit":2000}`)
+	require.EqualValues(t, 2400, bansosBudget(t, db, keyID).LimitTokens)
+	require.Equal(t, 2000.0, m["tokens"].(map[string]any)["limit"])
+
+	m = patch(`{"mode":"credit","credit_limit_usd":3}`)
+	require.EqualValues(t, 5_000_000, bansosBudget(t, db, keyID).LimitMicros)
+	require.Equal(t, 3.0, m["credit"].(map[string]any)["limit_usd"])
+	require.Equal(t, 3.0, m["credit"].(map[string]any)["remaining_usd"])
+
+	patch(`{"mode":"token","token_limit":1000}`)
+	require.EqualValues(t, 1400, bansosBudget(t, db, keyID).LimitTokens)
+}
+
+func TestAdminBansosResetCreditTopup(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"credit","allowed_models":["claude-*"],"credit_limit_usd":5}`)
+	recordTokens(t, s, "r1", keyID, 3_000_000, 10)
+
+	w := bansosReset(t, s, `{}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	credit := decodeMap(t, w)["credit"].(map[string]any)
+	require.Equal(t, 5.0, credit["limit_usd"])
+	require.Equal(t, 0.0, credit["spent_usd"])
+	require.EqualValues(t, 8_000_000, bansosBudget(t, db, keyID).LimitMicros)
+
+	w = callBansosHandler(t, s, s.adminBansosTopup, http.MethodPost, "/bansos/topup",
+		`{"amount_usd":2,"idempotency_key":"rt-1"}`)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	w = callBansosHandler(t, s, s.adminGetBansos, http.MethodGet, "/bansos", "")
+	require.Equal(t, 7.0, decodeMap(t, w)["credit"].(map[string]any)["remaining_usd"])
+}
+
+func TestAdminBansosResetUnlimited(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"unlimited","allowed_models":["claude-*"]}`)
+	recordTokens(t, s, "r1", keyID, 0, 50)
+
+	w := bansosReset(t, s, "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.NotNil(t, decodeMap(t, w)["reset_at"])
+	b, err := db.Budgets().ListByScope(context.Background(), store.ScopeAPIKey, keyID)
+	require.NoError(t, err)
+	require.Empty(t, b)
+}
+
+func TestAdminBansosResetCreditWithNewLimit(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"credit","allowed_models":["claude-*"],"credit_limit_usd":5}`)
+	recordTokens(t, s, "r1", keyID, 3_000_000, 10)
+
+	w := bansosReset(t, s, `{"credit_limit_usd":2.5}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, 2.5, decodeMap(t, w)["credit"].(map[string]any)["limit_usd"])
+	require.EqualValues(t, 5_500_000, bansosBudget(t, db, keyID).LimitMicros)
+
+	w = bansosReset(t, s, `{"credit_limit_usd":0}`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	require.EqualValues(t, 5_500_000, bansosBudget(t, db, keyID).LimitMicros)
+}
+
+func TestAdminBansosResetWithoutBudgetConflicts(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":100}`)
+	b := bansosBudget(t, db, keyID)
+	require.NoError(t, db.Budgets().Delete(context.Background(), b.ID))
+
+	w := bansosReset(t, s, `{}`)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+}
+
+func TestAdminBansosSequentialResetsKeepBatchLimit(t *testing.T) {
+	s, db := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 0, 400)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+	require.EqualValues(t, 1400, bansosBudget(t, db, keyID).LimitTokens)
+
+	recordTokens(t, s, "r2", keyID, 0, 300)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+	require.EqualValues(t, 1700, bansosBudget(t, db, keyID).LimitTokens)
+
+	cfg, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 700, cfg.BaselineTokens)
+}
+
+func TestAdminBansosPatchAfterResetKeepsBaseline(t *testing.T) {
+	s, _ := newBansosTestServer(t)
+	keyID := createBansosKey(t, s, `{"mode":"token","allowed_models":["claude-*"],"token_limit":1000}`)
+	recordTokens(t, s, "r1", keyID, 0, 400)
+	require.Equal(t, http.StatusOK, bansosReset(t, s, `{}`).Code)
+
+	// Simulate a handler that loaded the config before the reset and saves it after.
+	stale, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	stale.BaselineTokens, stale.BaselineMicros, stale.ResetAt = 0, 0, time.Time{}
+	require.NoError(t, s.keepBansosBaseline(context.Background(), &stale))
+	require.NoError(t, s.saveBansos(context.Background(), stale))
+
+	w := callBansosHandler(t, s, s.adminUpdateBansos, http.MethodPatch, "/bansos", `{"notice_enabled":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	cfg, _, err := s.loadBansos(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 400, cfg.BaselineTokens)
+	require.False(t, cfg.ResetAt.IsZero())
 }

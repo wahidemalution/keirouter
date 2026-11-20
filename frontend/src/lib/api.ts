@@ -609,20 +609,30 @@ export interface BansosCredit {
   period: string;
 }
 
+export type BansosMode = "unlimited" | "credit" | "token";
+
+export interface BansosTokens {
+  limit: number;
+  used: number;
+  remaining: number;
+}
+
 export interface Bansos {
   exists: boolean;
   key_id?: string;
   plan_id?: string;
   active: boolean;
-  mode: "credit" | "unlimited";
+  mode: BansosMode;
   masked_display: string;
   allowed_models: string[];
   rpm: number;
   tpm: number;
   credit: BansosCredit | null;
+  tokens: BansosTokens | null;
   notice_enabled?: boolean;
   notice_text?: string;
   notice_rate?: number;
+  reset_at: string | null;
   updated_at?: string;
   key?: string;
 }
@@ -3240,23 +3250,27 @@ export const api = {
 
   getBansos: () => request<Bansos>("GET", "/bansos"),
   createBansos: (input: {
-    mode: "credit" | "unlimited";
+    mode: BansosMode;
     allowed_models: string[];
     rpm?: number;
     tpm?: number;
     credit_limit_usd?: number;
+    token_limit?: number;
   }) => request<Bansos>("POST", "/bansos", input),
   updateBansos: (patch: {
     active?: boolean;
-    mode?: "credit" | "unlimited";
+    mode?: BansosMode;
     allowed_models?: string[];
     rpm?: number;
     tpm?: number;
     credit_limit_usd?: number;
+    token_limit?: number;
     notice_enabled?: boolean;
     notice_text?: string;
     notice_rate?: number;
   }) => request<Bansos>("PATCH", "/bansos", patch),
+  resetBansos: (input: { token_limit?: number; credit_limit_usd?: number }) =>
+    request<Bansos>("POST", "/bansos/reset", input),
   topupBansos: (input: { amount_usd: number; reason?: string; idempotency_key: string }) =>
     request<{ topup: KeyTopup }>("POST", "/bansos/topup", input),
   rotateBansos: () =>
