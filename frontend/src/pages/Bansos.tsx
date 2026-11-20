@@ -154,7 +154,7 @@ export function BansosPage() {
               </Field>
             </div>
             <div className="mt-5 flex justify-end">
-              <Button onClick={() => create.mutate()} disabled={models.length === 0 || create.isPending || (mode === "token" && !(Number(tokenLimit) > 0))}>
+              <Button onClick={() => create.mutate()} disabled={models.length === 0 || create.isPending || (mode === "token" && !(Number.isInteger(Number(tokenLimit)) && Number(tokenLimit) > 0))}>
                 <Plus className="h-4 w-4" /> Create Bansos
               </Button>
             </div>
@@ -370,7 +370,7 @@ export function BansosPage() {
         open={tokenModalOpen}
         onClose={() => setTokenModalOpen(false)}
         title="Turn on token mode"
-        subtitle="Enter the token limit to cap usage."
+        subtitle="The limit counts every token this key has used, including usage before this change."
       >
         <div className="space-y-4 px-6 py-5">
           <Field label="Token limit">
