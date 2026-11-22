@@ -23,6 +23,10 @@ interface TokenOffer {
   days: number;
   price_idr: number;
   featured: boolean;
+  // The key limits this package gives: its own, else the plan's; null when
+  // unlimited. Missing from servers that predate per-package limits.
+  rpm_limit?: number | null;
+  concurrency_limit?: number | null;
 }
 
 interface TokenCatalog {
@@ -127,7 +131,7 @@ export default function PublicTokenPackages() {
             )}
             <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {tokenPkgs.map((p) => (
-                <PackageCard key={p.id} pkg={p} discount={discountPct(p, base)} onSale={onSale} limits={limits} />
+                <PackageCard key={p.id} pkg={p} discount={discountPct(p, base)} onSale={onSale} limits={offerLimits(p, limits)} />
               ))}
             </ul>
             {daysPkgs.map((p) => (
@@ -196,6 +200,13 @@ export default function PublicTokenPackages() {
 }
 
 type Limits = { rpm: number | null; concurrency: number | null };
+
+function offerLimits(p: TokenOffer, plan: Limits): Limits {
+  return {
+    rpm: p.rpm_limit !== undefined ? p.rpm_limit : plan.rpm,
+    concurrency: p.concurrency_limit !== undefined ? p.concurrency_limit : plan.concurrency,
+  };
+}
 
 const COUNT = new Intl.NumberFormat("id-ID");
 

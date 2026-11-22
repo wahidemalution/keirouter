@@ -80,8 +80,26 @@ function packageInput(p: TokenPackage, patch: Partial<TokenPackageInput> = {}): 
     enabled: p.enabled,
     featured: p.featured,
     sort: p.sort,
+    rpm_limit: p.rpm_limit,
+    concurrency_limit: p.concurrency_limit,
     ...patch,
   };
+}
+
+/** A package's own key limits for the table; null fields follow the token plan. */
+function packageLimits(p: Pick<TokenPackage, "kind" | "rpm_limit" | "concurrency_limit">): string {
+  if (p.kind !== "tokens") return "-";
+  if (p.rpm_limit == null && p.concurrency_limit == null) return "Plan default";
+  const rpm = p.rpm_limit == null ? "plan" : p.rpm_limit.toLocaleString();
+  const conc = p.concurrency_limit == null ? "plan" : p.concurrency_limit.toLocaleString();
+  return `${rpm} RPM · ${conc} concurrent`;
+}
+
+/** Empty means "follow the plan"; anything else must be a whole number of 1 or more. */
+function limitFieldValid(v: string): boolean {
+  if (v.trim() === "") return true;
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 1;
 }
 
 export function TokenPackagesPage() {
@@ -288,7 +306,7 @@ function SettingsForm({ initial }: { initial: TokenSettings }) {
         <ChainPicker value={modelList} onChange={setModelList} />
       </Field>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Requests per minute" error={rpmError} hint={rpmError ? undefined : "Applies per key."} required>
+        <Field label="Requests per minute" error={rpmError} hint={rpmError ? undefined : "Applies per key, unless a package sets its own."} required>
           <Input type="number" inputMode="numeric" min="1" step="1" value={rpm} onChange={(e) => setRpm(e.target.value)} className="tabular-nums" />
         </Field>
         <Field
@@ -395,6 +413,7 @@ function PackagesPanel() {
                 <th scope="col" className={cn(TH, "text-right")}>Validity</th>
                 <th scope="col" className={cn(TH, "text-right")}>Price</th>
                 <th scope="col" className={cn(TH, "text-right")}>Per 1M tokens</th>
+                <th scope="col" className={TH}>Rate limit</th>
                 <th scope="col" className={cn(TH, "text-right")}>Sort</th>
                 <th scope="col" className={TH}>On sale</th>
                 <th scope="col" className={cn(TH, "text-right")}>
@@ -419,6 +438,7 @@ function PackagesPanel() {
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">{p.days} days</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums">{idr(p.price_idr)}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-fg-muted">{pricePerMillion(p)}</td>
+                    <td className="whitespace-nowrap px-4 py-2.5 tabular-nums text-fg-muted">{packageLimits(p)}</td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-fg-muted">{p.sort}</td>
                     <td className="px-4 py-2.5">
                       <Toggle
@@ -461,7 +481,10 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
   const [sort, setSort] = useState(pkg ? String(pkg.sort) : "0");
   const [enabled, setEnabled] = useState(pkg?.enabled ?? true);
   const [featured, setFeatured] = useState(pkg?.featured ?? false);
+  const [rpmLimit, setRpmLimit] = useState(pkg?.rpm_limit != null ? String(pkg.rpm_limit) : "");
+  const [concLimit, setConcLimit] = useState(pkg?.concurrency_limit != null ? String(pkg.concurrency_limit) : "");
   const [touched, setTouched] = useState(false);
+  const settings = useQuery({ queryKey: QK_SETTINGS, queryFn: api.getTokenSettings });
 
   const millionsNum = Number(millions);
   const daysNum = Number(days);
@@ -472,6 +495,10 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
   const daysError = touched && (!Number.isInteger(daysNum) || daysNum < 1) ? "Enter a whole number, 1 or more." : null;
   const priceError = touched && (!Number.isInteger(priceNum) || priceNum <= 0) ? "Enter a price in Rupiah above 0." : null;
   const sortError = touched && (sort.trim() === "" || !Number.isInteger(sortNum)) ? "Enter a whole number." : null;
+  const limitError = "Enter a whole number, 1 or more, or leave empty to use the plan limit.";
+  const rpmLimitError = touched && kind === "tokens" && !limitFieldValid(rpmLimit) ? limitError : null;
+  const concLimitError = touched && kind === "tokens" && !limitFieldValid(concLimit) ? limitError : null;
+  const planLimit = (n: number | undefined) => (n === undefined ? "the plan limit" : n > 0 ? `plan: ${n.toLocaleString()}` : "plan: unlimited");
 
   const save = useMutation({
     mutationFn: (body: TokenPackageInput) => (pkg ? api.updateTokenPackage(pkg.id, body) : api.createTokenPackage(body)),
@@ -493,8 +520,10 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
       Number.isInteger(priceNum) &&
       priceNum > 0 &&
       sort.trim() !== "" &&
-      Number.isInteger(sortNum);
+      Number.isInteger(sortNum) &&
+      (kind === "days" || (limitFieldValid(rpmLimit) && limitFieldValid(concLimit)));
     if (!ok || save.isPending) return;
+    const limitValue = (v: string) => (kind === "tokens" && v.trim() !== "" ? Number(v) : null);
     save.mutate({
       name: name.trim(),
       kind,
@@ -504,6 +533,8 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
       enabled,
       featured,
       sort: sortNum,
+      rpm_limit: limitValue(rpmLimit),
+      concurrency_limit: limitValue(concLimit),
     });
   };
 
@@ -557,6 +588,45 @@ function PackageModal({ pkg, onClose }: { pkg: TokenPackage | null; onClose: () 
               <Input type="number" inputMode="numeric" step="1" value={sort} onChange={(e) => setSort(e.target.value)} className="tabular-nums" />
             </Field>
           </div>
+          {kind === "tokens" && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field
+                label="Requests per minute"
+                error={rpmLimitError}
+                hint={rpmLimitError ? undefined : `Empty uses ${planLimit(settings.data?.rpm_limit)}.`}
+              >
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  step="1"
+                  value={rpmLimit}
+                  onChange={(e) => setRpmLimit(e.target.value)}
+                  placeholder="Plan limit"
+                  className="tabular-nums"
+                />
+              </Field>
+              <Field
+                label="Concurrent requests"
+                error={concLimitError}
+                hint={concLimitError ? undefined : `Empty uses ${planLimit(settings.data?.concurrency_limit)}.`}
+              >
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  step="1"
+                  value={concLimit}
+                  onChange={(e) => setConcLimit(e.target.value)}
+                  placeholder="Plan limit"
+                  className="tabular-nums"
+                />
+              </Field>
+              <p className="text-[12px] text-fg-muted sm:col-span-2">
+                A buyer keeps the highest limits among the packages bought while their package is active. The limits reset when they buy after it expires.
+              </p>
+            </div>
+          )}
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p id="pkg-enabled" className="text-[13px] font-medium text-fg">
