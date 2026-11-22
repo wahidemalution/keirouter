@@ -61,10 +61,18 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 		if !p.Enabled {
 			continue
 		}
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id": p.ID, "name": p.Name, "kind": string(p.Kind), "tokens": p.Tokens,
 			"days": p.Days, "price_idr": p.PriceIDR, "featured": p.Featured,
-		})
+			"rpm_limit": nil, "concurrency_limit": nil,
+		}
+		if p.Kind == store.TokenPackageTokens {
+			// The key limits a buyer gets from this package: its own, else
+			// the plan's; null when unlimited.
+			item["rpm_limit"] = packageLimit(p.RPMLimit, rpm)
+			item["concurrency_limit"] = packageLimit(p.ConcurrencyLimit, concurrency)
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"on_sale": s.tokenOnSale(st), "packages": out, "models": models,
@@ -443,4 +451,13 @@ func (s *Server) handlePortalListTokenOrders(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// packageLimit returns a package's own limit, or the plan's (nil when the
+// plan is unlimited) when it has none.
+func packageLimit(own *int64, plan any) any {
+	if own != nil {
+		return *own
+	}
+	return plan
 }

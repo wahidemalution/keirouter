@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -120,4 +123,90 @@ func TestTokenOrderSnapshotsLimits(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, applied)
 	requireSubLimits(t, s, "gsub", i64(120), i64(10))
+}
+
+func TestAdminTokenPackageLimits(t *testing.T) {
+	s, _ := newTokenTestServer(t)
+	rec := adminTokenCall(s, http.MethodPost, "/token-packages",
+		`{"name":"Big","kind":"tokens","tokens":1000000000,"days":15,"price_idr":570000,"rpm_limit":120,"concurrency_limit":null}`,
+		nil, s.adminCreateTokenPackage)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	var created map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	require.EqualValues(t, 120, created["rpm_limit"])
+	require.Nil(t, created["concurrency_limit"])
+	id := created["id"].(string)
+	got, err := s.db.TokenPackages().Get(t.Context(), id)
+	require.NoError(t, err)
+	require.Equal(t, i64(120), got.RPMLimit)
+	require.Nil(t, got.ConcurrencyLimit)
+
+	put := func(body string) *httptest.ResponseRecorder {
+		return adminTokenCall(s, http.MethodPut, "/token-packages/"+id, body, map[string]string{"id": id}, s.adminUpdateTokenPackage)
+	}
+	rec = put(`{"name":"Big","kind":"tokens","tokens":1000000000,"days":15,"price_idr":570000,"concurrency_limit":7}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got, err = s.db.TokenPackages().Get(t.Context(), id)
+	require.NoError(t, err)
+	require.Equal(t, i64(120), got.RPMLimit, "omitted rpm_limit keeps its value")
+	require.Equal(t, i64(7), got.ConcurrencyLimit)
+
+	rec = put(`{"name":"Big","kind":"tokens","tokens":1000000000,"days":15,"price_idr":570000,"rpm_limit":null,"concurrency_limit":null}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	got, err = s.db.TokenPackages().Get(t.Context(), id)
+	require.NoError(t, err)
+	require.Nil(t, got.RPMLimit, "null clears rpm_limit")
+	require.Nil(t, got.ConcurrencyLimit, "null clears concurrency_limit")
+
+	for name, tc := range map[string]struct{ body, msg string }{
+		"rpm zero":      {`"rpm_limit":0`, "rpm_limit must be at least 1"},
+		"rpm negative":  {`"rpm_limit":-5`, "rpm_limit must be at least 1"},
+		"conc zero":     {`"concurrency_limit":0`, "concurrency_limit must be at least 1"},
+		"rpm fraction":  {`"rpm_limit":1.5`, ""},
+		"rpm as string": {`"rpm_limit":"60"`, ""},
+	} {
+		rec := adminTokenCall(s, http.MethodPost, "/token-packages",
+			`{"name":"x","kind":"tokens","tokens":5,"days":15,"price_idr":1000,`+tc.body+`}`, nil, s.adminCreateTokenPackage)
+		require.Equal(t, http.StatusBadRequest, rec.Code, name+": "+rec.Body.String())
+		if tc.msg != "" {
+			require.Contains(t, rec.Body.String(), tc.msg, name)
+		}
+	}
+
+	rec = adminTokenCall(s, http.MethodPost, "/token-packages",
+		`{"name":"Extra","kind":"days","days":7,"price_idr":9000,"rpm_limit":500,"concurrency_limit":50}`, nil, s.adminCreateTokenPackage)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
+	days, err := s.db.TokenPackages().Get(t.Context(), created["id"].(string))
+	require.NoError(t, err)
+	require.Nil(t, days.RPMLimit, "a days package carries no limits")
+	require.Nil(t, days.ConcurrencyLimit, "a days package carries no limits")
+}
+
+func TestPortalTokenPackagesPerPackageLimits(t *testing.T) {
+	s, _, _ := tokenPortalServer(t)
+	setPackageLimits(t, s, "tp-20m", i64(120), nil)
+
+	byID := map[string]map[string]any{}
+	for _, p := range getTokenPackages(t, s)["packages"].([]any) {
+		m := p.(map[string]any)
+		byID[m["id"].(string)] = m
+	}
+	require.EqualValues(t, 120, byID["tp-20m"]["rpm_limit"])
+	require.EqualValues(t, 3, byID["tp-20m"]["concurrency_limit"], "unset falls back to the plan")
+	require.EqualValues(t, 60, byID["tp-100m"]["rpm_limit"])
+	require.EqualValues(t, 3, byID["tp-100m"]["concurrency_limit"])
+	require.Nil(t, byID["tp-days-15"]["rpm_limit"], "days packages show no limits")
+	require.Nil(t, byID["tp-days-15"]["concurrency_limit"])
+
+	plan, err := s.db.Plans().Get(t.Context(), "plan-token-packages")
+	require.NoError(t, err)
+	plan.ConcurrencyLimit = 0
+	require.NoError(t, s.db.Plans().Update(t.Context(), plan))
+	for _, p := range getTokenPackages(t, s)["packages"].([]any) {
+		m := p.(map[string]any)
+		if m["id"] == "tp-100m" {
+			require.Nil(t, m["concurrency_limit"], "an unlimited plan shows no number")
+		}
+	}
 }
