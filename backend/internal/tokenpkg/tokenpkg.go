@@ -71,18 +71,33 @@ func Save(ctx context.Context, settings *store.SettingsRepo, s Settings) error {
 	return settings.Set(ctx, SettingsKey, string(b))
 }
 
+// Limits are a subscription's or package's own key rate limits. A nil field
+// follows the token plan.
+type Limits struct {
+	RPM         *int64
+	Concurrency *int64
+}
+
+// PlanLimits are the token plan's key rate limits; 0 is unlimited.
+type PlanLimits struct {
+	RPM         int64
+	Concurrency int64
+}
+
 // State is a user's current subscription, if any.
 type State struct {
 	Exists      bool
 	ExpiresAt   time.Time
 	UsedTokens  int64
 	LimitTokens int64
+	Limits      Limits
 }
 
 // Result is the subscription after a purchase is applied.
 type Result struct {
 	ExpiresAt   time.Time
 	LimitTokens int64
+	Limits      Limits
 }
 
 // Apply computes the subscription after buying p. A subscription is active
@@ -92,24 +107,68 @@ type Result struct {
 // expiry. On an expired or missing one it restarts the period; unused tokens
 // from the old period are dropped, so the new limit is the used count plus
 // the package tokens.
-func Apply(st State, p store.TokenPackage, now time.Time) (Result, error) {
+//
+// Rate limits: a tokens package on an active subscription keeps the highest
+// of the subscription's and the package's limits, with plan as the value of
+// a nil limit. A new period takes the package's limits as they are. A days
+// package leaves them.
+func Apply(st State, p store.TokenPackage, plan PlanLimits, now time.Time) (Result, error) {
 	active := st.Exists && now.Before(st.ExpiresAt)
 	extend := time.Duration(p.Days) * 24 * time.Hour
 	switch p.Kind {
 	case store.TokenPackageTokens:
 		if active {
-			return Result{ExpiresAt: st.ExpiresAt, LimitTokens: st.LimitTokens + p.Tokens}, nil
+			return Result{
+				ExpiresAt: st.ExpiresAt, LimitTokens: st.LimitTokens + p.Tokens,
+				Limits: Limits{
+					RPM:         stack(st.Limits.RPM, p.RPMLimit, plan.RPM),
+					Concurrency: stack(st.Limits.Concurrency, p.ConcurrencyLimit, plan.Concurrency),
+				},
+			}, nil
 		}
 		used := int64(0)
 		if st.Exists {
 			used = st.UsedTokens
 		}
-		return Result{ExpiresAt: now.Add(extend), LimitTokens: used + p.Tokens}, nil
+		return Result{
+			ExpiresAt: now.Add(extend), LimitTokens: used + p.Tokens,
+			Limits: Limits{RPM: clone(p.RPMLimit), Concurrency: clone(p.ConcurrencyLimit)},
+		}, nil
 	case store.TokenPackageDays:
 		if !active {
 			return Result{}, ErrNoActivePackage
 		}
-		return Result{ExpiresAt: st.ExpiresAt.Add(extend), LimitTokens: st.LimitTokens}, nil
+		return Result{
+			ExpiresAt: st.ExpiresAt.Add(extend), LimitTokens: st.LimitTokens,
+			Limits: Limits{RPM: clone(st.Limits.RPM), Concurrency: clone(st.Limits.Concurrency)},
+		}, nil
 	}
 	return Result{}, fmt.Errorf("%w: %q", errUnknownKind, p.Kind)
+}
+
+// stack returns the higher of two limits, reading nil as the plan's value.
+// It returns nil when the plan's value is the highest (ties included), so the
+// subscription keeps following the plan if the admin changes it later. A
+// plan value of 0 is unlimited and beats any number.
+func stack(old, pkg *int64, plan int64) *int64 {
+	if plan <= 0 {
+		return nil
+	}
+	best := plan
+	var out *int64
+	for _, v := range []*int64{old, pkg} {
+		if v != nil && *v > best {
+			best = *v
+			out = clone(v)
+		}
+	}
+	return out
+}
+
+func clone(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
 }

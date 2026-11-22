@@ -20,18 +20,22 @@ const (
 
 // TokenPackage is one sellable prepaid token package.
 type TokenPackage struct {
-	ID        string
-	TenantID  string
-	Name      string
-	Kind      TokenPackageKind
-	Tokens    int64
-	Days      int
-	PriceIDR  int64
-	Enabled   bool
-	Featured  bool
-	Sort      int
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID       string
+	TenantID string
+	Name     string
+	Kind     TokenPackageKind
+	Tokens   int64
+	Days     int
+	PriceIDR int64
+	Enabled  bool
+	Featured bool
+	Sort     int
+	// RPMLimit and ConcurrencyLimit are the package's own key limits; nil
+	// follows the token plan.
+	RPMLimit         *int64
+	ConcurrencyLimit *int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // TokenPackageRepo persists token packages.

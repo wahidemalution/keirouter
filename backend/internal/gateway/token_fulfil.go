@@ -94,7 +94,7 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		return false, err
 	}
 
-	res, err := tokenpkg.Apply(state, pkg, now)
+	res, err := tokenpkg.Apply(state, pkg, tokenpkg.PlanLimits{}, now)
 	if errors.Is(err, tokenpkg.ErrNoActivePackage) {
 		return s.markTokenOrderManualOnTx(ctx, tx, order, actor, "no active package", reason)
 	}
