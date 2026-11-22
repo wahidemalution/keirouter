@@ -585,6 +585,11 @@ type PaymentOrder struct {
 	TokenKind      string
 	TokenAmount    int64
 	TokenDays      int
+	// TokenRPMLimit and TokenConcurrencyLimit copy the package's key limits
+	// at checkout; nil follows the token plan (and is what orders made
+	// before the copy read as).
+	TokenRPMLimit         *int64
+	TokenConcurrencyLimit *int64
 }
 
 // Payment order products.

@@ -44,7 +44,7 @@ type TokenPackageRepo struct{ db *DB }
 // TokenPackages returns the token package repository.
 func (db *DB) TokenPackages() *TokenPackageRepo { return &TokenPackageRepo{db: db} }
 
-const tokenPackageCols = `id, tenant_id, name, kind, tokens, days, price_idr, enabled, featured, sort, created_at, updated_at`
+const tokenPackageCols = `id, tenant_id, name, kind, tokens, days, price_idr, enabled, featured, sort, created_at, updated_at, rpm_limit, concurrency_limit`
 
 // List returns every package ordered for display.
 func (r *TokenPackageRepo) List(ctx context.Context) ([]TokenPackage, error) {
@@ -90,10 +90,11 @@ func (r *TokenPackageRepo) getOne(ctx context.Context, q sqlQueryRower, id strin
 // Create inserts a package.
 func (r *TokenPackageRepo) Create(ctx context.Context, p TokenPackage) error {
 	q := r.db.rebind(`INSERT INTO token_packages (` + tokenPackageCols + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		p.ID, p.TenantID, p.Name, string(p.Kind), p.Tokens, p.Days, p.PriceIDR,
-		boolToInt(p.Enabled), boolToInt(p.Featured), p.Sort, formatTime(p.CreatedAt), formatTime(p.UpdatedAt))
+		boolToInt(p.Enabled), boolToInt(p.Featured), p.Sort, formatTime(p.CreatedAt), formatTime(p.UpdatedAt),
+		nullInt64Ptr(p.RPMLimit), nullInt64Ptr(p.ConcurrencyLimit))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrAlreadyExists
@@ -106,10 +107,11 @@ func (r *TokenPackageRepo) Create(ctx context.Context, p TokenPackage) error {
 // Update rewrites a package's editable fields.
 func (r *TokenPackageRepo) Update(ctx context.Context, p TokenPackage) error {
 	q := r.db.rebind(`UPDATE token_packages SET name = ?, kind = ?, tokens = ?, days = ?, price_idr = ?,
-		enabled = ?, featured = ?, sort = ?, updated_at = ? WHERE id = ?`)
+		enabled = ?, featured = ?, sort = ?, rpm_limit = ?, concurrency_limit = ?, updated_at = ? WHERE id = ?`)
 	res, err := r.db.sql.ExecContext(ctx, q,
 		p.Name, string(p.Kind), p.Tokens, p.Days, p.PriceIDR,
-		boolToInt(p.Enabled), boolToInt(p.Featured), p.Sort, formatTime(p.UpdatedAt), p.ID)
+		boolToInt(p.Enabled), boolToInt(p.Featured), p.Sort,
+		nullInt64Ptr(p.RPMLimit), nullInt64Ptr(p.ConcurrencyLimit), formatTime(p.UpdatedAt), p.ID)
 	if err != nil {
 		return fmt.Errorf("store: update token package: %w", err)
 	}
@@ -137,11 +139,13 @@ func scanTokenPackage(scan func(dest ...any) error) (TokenPackage, error) {
 		kind              string
 		enabled, featured int
 		created, updated  string
+		rpm, conc         sql.NullInt64
 	)
 	if err := scan(&p.ID, &p.TenantID, &p.Name, &kind, &p.Tokens, &p.Days, &p.PriceIDR,
-		&enabled, &featured, &p.Sort, &created, &updated); err != nil {
+		&enabled, &featured, &p.Sort, &created, &updated, &rpm, &conc); err != nil {
 		return TokenPackage{}, err
 	}
+	p.RPMLimit, p.ConcurrencyLimit = int64PtrOf(rpm), int64PtrOf(conc)
 	p.Kind = TokenPackageKind(kind)
 	p.Enabled = enabled == 1
 	p.Featured = featured == 1
@@ -156,8 +160,12 @@ type TokenSubscription struct {
 	KeyID     string
 	SealedKey crypto.Sealed
 	ExpiresAt time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// RPMLimit and ConcurrencyLimit are the key limits the subscription's
+	// purchases add up to (tokenpkg.Apply); nil follows the token plan.
+	RPMLimit         *int64
+	ConcurrencyLimit *int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // TokenSubscriptionRepo persists token subscriptions.
@@ -166,7 +174,7 @@ type TokenSubscriptionRepo struct{ db *DB }
 // TokenSubscriptions returns the token subscription repository.
 func (db *DB) TokenSubscriptions() *TokenSubscriptionRepo { return &TokenSubscriptionRepo{db: db} }
 
-const tokenSubCols = `google_sub, key_id, sealed_dek, sealed_ct, expires_at, created_at, updated_at`
+const tokenSubCols = `google_sub, key_id, sealed_dek, sealed_ct, expires_at, created_at, updated_at, rpm_limit, concurrency_limit`
 
 // GetBySub returns the subscription of a Google subject.
 func (r *TokenSubscriptionRepo) GetBySub(ctx context.Context, sub string) (TokenSubscription, error) {
@@ -194,9 +202,10 @@ func (r *TokenSubscriptionRepo) getOne(ctx context.Context, q sqlQueryRower, col
 
 // CreateOnTx inserts a subscription within a transaction.
 func (r *TokenSubscriptionRepo) CreateOnTx(ctx context.Context, tx *sql.Tx, s TokenSubscription) error {
-	q := r.db.rebind(`INSERT INTO token_subscriptions (` + tokenSubCols + `) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	q := r.db.rebind(`INSERT INTO token_subscriptions (` + tokenSubCols + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := tx.ExecContext(ctx, q, s.GoogleSub, s.KeyID, s.SealedKey.WrappedDEK, s.SealedKey.Ciphertext,
-		formatTime(s.ExpiresAt), formatTime(s.CreatedAt), formatTime(s.UpdatedAt))
+		formatTime(s.ExpiresAt), formatTime(s.CreatedAt), formatTime(s.UpdatedAt),
+		nullInt64Ptr(s.RPMLimit), nullInt64Ptr(s.ConcurrencyLimit))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrAlreadyExists
@@ -217,6 +226,29 @@ func (r *TokenSubscriptionRepo) SetExpiresOnTx(ctx context.Context, tx *sql.Tx, 
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetLimitsOnTx stores a subscription's key rate limits within a
+// transaction; nil follows the token plan.
+func (r *TokenSubscriptionRepo) SetLimitsOnTx(ctx context.Context, tx *sql.Tx, sub string, rpm, concurrency *int64) error {
+	q := r.db.rebind(`UPDATE token_subscriptions SET rpm_limit = ?, concurrency_limit = ?, updated_at = ? WHERE google_sub = ?`)
+	res, err := tx.ExecContext(ctx, q, nullInt64Ptr(rpm), nullInt64Ptr(concurrency), formatTime(time.Now()), sub)
+	if err != nil {
+		return fmt.Errorf("store: set token subscription limits: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// int64PtrOf returns n's value, or nil when it is NULL.
+func int64PtrOf(n sql.NullInt64) *int64 {
+	if !n.Valid {
+		return nil
+	}
+	v := n.Int64
+	return &v
 }
 
 // SetSealedKeyByKey replaces the stored encrypted plaintext of the subscription
@@ -256,10 +288,12 @@ func scanTokenSubscription(scan func(dest ...any) error) (TokenSubscription, err
 		s                         TokenSubscription
 		dek, ct                   string
 		expires, created, updated string
+		rpm, conc                 sql.NullInt64
 	)
-	if err := scan(&s.GoogleSub, &s.KeyID, &dek, &ct, &expires, &created, &updated); err != nil {
+	if err := scan(&s.GoogleSub, &s.KeyID, &dek, &ct, &expires, &created, &updated, &rpm, &conc); err != nil {
 		return TokenSubscription{}, err
 	}
+	s.RPMLimit, s.ConcurrencyLimit = int64PtrOf(rpm), int64PtrOf(conc)
 	s.SealedKey = crypto.Sealed{WrappedDEK: dek, Ciphertext: ct}
 	s.ExpiresAt = parseTime(expires)
 	s.CreatedAt = parseTime(created)

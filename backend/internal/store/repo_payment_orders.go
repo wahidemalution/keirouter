@@ -20,7 +20,7 @@ const paymentOrderCols = `id, tenant_id, key_id, google_sub, amount_idr, credit_
 	idempotency_key, actor, reason, created_at, updated_at, paid_at, expires_at,
 	product, hosting_instance_id, terms_version, terms_accepted_at,
 	coupon_id, coupon_code, base_amount_idr, bonus_days, token_package_id,
-	token_kind, token_amount, token_days`
+	token_kind, token_amount, token_days, token_rpm_limit, token_concurrency_limit`
 
 // Create inserts a payment order.
 func (r *PaymentOrderRepo) Create(ctx context.Context, o PaymentOrder) error {
@@ -38,7 +38,7 @@ func (r *PaymentOrderRepo) insert(ctx context.Context, ex sqlExec, o PaymentOrde
 		product = ProductCredit
 	}
 	q := r.db.rebind(`INSERT INTO payment_orders (` + paymentOrderCols + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := ex.ExecContext(ctx, q,
 		o.ID, o.TenantID, o.KeyID, o.GoogleSub, o.AmountIDR, o.CreditMicros,
 		o.FxRateMicros, string(o.Status), o.Provider, o.ProviderPaymentID,
@@ -46,7 +46,7 @@ func (r *PaymentOrderRepo) insert(ctx context.Context, ex sqlExec, o PaymentOrde
 		formatTime(o.CreatedAt), formatTime(o.UpdatedAt), o.PaidAt, o.ExpiresAt,
 		product, o.HostingInstanceID, o.TermsVersion, o.TermsAcceptedAt,
 		o.CouponID, o.CouponCode, o.BaseAmountIDR, o.BonusDays, o.TokenPackageID,
-		o.TokenKind, o.TokenAmount, o.TokenDays)
+		o.TokenKind, o.TokenAmount, o.TokenDays, nullInt64Ptr(o.TokenRPMLimit), nullInt64Ptr(o.TokenConcurrencyLimit))
 	if err != nil {
 		return fmt.Errorf("store: create payment order: %w", err)
 	}
@@ -211,16 +211,19 @@ func scanPaymentOrder(scan func(dest ...any) error) (PaymentOrder, error) {
 		o                PaymentOrder
 		status           string
 		created, updated string
+		tokenRPM         sql.NullInt64
+		tokenConc        sql.NullInt64
 	)
 	err := scan(&o.ID, &o.TenantID, &o.KeyID, &o.GoogleSub, &o.AmountIDR, &o.CreditMicros,
 		&o.FxRateMicros, &status, &o.Provider, &o.ProviderPaymentID, &o.PaymentLinkURL,
 		&o.IdempotencyKey, &o.Actor, &o.Reason, &created, &updated, &o.PaidAt, &o.ExpiresAt,
 		&o.Product, &o.HostingInstanceID, &o.TermsVersion, &o.TermsAcceptedAt,
 		&o.CouponID, &o.CouponCode, &o.BaseAmountIDR, &o.BonusDays, &o.TokenPackageID,
-		&o.TokenKind, &o.TokenAmount, &o.TokenDays)
+		&o.TokenKind, &o.TokenAmount, &o.TokenDays, &tokenRPM, &tokenConc)
 	if err != nil {
 		return PaymentOrder{}, err
 	}
+	o.TokenRPMLimit, o.TokenConcurrencyLimit = int64PtrOf(tokenRPM), int64PtrOf(tokenConc)
 	o.Status = PaymentOrderStatus(status)
 	o.CreatedAt = parseTime(created)
 	o.UpdatedAt = parseTime(updated)

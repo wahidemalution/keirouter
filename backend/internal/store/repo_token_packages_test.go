@@ -200,3 +200,104 @@ func TestTokenSubscriptionDailyTokens(t *testing.T) {
 		require.Equal(t, want, got, "rollup=%v", rollup)
 	}
 }
+
+func int64p(n int64) *int64 { return &n }
+
+func TestTokenPackageLimitsRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	repo := db.TokenPackages()
+	now := time.Now().UTC().Truncate(time.Second)
+	p := TokenPackage{
+		ID: "pl", TenantID: DefaultTenantID, Name: "1B", Kind: TokenPackageTokens,
+		Tokens: 1_000_000_000, Days: 15, PriceIDR: 570_000, Enabled: true,
+		RPMLimit: int64p(120), CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, repo.Create(ctx, p))
+	got, err := repo.Get(ctx, "pl")
+	require.NoError(t, err)
+	require.Equal(t, int64p(120), got.RPMLimit)
+	require.Nil(t, got.ConcurrencyLimit)
+
+	p.RPMLimit, p.ConcurrencyLimit = nil, int64p(5)
+	require.NoError(t, repo.Update(ctx, p))
+	got, err = repo.Get(ctx, "pl")
+	require.NoError(t, err)
+	require.Nil(t, got.RPMLimit)
+	require.Equal(t, int64p(5), got.ConcurrencyLimit)
+
+	list, err := repo.List(ctx)
+	require.NoError(t, err)
+	for _, x := range list {
+		if x.ID != "pl" {
+			require.Nil(t, x.RPMLimit, "seeded package %s must follow the plan", x.ID)
+			require.Nil(t, x.ConcurrencyLimit, "seeded package %s must follow the plan", x.ID)
+		}
+	}
+}
+
+func TestTokenSubscriptionSetLimits(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.APIKeys().Create(ctx, APIKey{
+		ID: "key-l", TenantID: DefaultTenantID, Name: "token:l@example.com",
+		KeyHash: "h", LookupHash: "l", Display: "d", CreatedAt: time.Now(),
+	}))
+	require.NoError(t, db.PortalUsers().Upsert(ctx, PortalUser{
+		GoogleSub: "sub-l", Email: "l@example.com", KeyID: "key-l",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	tx, err := db.SQL().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.TokenSubscriptions().CreateOnTx(ctx, tx, TokenSubscription{
+		GoogleSub: "sub-l", KeyID: "key-l", ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}))
+	require.NoError(t, tx.Commit())
+
+	got, err := db.TokenSubscriptions().GetBySub(ctx, "sub-l")
+	require.NoError(t, err)
+	require.Nil(t, got.RPMLimit)
+	require.Nil(t, got.ConcurrencyLimit)
+
+	tx, err = db.SQL().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.TokenSubscriptions().SetLimitsOnTx(ctx, tx, "sub-l", int64p(120), int64p(10)))
+	require.ErrorIs(t, db.TokenSubscriptions().SetLimitsOnTx(ctx, tx, "nobody", nil, nil), ErrNotFound)
+	require.NoError(t, tx.Commit())
+	got, err = db.TokenSubscriptions().GetByKey(ctx, "key-l")
+	require.NoError(t, err)
+	require.Equal(t, int64p(120), got.RPMLimit)
+	require.Equal(t, int64p(10), got.ConcurrencyLimit)
+
+	tx, err = db.SQL().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.TokenSubscriptions().SetLimitsOnTx(ctx, tx, "sub-l", nil, int64p(4)))
+	require.NoError(t, tx.Commit())
+	all, err := db.TokenSubscriptions().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, all, 1)
+	require.Nil(t, all[0].RPMLimit)
+	require.Equal(t, int64p(4), all[0].ConcurrencyLimit)
+}
+
+func TestPaymentOrderTokenLimitsRoundTrip(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	o := sampleOrder("pl1")
+	o.Product = ProductToken
+	o.TokenPackageID = "p1"
+	o.TokenRPMLimit = int64p(120)
+	require.NoError(t, db.PaymentOrders().Create(ctx, o))
+	got, err := db.PaymentOrders().Get(ctx, "pl1")
+	require.NoError(t, err)
+	require.Equal(t, int64p(120), got.TokenRPMLimit)
+	require.Nil(t, got.TokenConcurrencyLimit)
+
+	old := sampleOrder("pl2")
+	require.NoError(t, db.PaymentOrders().Create(ctx, old))
+	got, err = db.PaymentOrders().Get(ctx, "pl2")
+	require.NoError(t, err)
+	require.Nil(t, got.TokenRPMLimit)
+	require.Nil(t, got.TokenConcurrencyLimit)
+}
