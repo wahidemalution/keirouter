@@ -268,9 +268,9 @@ func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.
 			return limits.EffectiveLimits{}, err
 		}
 		return limits.EffectiveLimits{
-			RPM:           plan.RPMLimit,
+			RPM:           ownOr(tokenState.rpm, plan.RPMLimit),
 			TPM:           plan.TPMLimit,
-			Concurrency:   plan.ConcurrencyLimit,
+			Concurrency:   ownOr(tokenState.concurrency, plan.ConcurrencyLimit),
 			AlwaysEnforce: tokenState.isToken,
 		}, nil
 	}
@@ -280,6 +280,15 @@ func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.
 		Concurrency:   s.cfg.Limits.DefaultConcurrency,
 		AlwaysEnforce: tokenState.isToken,
 	}, nil
+}
+
+// ownOr returns a token subscription's own limit, or the plan's when it has
+// none.
+func ownOr(own *int64, plan int64) int64 {
+	if own != nil {
+		return *own
+	}
+	return plan
 }
 
 // unaryChat runs a non-streaming request and renders the response.

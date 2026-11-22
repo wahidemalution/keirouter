@@ -89,12 +89,23 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 				"key", sub.KeyID, "order", order.ID, "used", used)
 			limit = used
 		}
-		state = tokenpkg.State{Exists: true, ExpiresAt: sub.ExpiresAt, UsedTokens: used, LimitTokens: limit}
+		state = tokenpkg.State{
+			Exists: true, ExpiresAt: sub.ExpiresAt, UsedTokens: used, LimitTokens: limit,
+			Limits: tokenpkg.Limits{RPM: sub.RPMLimit, Concurrency: sub.ConcurrencyLimit},
+		}
 	case !errors.Is(err, store.ErrNotFound):
 		return false, err
 	}
 
-	res, err := tokenpkg.Apply(state, pkg, tokenpkg.PlanLimits{}, now)
+	settings, err := tokenpkg.Load(ctx, s.db.Settings())
+	if err != nil {
+		return false, err
+	}
+	planLimits, err := s.tokenPlanLimits(ctx, settings.PlanID)
+	if err != nil {
+		return false, err
+	}
+	res, err := tokenpkg.Apply(state, pkg, planLimits, now)
 	if errors.Is(err, tokenpkg.ErrNoActivePackage) {
 		return s.markTokenOrderManualOnTx(ctx, tx, order, actor, "no active package", reason)
 	}
@@ -113,10 +124,6 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		return false, err
 	}
 	if !state.Exists {
-		settings, err := tokenpkg.Load(ctx, s.db.Settings())
-		if err != nil {
-			return false, err
-		}
 		if sub, bud, err = s.ensureTokenKeyOnTx(ctx, tx, order.GoogleSub, user.Email, settings); err != nil {
 			return false, err
 		}
@@ -125,6 +132,9 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 		return false, err
 	}
 	if err := s.db.TokenSubscriptions().SetExpiresOnTx(ctx, tx, order.GoogleSub, res.ExpiresAt); err != nil {
+		return false, err
+	}
+	if err := s.db.TokenSubscriptions().SetLimitsOnTx(ctx, tx, order.GoogleSub, res.Limits.RPM, res.Limits.Concurrency); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -137,6 +147,22 @@ func (s *Server) markTokenOrderPaid(ctx context.Context, order store.PaymentOrde
 	return true, nil
 }
 
+// tokenPlanLimits returns the token plan's key rate limits, the value a nil
+// subscription or package limit stands for. A missing plan reads as
+// unlimited, so a purchase still settles and its limits follow the plan
+// (requests fail on the missing plan until an admin restores it).
+func (s *Server) tokenPlanLimits(ctx context.Context, planID string) (tokenpkg.PlanLimits, error) {
+	plan, err := s.db.Plans().Get(ctx, planID)
+	if errors.Is(err, store.ErrNotFound) {
+		s.log.Error("token: token plan missing while applying a purchase", "plan", planID)
+		return tokenpkg.PlanLimits{}, nil
+	}
+	if err != nil {
+		return tokenpkg.PlanLimits{}, err
+	}
+	return tokenpkg.PlanLimits{RPM: plan.RPMLimit, Concurrency: plan.ConcurrencyLimit}, nil
+}
+
 // tokenOrderPackageOnTx returns what the order bought: the package copied at
 // checkout, or the live package for orders made before checkout copied it.
 // ok is false when such an old order's package was deleted.
@@ -145,6 +171,7 @@ func (s *Server) tokenOrderPackageOnTx(ctx context.Context, tx *sql.Tx, order st
 		return store.TokenPackage{
 			ID: order.TokenPackageID, Kind: store.TokenPackageKind(order.TokenKind),
 			Tokens: order.TokenAmount, Days: order.TokenDays, PriceIDR: order.AmountIDR,
+			RPMLimit: order.TokenRPMLimit, ConcurrencyLimit: order.TokenConcurrencyLimit,
 		}, true, nil
 	}
 	pkg, err := s.db.TokenPackages().GetOnTx(ctx, tx, order.TokenPackageID)

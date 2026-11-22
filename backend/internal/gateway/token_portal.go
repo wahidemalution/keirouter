@@ -361,6 +361,7 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 		IdempotencyKey: idem, Actor: "portal", CreatedAt: now, UpdatedAt: now,
 		ExpiresAt: expires, Product: store.ProductToken, TokenPackageID: pkg.ID,
 		TokenKind: string(pkg.Kind), TokenAmount: pkg.Tokens, TokenDays: pkg.Days,
+		TokenRPMLimit: pkg.RPMLimit, TokenConcurrencyLimit: pkg.ConcurrencyLimit,
 		TermsVersion: tokenpkg.TermsVersion, TermsAcceptedAt: now.UTC().Format(time.RFC3339),
 	}
 	if err := s.db.PaymentOrders().Create(ctx, o); err != nil {
