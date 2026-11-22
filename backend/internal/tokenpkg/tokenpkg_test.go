@@ -85,6 +85,10 @@ func TestApplyLimits(t *testing.T) {
 		{"active: days package leaves limits", active(lim(p(120), p(10))), days, plan, lim(p(120), p(10))},
 		{"active: unlimited plan beats package", active(lim(nil, nil)), tokens(lim(p(120), p(10))), PlanLimits{}, lim(nil, nil)},
 		{"active: unlimited plan beats stored limit", active(lim(p(120), p(10))), tokens(lim(nil, nil)), PlanLimits{}, lim(nil, nil)},
+		{"active: two below-plan limits keep their max", active(lim(p(30), p(2))), tokens(lim(p(30), p(1))), plan, lim(p(30), p(2))},
+		{"active: below-plan stored beats lower package", active(lim(p(30), p(2))), tokens(lim(p(20), p(1))), plan, lim(p(30), p(2))},
+		{"active: unlimited plan keeps own limits when both set", active(lim(p(120), p(10))), tokens(lim(p(30), p(2))), PlanLimits{}, lim(p(120), p(10))},
+		{"active: plan beats a lone below-plan package", active(lim(nil, nil)), tokens(lim(p(30), p(2))), plan, lim(nil, nil)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

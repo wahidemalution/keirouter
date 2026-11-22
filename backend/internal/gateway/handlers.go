@@ -283,9 +283,10 @@ func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.
 }
 
 // ownOr returns a token subscription's own limit, or the plan's when it has
-// none.
+// none. A stored value below 1 is never valid (the limiter reads 0 as
+// unlimited), so it falls back to the plan too.
 func ownOr(own *int64, plan int64) int64 {
-	if own != nil {
+	if own != nil && *own > 0 {
 		return *own
 	}
 	return plan

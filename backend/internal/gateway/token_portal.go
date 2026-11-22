@@ -409,7 +409,8 @@ func (s *Server) openTokenOrder(orders []store.PaymentOrder, pkg store.TokenPack
 			continue
 		}
 		if o.AmountIDR != pkg.PriceIDR || o.TokenKind != string(pkg.Kind) ||
-			o.TokenAmount != pkg.Tokens || o.TokenDays != pkg.Days {
+			o.TokenAmount != pkg.Tokens || o.TokenDays != pkg.Days ||
+			!sameLimit(o.TokenRPMLimit, pkg.RPMLimit) || !sameLimit(o.TokenConcurrencyLimit, pkg.ConcurrencyLimit) {
 			continue
 		}
 		if !found || o.CreatedAt.After(best.CreatedAt) {
@@ -460,4 +461,13 @@ func packageLimit(own *int64, plan any) any {
 		return *own
 	}
 	return plan
+}
+
+// sameLimit reports whether two optional limits are equal (both nil, or both
+// set to the same value).
+func sameLimit(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

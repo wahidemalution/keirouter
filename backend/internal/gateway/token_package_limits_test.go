@@ -11,6 +11,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/store"
+	"github.com/mydisha/keirouter/backend/internal/tokenpkg"
 )
 
 func i64(n int64) *int64 { return &n }
@@ -209,4 +210,44 @@ func TestPortalTokenPackagesPerPackageLimits(t *testing.T) {
 			require.Nil(t, m["concurrency_limit"], "an unlimited plan shows no number")
 		}
 	}
+}
+
+func TestPortalTokenOrderReuseNeedsMatchingLimits(t *testing.T) {
+	s, tok, calls := tokenPortalServer(t)
+	buy := func(idem string) string {
+		t.Helper()
+		rec := createTokenOrder(t, s, tok, `{"terms_version":"`+tokenpkg.TermsVersion+`","package_id":"tp-100m","idempotency_key":"`+idem+`"}`)
+		require.Less(t, rec.Code, 300, rec.Body.String())
+		var out map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+		return out["id"].(string)
+	}
+	first := buy("l1")
+	setPackageLimits(t, s, "tp-100m", i64(120), nil)
+	second := buy("l2")
+	require.NotEqual(t, first, second, "a new rpm limit needs a new order")
+	o, err := s.db.PaymentOrders().Get(t.Context(), second)
+	require.NoError(t, err)
+	require.Equal(t, i64(120), o.TokenRPMLimit)
+	require.Equal(t, second, buy("l3"), "unchanged limits reuse the open order")
+
+	setPackageLimits(t, s, "tp-100m", i64(120), i64(4))
+	third := buy("l4")
+	require.NotEqual(t, second, third, "a new concurrency limit needs a new order")
+	setPackageLimits(t, s, "tp-100m", nil, i64(4))
+	require.NotEqual(t, third, buy("l5"), "clearing a limit needs a new order")
+	require.EqualValues(t, 4, calls.Load())
+}
+
+func TestTokenStoredZeroLimitFollowsPlan(t *testing.T) {
+	s, payg := newTokenTestServer(t)
+	require.True(t, payTokenOrder(t, s, payg, "o1", "tp-100m"))
+	tx, err := s.db.SQL().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	require.NoError(t, s.db.TokenSubscriptions().SetLimitsOnTx(t.Context(), tx, tokenTestSub, i64(0), i64(-1)))
+	require.NoError(t, tx.Commit())
+	ts, err := s.db.TokenSubscriptions().GetBySub(t.Context(), tokenTestSub)
+	require.NoError(t, err)
+	s.invalidateTokenSub(ts.KeyID)
+	requireLimits(t, tokenKeyLimits(t, s, tokenTestSub), 60, 3)
 }

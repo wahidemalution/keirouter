@@ -146,23 +146,27 @@ func Apply(st State, p store.TokenPackage, plan PlanLimits, now time.Time) (Resu
 	return Result{}, fmt.Errorf("%w: %q", errUnknownKind, p.Kind)
 }
 
-// stack returns the higher of two limits, reading nil as the plan's value.
-// It returns nil when the plan's value is the highest (ties included), so the
-// subscription keeps following the plan if the admin changes it later. A
-// plan value of 0 is unlimited and beats any number.
+// stack returns the higher of two limits, reading nil as the plan's value
+// (plan 0 is unlimited and beats any number). When both are set it returns
+// the larger, even if both sit below the plan. When the plan's value wins
+// (ties included) it returns nil, so the subscription keeps following the
+// plan if the admin changes it later.
 func stack(old, pkg *int64, plan int64) *int64 {
-	if plan <= 0 {
+	switch {
+	case old == nil && pkg == nil:
+		return nil
+	case old != nil && pkg != nil:
+		n := max(*old, *pkg)
+		return &n
+	}
+	own := old
+	if own == nil {
+		own = pkg
+	}
+	if plan <= 0 || plan >= *own {
 		return nil
 	}
-	best := plan
-	var out *int64
-	for _, v := range []*int64{old, pkg} {
-		if v != nil && *v > best {
-			best = *v
-			out = clone(v)
-		}
-	}
-	return out
+	return clone(own)
 }
 
 func clone(v *int64) *int64 {
