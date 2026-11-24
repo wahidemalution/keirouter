@@ -115,6 +115,10 @@ func sanitizeUpstreamError(err error) string {
 	}
 
 	pe := core.AsProviderError(err)
+	// A coded error is a KeiRouter-local rejection whose Message we wrote.
+	if pe.Code != "" && pe.Message != "" {
+		return pe.Message
+	}
 	switch pe.Kind {
 	case core.ErrBadRequest:
 		return "upstream provider rejected the request"

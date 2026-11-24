@@ -10,6 +10,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/mydisha/keirouter/backend/internal/consolelog"
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/pipeline"
 )
 
 func finals(buf *consolelog.Buffer) []consolelog.Entry {
@@ -115,3 +116,26 @@ func TestTraceSuccessSummary(t *testing.T) {
 type errBrokenPipe struct{}
 
 func (errBrokenPipe) Error() string { return "write: broken pipe" }
+
+// A key's own limit is labeled as KeiRouter's limit in the console, not as a
+// provider throttling the request.
+func TestTraceKeyLimitIsNotProviderRateLimit(t *testing.T) {
+	buf := consolelog.New()
+	tr := newReqTrace(buf, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil))
+	tr.setRequest("gpt-6.1-sol", true)
+	tr.complete(outcome{err: &core.ProviderError{
+		Kind: core.ErrRateLimit, Code: pipeline.CodeConcurrencyLimitExceeded,
+		Message: "Batas API key tercapai: maksimal 3 permintaan berjalan bersamaan.", RetryAfter: time.Second,
+	}})
+
+	e := finals(buf)[0]
+	if e.Status != 429 || e.Level != "WARN" {
+		t.Fatalf("entry = %+v", e)
+	}
+	if strings.Contains(e.Message, "rate-limited by") || !strings.Contains(e.Message, "API key concurrency limit") {
+		t.Fatalf("message = %q", e.Message)
+	}
+	if strings.Contains(e.Hint, "provider is throttling") || !strings.Contains(e.Hint, "plan") {
+		t.Fatalf("hint = %q", e.Hint)
+	}
+}

@@ -354,6 +354,8 @@ func TestTokenKeyRateLimitedWhenGlobalLimitsOff(t *testing.T) {
 			resp = h.post(t, c.path, c.body, tokenKey)
 			body = readAllString(t, resp)
 			require.Equal(t, http.StatusTooManyRequests, resp.StatusCode, body)
+			require.Contains(t, body, "maksimal 1 permintaan per menit", "the key's own limit, not the upstream's")
+			require.NotContains(t, body, "upstream")
 
 			for range 3 {
 				resp := h.post(t, "/v1/chat/completions", `{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}`, h.apiKey)

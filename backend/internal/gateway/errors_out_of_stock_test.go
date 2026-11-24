@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/pipeline"
 )
 
 // The client sees the real condition (503, out of stock, retry in 15s) with no
@@ -76,4 +78,36 @@ func TestDiscountFloorErrorsSuggestFallback(t *testing.T) {
 	require.Contains(t, errDiscountFloor("m", 30).Error(), "turn on the final fallback")
 	notMet := &core.ProviderError{Kind: core.ErrMinDiscountNotMet}
 	require.Contains(t, sanitizeUpstreamError(notMet), "turn on the final fallback")
+}
+
+// A key's own limit is shown with KeiRouter's message and code on every
+// client path: the JSON error, a stream error event, and a committed stream.
+func TestKeyLimitErrorReachesClient(t *testing.T) {
+	pe := &core.ProviderError{
+		Kind:       core.ErrRateLimit,
+		Code:       pipeline.CodeConcurrencyLimitExceeded,
+		Message:    "Batas API key tercapai: maksimal 3 permintaan berjalan bersamaan.",
+		RetryAfter: time.Second,
+	}
+
+	rec := httptest.NewRecorder()
+	(&Server{}).writeProviderErrorAs(rec, core.DialectOpenAI, pe)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	require.Equal(t, "1", rec.Header().Get("Retry-After"))
+	require.Contains(t, rec.Body.String(), "maksimal 3 permintaan")
+	require.Contains(t, rec.Body.String(), pipeline.CodeConcurrencyLimitExceeded)
+	require.NotContains(t, rec.Body.String(), "upstream")
+
+	require.Equal(t, pe.Message, sanitizeUpstreamError(pe))
+
+	event := string(committedStreamErrorEvent(core.DialectOpenAI, pe))
+	require.Contains(t, event, "maksimal 3 permintaan")
+	require.Contains(t, event, pipeline.CodeConcurrencyLimitExceeded)
+	require.NotContains(t, event, "upstream")
+}
+
+// A provider's own 429 keeps the generic upstream wording.
+func TestProviderRateLimitStaysUpstream(t *testing.T) {
+	pe := &core.ProviderError{Kind: core.ErrRateLimit, Provider: "a6api", StatusCode: 429, Message: "raw upstream body"}
+	require.Equal(t, "upstream provider rate limit exceeded", sanitizeUpstreamError(pe))
 }

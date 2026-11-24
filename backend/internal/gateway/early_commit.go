@@ -97,12 +97,19 @@ func committedStreamErrorEvent(dialect core.Dialect, pe *core.ProviderError) []b
 			"error": map[string]any{"code": status, "message": message, "status": googleStatusName(status)},
 		}
 	default:
-		code := string(pe.Kind)
+		code := pe.Code
+		if code == "" {
+			code = string(pe.Kind)
+		}
 		if code == "" {
 			code = "upstream_error"
 		}
+		errType := "upstream_error"
+		if pe.Code != "" {
+			errType = errorType(status)
+		}
 		payload = map[string]any{
-			"error": map[string]any{"message": message, "type": "upstream_error", "code": code},
+			"error": map[string]any{"message": message, "type": errType, "code": code},
 		}
 	}
 	body, _ := json.Marshal(payload)
