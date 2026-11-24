@@ -260,7 +260,7 @@ func (t *reqTrace) fail(e *consolelog.Entry, model string, o outcome) {
 	}
 	e.Status = providerErrorStatus(pe)
 	e.Level = "ERROR"
-	if clientSideFailure(pe.Kind) {
+	if clientSideFailure(pe.Kind) || pipeline.IsKeyLimitCode(pe.Code) {
 		e.Level = "WARN"
 	}
 	e.Message = fmt.Sprintf("Failed · %s · %s", model, failureReason(pe, e.Provider))
@@ -282,6 +282,22 @@ func clientSideFailure(kind core.ErrorKind) bool {
 	return false
 }
 
+// keyLimitLabel names the key limit a rejection code stands for, or "" when
+// the code is not a key-limit code.
+func keyLimitLabel(code string) string {
+	switch code {
+	case pipeline.CodeConcurrencyLimitExceeded:
+		return "concurrency"
+	case pipeline.CodeRPMLimitExceeded:
+		return "RPM"
+	case pipeline.CodeTPMLimitExceeded:
+		return "TPM"
+	case pipeline.CodeKeyRateLimitExceeded:
+		return "rate"
+	}
+	return ""
+}
+
 // failureReason is the short, inline cause of a provider error.
 func failureReason(pe *core.ProviderError, provider string) string {
 	if provider == "" {
@@ -298,6 +314,9 @@ func failureReason(pe *core.ProviderError, provider string) string {
 	case core.ErrAuth:
 		return provider + " rejected the credentials" + status
 	case core.ErrRateLimit:
+		if label := keyLimitLabel(pe.Code); label != "" {
+			return "API key " + label + " limit reached (KeiRouter, not the provider)"
+		}
 		return "rate-limited by " + provider + status
 	case core.ErrQuotaExhausted:
 		if pe.CreditsExhausted {
@@ -345,6 +364,10 @@ func failureHint(pe *core.ProviderError) string {
 	case core.ErrAuth:
 		h = "The provider refused the account's credentials (expired token, revoked key, or wrong region). Reconnect or update the account on the Providers page."
 	case core.ErrRateLimit:
+		if pipeline.IsKeyLimitCode(pe.Code) {
+			h = "KeiRouter refused the request before routing: the API key hit the RPM, TPM or concurrency limit of its plan or token package. Nothing reached the provider and nothing was cooled down. Raise the limit on the plan or token package, or have the client send fewer parallel requests."
+			break
+		}
 		h = "The provider is throttling this account. KeiRouter cooled it down and moves to other accounts or fallbacks; add accounts or a fallback chain if this keeps happening."
 	case core.ErrQuotaExhausted:
 		if pe.CreditsExhausted {

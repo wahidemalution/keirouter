@@ -1702,10 +1702,46 @@ func failedUsageTokens(u core.Usage) int64 {
 	return limits.Refund
 }
 
+// Client error codes for a request refused by the API key's own RPM, TPM or
+// concurrency limit (from its plan or token package). They tell the client
+// the limit is KeiRouter's, so it is not mistaken for an upstream 429.
+const (
+	CodeConcurrencyLimitExceeded = "concurrency_limit_exceeded"
+	CodeRPMLimitExceeded         = "rpm_limit_exceeded"
+	CodeTPMLimitExceeded         = "tpm_limit_exceeded"
+	CodeKeyRateLimitExceeded     = "key_rate_limit_exceeded"
+)
+
+// IsKeyLimitCode reports whether code marks a rejection by the key's own limit.
+func IsKeyLimitCode(code string) bool {
+	switch code {
+	case CodeConcurrencyLimitExceeded, CodeRPMLimitExceeded, CodeTPMLimitExceeded, CodeKeyRateLimitExceeded:
+		return true
+	}
+	return false
+}
+
 func rateLimitError(decision limits.Decision) *core.ProviderError {
+	code, detail := CodeKeyRateLimitExceeded, "batas laju permintaan tercapai"
+	switch decision.LimitKind {
+	case "concurrency":
+		code = CodeConcurrencyLimitExceeded
+		detail = fmt.Sprintf("maksimal %d permintaan berjalan bersamaan. Tunggu permintaan lain selesai, atau kurangi permintaan paralel di client", decision.Limit)
+	case "rpm":
+		code = CodeRPMLimitExceeded
+		detail = fmt.Sprintf("maksimal %d permintaan per menit", decision.Limit)
+	case "tpm":
+		code = CodeTPMLimitExceeded
+		detail = fmt.Sprintf("maksimal %d token per menit", decision.Limit)
+	}
+	msg := "Batas API key tercapai (dari paket atau plan key ini, bukan dari provider): " + detail + "."
+	if secs := int(math.Ceil(decision.RetryAfter.Seconds())); secs > 0 {
+		msg += fmt.Sprintf(" Coba lagi dalam %d detik.", secs)
+	}
 	return &core.ProviderError{
 		Kind:       core.ErrRateLimit,
-		Message:    decision.Reason,
+		Code:       code,
+		Message:    msg,
 		RetryAfter: decision.RetryAfter,
 	}
 }
