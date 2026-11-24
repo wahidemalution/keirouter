@@ -27,24 +27,74 @@ func TestApply(t *testing.T) {
 		want    Result
 		wantErr error
 	}{
-		{"none + tokens", State{}, pkg100, Result{now.Add(15 * day), 100 * m}, nil},
-		{"active + tokens", active, pkg100, Result{now.Add(5 * day), 200 * m}, nil},
-		{"expired + tokens drops leftover", expired, pkg100, Result{now.Add(15 * day), 130 * m}, nil},
-		{"active + days", active, days15, Result{now.Add(20 * day), 100 * m}, nil},
+		{"none + tokens", State{}, pkg100, Result{ExpiresAt: now.Add(15 * day), LimitTokens: 100 * m}, nil},
+		{"active + tokens", active, pkg100, Result{ExpiresAt: now.Add(5 * day), LimitTokens: 200 * m}, nil},
+		{"expired + tokens drops leftover", expired, pkg100, Result{ExpiresAt: now.Add(15 * day), LimitTokens: 130 * m}, nil},
+		{"active + days", active, days15, Result{ExpiresAt: now.Add(20 * day), LimitTokens: 100 * m}, nil},
 		{"expired + days", expired, days15, Result{}, ErrNoActivePackage},
 		{"none + days", State{}, days15, Result{}, ErrNoActivePackage},
-		{"boundary is expired", State{Exists: true, ExpiresAt: now, UsedTokens: 10 * m, LimitTokens: 100 * m}, pkg100, Result{now.Add(15 * day), 110 * m}, nil},
+		{"boundary is expired", State{Exists: true, ExpiresAt: now, UsedTokens: 10 * m, LimitTokens: 100 * m}, pkg100, Result{ExpiresAt: now.Add(15 * day), LimitTokens: 110 * m}, nil},
 		{"unknown kind", State{}, store.TokenPackage{Kind: "x"}, Result{}, errUnknownKind},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Apply(tt.st, tt.pkg, now)
+			got, err := Apply(tt.st, tt.pkg, PlanLimits{RPM: 60, Concurrency: 3}, now)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestApplyLimits(t *testing.T) {
+	now := time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	p := func(n int64) *int64 { return &n }
+	lim := func(rpm, conc *int64) Limits { return Limits{RPM: rpm, Concurrency: conc} }
+	tokens := func(l Limits) store.TokenPackage {
+		return store.TokenPackage{Kind: store.TokenPackageTokens, Tokens: 1_000_000, Days: 15, RPMLimit: l.RPM, ConcurrencyLimit: l.Concurrency}
+	}
+	days := store.TokenPackage{Kind: store.TokenPackageDays, Days: 15, RPMLimit: p(500), ConcurrencyLimit: p(50)}
+	active := func(l Limits) State {
+		return State{Exists: true, ExpiresAt: now.Add(5 * day), LimitTokens: 1_000_000, Limits: l}
+	}
+	expired := func(l Limits) State {
+		return State{Exists: true, ExpiresAt: now.Add(-time.Hour), LimitTokens: 1_000_000, Limits: l}
+	}
+	plan := PlanLimits{RPM: 60, Concurrency: 3}
+
+	tests := []struct {
+		name string
+		st   State
+		pkg  store.TokenPackage
+		plan PlanLimits
+		want Limits
+	}{
+		{"active: package raises plan-following key", active(lim(nil, nil)), tokens(lim(p(120), p(10))), plan, lim(p(120), p(10))},
+		{"active: smaller package keeps highest", active(lim(p(120), p(10))), tokens(lim(p(30), p(2))), plan, lim(p(120), p(10))},
+		{"active: plan-following package keeps highest", active(lim(p(120), p(10))), tokens(lim(nil, nil)), plan, lim(p(120), p(10))},
+		{"active: general wins stores nil", active(lim(p(30), p(2))), tokens(lim(nil, nil)), plan, lim(nil, nil)},
+		{"active: tie with plan stores nil", active(lim(p(60), p(3))), tokens(lim(nil, nil)), plan, lim(nil, nil)},
+		{"active: fields stack independently", active(lim(p(120), nil)), tokens(lim(p(30), p(10))), plan, lim(p(120), p(10))},
+		{"expired: new period takes package limits", expired(lim(p(120), p(10))), tokens(lim(p(30), p(2))), plan, lim(p(30), p(2))},
+		{"expired: plan-following package resets to plan", expired(lim(p(120), p(10))), tokens(lim(nil, nil)), plan, lim(nil, nil)},
+		{"none: package limits taken as-is", State{}, tokens(lim(p(30), nil)), plan, lim(p(30), nil)},
+		{"active: days package leaves limits", active(lim(p(120), p(10))), days, plan, lim(p(120), p(10))},
+		{"active: unlimited plan beats package", active(lim(nil, nil)), tokens(lim(p(120), p(10))), PlanLimits{}, lim(nil, nil)},
+		{"active: unlimited plan beats stored limit", active(lim(p(120), p(10))), tokens(lim(nil, nil)), PlanLimits{}, lim(nil, nil)},
+		{"active: two below-plan limits keep their max", active(lim(p(30), p(2))), tokens(lim(p(30), p(1))), plan, lim(p(30), p(2))},
+		{"active: below-plan stored beats lower package", active(lim(p(30), p(2))), tokens(lim(p(20), p(1))), plan, lim(p(30), p(2))},
+		{"active: unlimited plan keeps own limits when both set", active(lim(p(120), p(10))), tokens(lim(p(30), p(2))), PlanLimits{}, lim(p(120), p(10))},
+		{"active: plan beats a lone below-plan package", active(lim(nil, nil)), tokens(lim(p(30), p(2))), plan, lim(nil, nil)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Apply(tt.st, tt.pkg, tt.plan, now)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got.Limits)
 		})
 	}
 }

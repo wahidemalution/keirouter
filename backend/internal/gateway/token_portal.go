@@ -61,10 +61,18 @@ func (s *Server) handlePortalTokenPackages(w http.ResponseWriter, r *http.Reques
 		if !p.Enabled {
 			continue
 		}
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id": p.ID, "name": p.Name, "kind": string(p.Kind), "tokens": p.Tokens,
 			"days": p.Days, "price_idr": p.PriceIDR, "featured": p.Featured,
-		})
+			"rpm_limit": nil, "concurrency_limit": nil,
+		}
+		if p.Kind == store.TokenPackageTokens {
+			// The key limits a buyer gets from this package: its own, else
+			// the plan's; null when unlimited.
+			item["rpm_limit"] = packageLimit(p.RPMLimit, rpm)
+			item["concurrency_limit"] = packageLimit(p.ConcurrencyLimit, concurrency)
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"on_sale": s.tokenOnSale(st), "packages": out, "models": models,
@@ -361,6 +369,7 @@ func (s *Server) handlePortalCreateTokenOrder(w http.ResponseWriter, r *http.Req
 		IdempotencyKey: idem, Actor: "portal", CreatedAt: now, UpdatedAt: now,
 		ExpiresAt: expires, Product: store.ProductToken, TokenPackageID: pkg.ID,
 		TokenKind: string(pkg.Kind), TokenAmount: pkg.Tokens, TokenDays: pkg.Days,
+		TokenRPMLimit: pkg.RPMLimit, TokenConcurrencyLimit: pkg.ConcurrencyLimit,
 		TermsVersion: tokenpkg.TermsVersion, TermsAcceptedAt: now.UTC().Format(time.RFC3339),
 	}
 	if err := s.db.PaymentOrders().Create(ctx, o); err != nil {
@@ -400,7 +409,8 @@ func (s *Server) openTokenOrder(orders []store.PaymentOrder, pkg store.TokenPack
 			continue
 		}
 		if o.AmountIDR != pkg.PriceIDR || o.TokenKind != string(pkg.Kind) ||
-			o.TokenAmount != pkg.Tokens || o.TokenDays != pkg.Days {
+			o.TokenAmount != pkg.Tokens || o.TokenDays != pkg.Days ||
+			!sameLimit(o.TokenRPMLimit, pkg.RPMLimit) || !sameLimit(o.TokenConcurrencyLimit, pkg.ConcurrencyLimit) {
 			continue
 		}
 		if !found || o.CreatedAt.After(best.CreatedAt) {
@@ -442,4 +452,22 @@ func (s *Server) handlePortalListTokenOrders(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// packageLimit returns a package's own limit, or the plan's (nil when the
+// plan is unlimited) when it has none.
+func packageLimit(own *int64, plan any) any {
+	if own != nil {
+		return *own
+	}
+	return plan
+}
+
+// sameLimit reports whether two optional limits are equal (both nil, or both
+// set to the same value).
+func sameLimit(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }

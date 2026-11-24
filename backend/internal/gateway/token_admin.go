@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -91,7 +93,30 @@ func tokenPackageView(p store.TokenPackage) map[string]any {
 	return map[string]any{
 		"id": p.ID, "name": p.Name, "kind": string(p.Kind), "tokens": p.Tokens, "days": p.Days,
 		"price_idr": p.PriceIDR, "enabled": p.Enabled, "featured": p.Featured, "sort": p.Sort,
+		"rpm_limit": p.RPMLimit, "concurrency_limit": p.ConcurrencyLimit,
 	}
+}
+
+// optionalLimit is a package limit field in a request: absent keeps the
+// stored value, null clears it (the package follows the token plan), and a
+// number sets it.
+type optionalLimit struct {
+	set   bool
+	value *int64
+}
+
+func (o *optionalLimit) UnmarshalJSON(b []byte) error {
+	o.set = true
+	if string(b) == "null" {
+		o.value = nil
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	o.value = &n
+	return nil
 }
 
 type tokenPackageRequest struct {
@@ -103,6 +128,9 @@ type tokenPackageRequest struct {
 	Enabled  *bool  `json:"enabled"`
 	Featured *bool  `json:"featured"`
 	Sort     int    `json:"sort"`
+	// RPMLimit and ConcurrencyLimit are the package's own key limits.
+	RPMLimit         optionalLimit `json:"rpm_limit"`
+	ConcurrencyLimit optionalLimit `json:"concurrency_limit"`
 }
 
 // apply validates body and writes it onto p. A days package carries no
@@ -118,6 +146,14 @@ func (body tokenPackageRequest) apply(p *store.TokenPackage) error {
 	if body.PriceIDR <= 0 {
 		return errors.New("price_idr must be positive")
 	}
+	for _, l := range []struct {
+		field string
+		v     optionalLimit
+	}{{"rpm_limit", body.RPMLimit}, {"concurrency_limit", body.ConcurrencyLimit}} {
+		if l.v.value != nil && *l.v.value < 1 {
+			return fmt.Errorf("%s must be at least 1, or null to follow the token plan", l.field)
+		}
+	}
 	kind := store.TokenPackageKind(body.Kind)
 	switch kind {
 	case store.TokenPackageTokens:
@@ -125,8 +161,16 @@ func (body tokenPackageRequest) apply(p *store.TokenPackage) error {
 			return errors.New("tokens must be positive for a tokens package")
 		}
 		p.Tokens = body.Tokens
+		if body.RPMLimit.set {
+			p.RPMLimit = body.RPMLimit.value
+		}
+		if body.ConcurrencyLimit.set {
+			p.ConcurrencyLimit = body.ConcurrencyLimit.value
+		}
 	case store.TokenPackageDays:
+		// A days package only extends time, so it carries no limits.
 		p.Tokens = 0
+		p.RPMLimit, p.ConcurrencyLimit = nil, nil
 	default:
 		return errors.New("kind must be tokens or days")
 	}

@@ -20,7 +20,10 @@ type tokenSubEntry struct {
 	// planID is the configured token plan when isToken; its allowed models
 	// are the key's whitelist.
 	planID string
-	loaded time.Time
+	// rpm and concurrency are the subscription's own key limits; nil
+	// follows the plan.
+	rpm, concurrency *int64
+	loaded           time.Time
 }
 
 // tokenSubCache keeps the per-key expiry lookup off the request hot path. The
@@ -53,7 +56,10 @@ func (s *Server) tokenKeyState(ctx context.Context, key store.APIKey) (tokenSubE
 	sub, err := s.db.TokenSubscriptions().GetByKey(ctx, keyID)
 	switch {
 	case err == nil:
-		ent = tokenSubEntry{expiresAt: sub.ExpiresAt, isToken: true, loaded: now}
+		ent = tokenSubEntry{
+			expiresAt: sub.ExpiresAt, isToken: true, loaded: now,
+			rpm: sub.RPMLimit, concurrency: sub.ConcurrencyLimit,
+		}
 	case errors.Is(err, store.ErrNotFound):
 		// A zero expiry is always in the past.
 		ent = tokenSubEntry{loaded: now}

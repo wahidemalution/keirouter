@@ -2271,6 +2271,9 @@ export interface TokenPackage {
   enabled: boolean;
   featured: boolean;
   sort: number;
+  /** The package's own key limit; null follows the token plan. Always null for a days package. */
+  rpm_limit: number | null;
+  concurrency_limit: number | null;
 }
 
 export interface TokenPackageInput {
@@ -2282,6 +2285,9 @@ export interface TokenPackageInput {
   enabled: boolean;
   featured: boolean;
   sort: number;
+  /** null follows the token plan. */
+  rpm_limit: number | null;
+  concurrency_limit: number | null;
 }
 
 export interface TokenOverview {
