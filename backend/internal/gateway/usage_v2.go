@@ -198,6 +198,7 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 			"cache_write_tokens":     record.CacheWriteTokens,
 			"reasoning_tokens":       record.ReasoningTokens,
 			"tokens":                 record.PromptTokens + record.CompletionTokens,
+			"image_count":            record.ImageCount,
 			"cost_usd":               nanosToUSD(record.CostNanos),
 			"input_cost_usd":         nanosToUSD(record.InputCostNanos),
 			"cached_cost_usd":        nanosToUSD(record.CachedCostNanos),

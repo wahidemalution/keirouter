@@ -536,8 +536,14 @@ export function RecentRequestsSection({ recent, days: _days }: { recent: PortalR
                       <span className="truncate font-mono text-[12.5px] text-fg">{r.model}</span>
                     </div>
                   </td>
-                  <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.prompt_tokens)}</td>
-                  <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.completion_tokens)}</td>
+                  {(r.image_count ?? 0) > 0 ? (
+                    <td colSpan={2} className={`${TD} text-right tabular-nums text-fg`}>{r.image_count} gambar</td>
+                  ) : (
+                    <>
+                      <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.prompt_tokens)}</td>
+                      <td className={`${TD} text-right font-mono text-[12.5px] tabular-nums text-fg`}>{formatTokens(r.completion_tokens)}</td>
+                    </>
+                  )}
                   <td className={`${TD} max-w-48 truncate text-fg`} title={r.provider_name || r.provider}>
                     {r.provider_name || r.provider}
                   </td>

@@ -1719,6 +1719,7 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,
 			"completion_tokens": rec.CompletionTokens,
+			"image_count":       rec.ImageCount,
 			"cost_usd":          recordCostUSD(rec),
 			"cache_hit":         rec.CacheHit,
 			"latency_ms":        rec.LatencyMS,

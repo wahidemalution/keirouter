@@ -30,6 +30,7 @@ type AccurateRecentRecord struct {
 	SlimActive, CavemanActive, TerseActive                         bool
 	HeadroomTokensSaved, HeadroomBytesSaved                        int
 	HeadroomActive, PonytailActive                                 bool
+	ImageCount                                                     int
 	CreatedAt                                                      time.Time
 }
 
@@ -48,7 +49,7 @@ func (r *UsageRepo) RecentAccurate(ctx context.Context, tenantID string, since t
 			cache_write_rate_per_m, output_rate_per_m, reasoning_rate_per_m, fallback_rate_per_m,
 			cache_hit, latency_ms, upstream_latency_ms, end_to_end_latency_ms, ttft_ms,
 			slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
-			headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active, created_at
+			headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active, image_count, created_at
 		FROM usage_records
 		WHERE tenant_id=? AND created_at>=?
 		ORDER BY created_at DESC LIMIT ?`)
@@ -75,7 +76,7 @@ func (r *UsageRepo) RecentAccurate(ctx context.Context, tenantID string, since t
 			&rec.OutputRatePerM, &rec.ReasoningRatePerM, &rec.FallbackRatePerM,
 			&cacheHit, &rec.LatencyMS, &rec.UpstreamLatencyMS, &rec.EndToEndLatencyMS, &rec.TTFTMS,
 			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &slim, &caveman, &terse,
-			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroom, &ponytail, &createdAt); err != nil {
+			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroom, &ponytail, &rec.ImageCount, &createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0

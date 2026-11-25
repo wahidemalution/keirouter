@@ -745,6 +745,33 @@ func TestPortalUsageRecentCostKeepsNanoPrecision(t *testing.T) {
 	require.InDelta(t, 0.00000125, recent[0]["cost_usd"], 1e-15)
 }
 
+// TestPortalUsageRecentCarriesImageCount lets the portal request log show an
+// image request as "N gambar" instead of its (zero) token counts.
+func TestPortalUsageRecentCarriesImageCount(t *testing.T) {
+	srv := newPortalTestServer(t)
+	ctx := context.Background()
+	issued, err := srv.identity.Create(ctx, store.DefaultTenantID, "", "portal-key")
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, srv.usage.Record(ctx, store.UsageRecord{
+		ID: "img", TenantID: store.DefaultTenantID, APIKeyID: issued.Record.ID,
+		Provider: "openai", Model: "gpt-image-1", Status: "success",
+		ImageCount: 3, CreatedAt: now,
+	}))
+	require.NoError(t, srv.usage.Record(ctx, store.UsageRecord{
+		ID: "chat", TenantID: store.DefaultTenantID, APIKeyID: issued.Record.ID,
+		Provider: "openai", Model: "gpt-4o", Status: "success",
+		PromptTokens: 5, CompletionTokens: 7, CreatedAt: now.Add(-time.Minute),
+	}))
+	payload, err := srv.buildKeyUsageMap(ctx, issued.Record, 30)
+	require.NoError(t, err)
+	recent := payload["recent"].([]map[string]any)
+	require.Len(t, recent, 2)
+	require.Equal(t, "img", recent[0]["id"])
+	require.Equal(t, 3, recent[0]["image_count"])
+	require.Equal(t, 0, recent[1]["image_count"])
+}
+
 // The signed-in user reads and sets their key's discount floor; values outside
 // 0..95 are refused.
 func TestPortalDiscountFloor(t *testing.T) {

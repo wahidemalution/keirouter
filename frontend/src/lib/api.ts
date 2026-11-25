@@ -716,6 +716,8 @@ export interface RecentActivity {
   cache_write_tokens: number;
   reasoning_tokens: number;
   tokens: number;
+  /** Images generated; above 0 the row is an image request, not tokens. */
+  image_count?: number;
   cost_usd: number;
   input_cost_usd: number;
   cached_cost_usd: number;
@@ -1975,6 +1977,8 @@ export interface PortalRecentRequest {
   model: string;
   prompt_tokens: number;
   completion_tokens: number;
+  /** Images generated; above 0 the row is an image request, not tokens. */
+  image_count?: number;
   cost_usd: number;
   cache_hit: boolean;
   latency_ms: number;
@@ -4196,4 +4200,81 @@ export function createPortalTokenOrder(input: {
 
 export function listPortalTokenOrders(): Promise<PortalTokenOrder[]> {
   return portalTokenJSON("/portal/api/token/orders", undefined, "Failed to load orders");
+}
+
+// ─── Portal image generation ────────────────────────────────────────────────
+
+export type PortalImageFamily = "gpt-image" | "grok-imagine" | "gemini-image";
+
+/** One image chain the portal user may call, priced per image in micro-USD. */
+export interface PortalImageModel {
+  chain_id: string;
+  name: string;
+  family: PortalImageFamily;
+  price_micro: number;
+  /** Present only when a 2K image costs more than a standard one. */
+  price_2k_micro?: number;
+}
+
+export interface PortalImageJob {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  /** A fixed, user-safe Indonesian sentence; shown as is. */
+  error: string;
+  prompt: string;
+  params: { chain_id: string; size: string; aspect_ratio: string; resolution: string; n: number };
+  image_count: number;
+  cost_micro: number;
+  created_at: string;
+  finished_at: string | null;
+  expires_at: string | null;
+  files: { id: string; url: string }[];
+}
+
+export interface CreatePortalImageInput {
+  chain_id: string;
+  prompt: string;
+  n: number;
+  size: string;
+  aspect_ratio: string;
+  resolution: string;
+}
+
+// The image endpoints answer {"error":"<code>"}; older helpers on the same
+// routes answer {"error":{"message"}}. Both become a PortalAPIError.
+async function portalImageError(resp: Response, fallback: string): Promise<PortalAPIError> {
+  const data = await resp.json().catch(() => ({}));
+  const err = data?.error;
+  if (typeof err === "string") return new PortalAPIError(resp.status, fallback, err);
+  return new PortalAPIError(resp.status, err?.message || fallback, err?.code);
+}
+
+async function portalImageJSON<T>(path: string, init: RequestInit | undefined, fallback: string): Promise<T> {
+  const resp = await fetch(path, init);
+  if (!resp.ok) throw await portalImageError(resp, fallback);
+  return resp.json();
+}
+
+export async function fetchPortalImageModels(): Promise<PortalImageModel[]> {
+  const data = await portalImageJSON<{ models: PortalImageModel[] | null }>("/portal/api/images/models", undefined, "Gagal memuat model gambar");
+  return data.models ?? [];
+}
+
+export async function fetchPortalImageJobs(limit = 50): Promise<PortalImageJob[]> {
+  const data = await portalImageJSON<{ jobs: PortalImageJob[] | null }>(`/portal/api/images?limit=${limit}`, undefined, "Gagal memuat riwayat gambar");
+  return data.jobs ?? [];
+}
+
+export async function createPortalImage(input: CreatePortalImageInput): Promise<PortalImageJob> {
+  const data = await portalImageJSON<{ job: PortalImageJob }>(
+    "/portal/api/images",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    "Gagal membuat gambar",
+  );
+  return data.job;
+}
+
+export async function deletePortalImage(jobId: string): Promise<void> {
+  const resp = await fetch(`/portal/api/images/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+  if (!resp.ok) throw await portalImageError(resp, "Gagal menghapus gambar");
 }

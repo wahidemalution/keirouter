@@ -1040,10 +1040,14 @@ function RecentRequests({
                     <span className="mt-1.5 flex flex-wrap gap-x-1.5 text-[12px] tabular-nums text-fg-muted">
                       <span title={formatDateTime(r.created_at)}>{relativeTime(r.created_at)}</span>
                       <span aria-hidden="true">·</span>
-                      <span>
-                        {fmtCompact(r.prompt_tokens)} → {fmtCompact(r.completion_tokens)}
-                        <span className="sr-only"> tokens in and out</span>
-                      </span>
+                      {(r.image_count ?? 0) > 0 ? (
+                        <span>{r.image_count} gambar</span>
+                      ) : (
+                        <span>
+                          {fmtCompact(r.prompt_tokens)} → {fmtCompact(r.completion_tokens)}
+                          <span className="sr-only"> tokens in and out</span>
+                        </span>
+                      )}
                       <span aria-hidden="true">·</span>
                       <span className={cn(r.pricing_status === "missing" ? "text-warn" : "text-fg")}>{requestCharged(r)}</span>
                       {r.discount_pct != null && r.discount_pct > 0 && (
@@ -1130,7 +1134,11 @@ function RecentRequests({
                             </div>
                           </div>
                         </td>
-                        <Cell main={`${fmtInteger(r.prompt_tokens)} → ${fmtInteger(r.completion_tokens)}`} sub={tokenNotes || undefined} />
+                        {(r.image_count ?? 0) > 0 ? (
+                          <Cell main={`${r.image_count} gambar`} />
+                        ) : (
+                          <Cell main={`${fmtInteger(r.prompt_tokens)} → ${fmtInteger(r.completion_tokens)}`} sub={tokenNotes || undefined} />
+                        )}
                         <td className="whitespace-nowrap px-4 py-2.5 text-right tabular-nums">
                           <div className={cn(r.pricing_status === "missing" ? "text-warn" : "text-fg")}>{requestCharged(r)}</div>
                           {r.pricing_status !== "priced" && r.pricing_status !== "missing" && <div className="text-[11.5px] text-fg-muted">{humanize(r.pricing_status)}</div>}

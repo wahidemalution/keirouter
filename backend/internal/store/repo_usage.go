@@ -421,6 +421,8 @@ type RecentRecord struct {
 	HeadroomActive      bool // Headroom produced non-phantom savings
 	PonytailActive      bool // Ponytail injection was active
 
+	ImageCount int // images generated; 0 for token requests
+
 	CreatedAt time.Time
 }
 
@@ -823,7 +825,7 @@ func (r *UsageRepo) RecentByKey(ctx context.Context, keyID string, since time.Ti
 		       cache_write_tokens, cost_micros, cost_nanos, cache_hit, latency_ms, ttft_ms,
 		       slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
 		       headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
-		       created_at
+		       image_count, created_at
 		FROM usage_records
 		WHERE api_key_id = ? AND created_at >= ?
 		ORDER BY created_at DESC
@@ -847,7 +849,7 @@ func (r *UsageRepo) RecentByKey(ctx context.Context, keyID string, since time.Ti
 			&rec.CostMicros, &rec.CostNanos, &cacheHit, &rec.LatencyMS, &rec.TTFTMS,
 			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &slimActive, &caveman, &terse,
 			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroomActive, &ponytailActive,
-			&createdAt); err != nil {
+			&rec.ImageCount, &createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0
