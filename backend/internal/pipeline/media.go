@@ -32,6 +32,10 @@ type MediaOptions struct {
 	// AccountID pins operations tied to upstream state, such as polling an
 	// asynchronous video job, to the credential that created that state.
 	AccountID string
+	// Reserved skips the budget preflight: the caller already holds a
+	// reservation covering this request, and the preflight would count that
+	// same reservation as spent.
+	Reserved bool
 }
 
 // mediaAttempts resolves the ordered attempts for a media request and runs the
@@ -41,7 +45,7 @@ func (p *Pipeline) mediaAttempts(ctx context.Context, opts MediaOptions) ([]disp
 	if len(opts.Targets) == 0 {
 		return nil, &core.ProviderError{Kind: core.ErrBadRequest, Message: "no routing targets resolved for model"}
 	}
-	if p.budget != nil {
+	if p.budget != nil && !opts.Reserved {
 		if err := p.budget.CheckOrError(ctx, budgetScope(opts)); err != nil {
 			return nil, err
 		}
