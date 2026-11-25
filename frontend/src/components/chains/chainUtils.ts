@@ -36,6 +36,10 @@ export interface DraftChainStep {
   costMultiplier: string;
   // displayName is the provider name the portal shows; "" keeps the default.
   displayName: string;
+  // Per-image cost in USD as raw text; "" = unset. The 2K cost falls back to
+  // the base cost on the server.
+  imageCost: string;
+  imageCost2k: string;
 }
 
 // deriveCacheRates recomputes cache write/read from the input rate, but keeps a
@@ -126,7 +130,37 @@ export const makeDraftStep = (step?: Partial<ChainStep> & { provider: string; mo
   discountPercent: numText(step?.discount_percent),
   costMultiplier: numText(step?.cost_multiplier),
   displayName: step?.display_name ?? "",
+  imageCost: step?.static_per_image ? String(step.static_per_image) : "",
+  imageCost2k: numText(step?.static_per_image_2k),
 });
+
+// imageSellPrice is what the customer pays per image: cost × (1 + markup/100).
+// The step markup wins; null inherits the chain/global markup. Rounded to 9
+// decimals so 0.0042 × 1.5 does not print as 0.006300000000000001.
+export const imageSellPrice = (costUsd: number, markupPct: number | null, chainMarkupPct: number): number =>
+  Math.round(costUsd * (1 + (markupPct ?? chainMarkupPct) / 100) * 1e9) / 1e9;
+
+// formatImagePrice prints a per-image USD price with an Indonesian decimal
+// comma and four significant digits below one cent: 0.0084 -> $0,0084.
+export const formatImagePrice = (usd: number): string => {
+  if (!Number.isFinite(usd) || usd <= 0) return "$0,00";
+  const decimals = usd >= 0.01 ? 4 : Math.min(12, Math.ceil(-Math.log10(usd)) + 3);
+  const text = usd.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
+  const [int, frac = ""] = text.split(".");
+  return `$${int},${frac.padEnd(2, "0")}`;
+};
+
+export type ImageCostCheck = { ok: true; cost: number | null; cost2k: number | null } | { ok: false; error: string };
+
+// checkImageCost validates the two per-image cost inputs. Both empty is a
+// normal (non-image) step.
+export const checkImageCost = (step: Pick<DraftChainStep, "imageCost" | "imageCost2k">): ImageCostCheck => {
+  const cost = parseOptional(step.imageCost);
+  const cost2k = parseOptional(step.imageCost2k);
+  if ([cost ?? 0, cost2k ?? 0].some((v) => !Number.isFinite(v) || v < 0)) return { ok: false, error: "Harga harus angka 0 atau lebih." };
+  if (cost2k !== undefined && !(cost !== undefined && cost > 0 && cost2k > 0)) return { ok: false, error: "Modal 2K butuh modal per gambar, dan harus di atas 0. Kosongkan untuk memakai modal per gambar." };
+  return { ok: true, cost: cost ?? null, cost2k: cost2k ?? null };
+};
 
 export type StaticStepPreview =
   | { ok: true; markup: number; inputPerM: number; outputPerM: number; cacheReadPerM: number; cacheWritePerM: number }
@@ -231,8 +265,20 @@ export const stepKey = (step: Pick<DraftChainStep, "provider" | "model" | "marke
 // value left over from the other source is never sent (the API rejects a
 // step with both a slug and a static price).
 export const stepPayload = (step: DraftChainStep): ChainStepPayload => {
-  const base = { provider: step.provider, model: step.model, display_name: step.displayName.trim() };
-  if (step.priceSource === "market") return { ...base, market_slug: step.marketSlug ?? "" };
+  const image = checkImageCost(step);
+  const imageCost = image.ok ? (image.cost ?? 0) : 0;
+  const base = {
+    provider: step.provider,
+    model: step.model,
+    display_name: step.displayName.trim(),
+    // Left out when unset: the server reads a missing price as 0, no image step.
+    ...(imageCost > 0 ? { static_per_image: imageCost, static_per_image_2k: image.ok ? image.cost2k : null } : {}),
+  };
+  if (step.priceSource === "market") {
+    // An image step has no per-token price but still takes its own markup.
+    const markup = imageCost > 0 ? parseOptional(step.stepMarkup) : undefined;
+    return { ...base, market_slug: step.marketSlug ?? "", ...(markup !== undefined ? { markup_percent: markup } : {}) };
+  }
   const prices = {
     ...base,
     market_slug: "",

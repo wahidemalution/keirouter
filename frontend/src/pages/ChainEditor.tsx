@@ -17,7 +17,7 @@ import { StepPriceSource } from "../components/chains/StepPriceSource";
 import { SurplusStepsAdder, type NewStep } from "../components/chains/SurplusStepsAdder";
 import { loadSurplusLabels, useSurplusLabels } from "../components/chains/useSurplusLabels";
 import { ChainRoutePreview, StepNumber } from "../components/chains/ChainRoutePreview";
-import { type ChainStrategy, type DraftChainStep, type FallbackPriceDraft, autoMarketSlug, resolveSurplusProvider, surplusProviderOf, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, discountStepPreview, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
+import { type ChainStrategy, type DraftChainStep, type FallbackPriceDraft, autoMarketSlug, checkImageCost, resolveSurplusProvider, surplusProviderOf, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, discountStepPreview, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
 const parseMarketSlugs = (raw: string): string[] => {
   const seen = new Set<string>();
@@ -275,6 +275,7 @@ export function ChainEditorPage() {
   const badStaticStep = completeSteps.findIndex((step) =>
     (step.priceSource === "static" && !staticStepPreview(step, inheritedMarkup ?? 0).ok) ||
     (step.priceSource === "discount" && !discountStepPreview(step).ok));
+  const badImageStep = completeSteps.findIndex((step) => !checkImageCost(step).ok);
   const officialInputNumber = Number(officialInput);
   const officialOutputNumber = Number(officialOutput);
   const officialAuto = existing?.official_auto ?? null;
@@ -287,7 +288,7 @@ export function ChainEditorPage() {
   // The models.dev price on the saved chain belongs to the saved fallback model only.
   const fallbackAutoKnown = Boolean(existing && existing.fallback_provider === fallback.provider && existing.fallback_model === fallback.model);
   const fallbackPreview = fallbackPricePreview(fallbackPrice, fallbackAutoKnown ? existing?.fallback_price?.auto ?? null : null);
-  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : fallbackEnabled && !fallbackPreview.ok ? `Fix the final fallback price: ${fallbackPreview.error}` : badStaticStep >= 0 ? `Fix the ${completeSteps[badStaticStep].priceSource === "discount" ? "discount" : "static"} price on step ${steps.indexOf(completeSteps[badStaticStep]) + 1}.` : needsPricing ? "Set both input and output price, or clear all price fields." : "";
+  const validationMessage = markupInvalid ? "Chain markup must be between 0 and 1000%." : officialInvalid ? "Set both official input and output prices above 0, or turn the manual official price off." : !name.trim() ? "Add a chain name to continue." : !isValidChainName(name.trim()) ? "Use up to 128 letters, numbers, hyphens, underscores, or dots; begin with a letter or number." : completeSteps.length === 0 ? "Add at least one model to the route." : incompleteSteps ? "Complete or remove every model row before saving." : duplicate ? "Each route step must be a different provider/model target or use a different market slug." : fallbackEnabled && (!fallback.provider || !fallback.model) ? "Choose the final fallback model or turn it off." : fallbackEnabled && !fallbackPreview.ok ? `Fix the final fallback price: ${fallbackPreview.error}` : badStaticStep >= 0 ? `Fix the ${completeSteps[badStaticStep].priceSource === "discount" ? "discount" : "static"} price on step ${steps.indexOf(completeSteps[badStaticStep]) + 1}.` : badImageStep >= 0 ? `Perbaiki harga per gambar di step ${steps.indexOf(completeSteps[badImageStep]) + 1}.` : needsPricing ? "Set both input and output price, or clear all price fields." : "";
   const valid = !validationMessage;
   const routeChain = useMemo(() => ({ id: existing?.id ?? "draft", name, strategy, steps: completeSteps.map((step, position) => ({ provider: step.provider, model: step.model, position } as ChainStep)), fallback_provider: fallbackEnabled ? fallback.provider : "", fallback_model: fallbackEnabled ? fallback.model : "" } as Chain), [completeSteps, existing?.id, fallback.model, fallback.provider, fallbackEnabled, name, strategy]);
 

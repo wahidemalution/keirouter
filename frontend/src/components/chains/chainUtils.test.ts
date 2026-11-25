@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoMarketSlug, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, imageSellPrice, formatImagePrice, checkImageCost, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -286,4 +286,33 @@ test("makeDraftStep reads a discount step from the API", () => {
   assert.equal(d.discountPercent, "90");
   assert.equal(d.costMultiplier, "");
   assert.equal(stepKey(d), stepKey(staticDraft({})).replace("gpt-4o", "m"));
+});
+
+test("imageSellPrice applies the step markup, else the chain markup", () => {
+  assert.equal(imageSellPrice(0.0042, 100, 0), 0.0084);
+  assert.equal(imageSellPrice(0.0042, null, 50), 0.0063);
+  assert.equal(imageSellPrice(0.0042, 0, 50), 0.0042);
+});
+
+test("formatImagePrice uses a decimal comma and four significant digits", () => {
+  assert.equal(formatImagePrice(0.0084), "$0,0084");
+  assert.equal(formatImagePrice(0.008432), "$0,008432");
+  assert.equal(formatImagePrice(0.04), "$0,04");
+  assert.equal(formatImagePrice(1.5), "$1,50");
+});
+
+test("checkImageCost rejects a 2K cost without a base cost", () => {
+  assert.equal(checkImageCost({ imageCost: "", imageCost2k: "0.01" }).ok, false);
+  assert.equal(checkImageCost({ imageCost: "0.004", imageCost2k: "" }).ok, true);
+  assert.equal(checkImageCost({ imageCost: "-1", imageCost2k: "" }).ok, false);
+});
+
+test("stepPayload carries image costs and makeDraftStep reads them back", () => {
+  const draft = makeDraftStep({ provider: "p", model: "m", static_per_image: 0.004, static_per_image_2k: 0.008 });
+  assert.equal(draft.imageCost, "0.004");
+  assert.equal(draft.imageCost2k, "0.008");
+  const payload = stepPayload(draft);
+  assert.equal(payload.static_per_image, 0.004);
+  assert.equal(payload.static_per_image_2k, 0.008);
+  assert.equal("static_per_image" in stepPayload(makeDraftStep({ provider: "p", model: "m" })), false);
 });

@@ -473,6 +473,8 @@ export interface ChainStep {
   discount_percent?: number | null;
   cost_multiplier?: number | null;
   display_name?: string;
+  static_per_image?: number;
+  static_per_image_2k?: number | null;
 }
 
 // ChainStepPayload is one step in a chain create/update body: a market slug
@@ -493,6 +495,10 @@ export type ChainStepPayload = {
    * equals the customer price. */
   cost_multiplier?: number | null;
   display_name?: string;
+  /** Operator cost per generated image in USD; 0 or absent = not an image step. */
+  static_per_image?: number;
+  /** Cost per 2K image; null = same as static_per_image. */
+  static_per_image_2k?: number | null;
 };
 
 /** A model's models.dev list price per 1M tokens. Null cache = unlisted. */
