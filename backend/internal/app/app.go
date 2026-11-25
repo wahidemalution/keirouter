@@ -797,16 +797,35 @@ func (a *App) Run(ctx context.Context) error {
 			a.costLookup.Run(ctx)
 		}()
 	}
+	// The image service has its own lifecycle: shutdown stops it and waits
+	// for its workers to fail and release their jobs before the meter and
+	// the store close.
+	stopImageGen := func() {}
 	if a.imageGen != nil {
-		a.bg.Add(2)
+		imgCtx, cancelImages := context.WithCancel(ctx)
+		imagesDone := make(chan struct{})
+		var images sync.WaitGroup
+		images.Add(2)
 		go func() {
-			defer a.bg.Done()
-			a.imageGen.Run(ctx)
+			defer images.Done()
+			a.imageGen.Run(imgCtx)
 		}()
 		go func() {
-			defer a.bg.Done()
-			a.imageGen.RunSweeper(ctx, 10*time.Minute)
+			defer images.Done()
+			a.imageGen.RunSweeper(imgCtx, 10*time.Minute)
 		}()
+		go func() {
+			images.Wait()
+			close(imagesDone)
+		}()
+		stopImageGen = func() {
+			cancelImages()
+			select {
+			case <-imagesDone:
+			case <-time.After(imageShutdownTimeout):
+				a.log.Warn("image workers did not stop within timeout; proceeding with shutdown")
+			}
+		}
 	}
 	if a.db != nil {
 		a.bg.Add(1)
@@ -876,6 +895,7 @@ func (a *App) Run(ctx context.Context) error {
 		// use-after-close window against db.Close() (a pure-Go SQLite handle can
 		// crash if a query races a Close).
 		a.waitForBackground(5 * time.Second)
+		stopImageGen()
 		// Drain pending guardrail audit and usage rows before closing the DB.
 		if a.guardrailRetention != nil {
 			a.guardrailRetention.Stop(2 * time.Second)
@@ -955,6 +975,9 @@ func backupOwner() string {
 // recoverAttempts and recoverBackoff bound the startup retry of image job
 // recovery.
 const recoverAttempts = 3
+
+// imageShutdownTimeout bounds the wait for image workers at shutdown.
+const imageShutdownTimeout = 15 * time.Second
 
 var recoverBackoff = 500 * time.Millisecond
 

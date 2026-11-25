@@ -43,8 +43,10 @@ const (
 	queueSize     = 32
 	jobTimeout    = 5 * time.Minute
 	settleTimeout = 30 * time.Second
-	ownerStripes  = 64
-	staleMessage  = "server dimulai ulang, saldo tidak dipotong"
+	// failTimeout bounds marking a job failed, which also runs during shutdown.
+	failTimeout  = 5 * time.Second
+	ownerStripes = 64
+	staleMessage = "server dimulai ulang, saldo tidak dipotong"
 	// maxQueueWait stays well inside the budget's one-hour reservation life.
 	maxQueueWait     = 45 * time.Minute
 	queueWaitMessage = "antrian terlalu lama, saldo tidak dipotong"
@@ -319,8 +321,9 @@ func (s *Service) requirePrepaid(ctx context.Context, scope budget.Scope) error 
 	return fmt.Errorf("%w: no prepaid balance on this key", ErrInsufficientBalance)
 }
 
-// Run starts the workers and blocks until ctx is done. Jobs still queued
-// then stay queued and are failed by Recover on the next start.
+// Run starts the workers and blocks until ctx is done and every worker has
+// returned. Jobs derive their context from ctx, so cancelling it aborts
+// them: each is released and failed, unbilled, before Run returns.
 func (s *Service) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for range workerCount {
@@ -332,12 +335,22 @@ func (s *Service) Run(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				case j := <-s.queue:
-					s.process(j)
+					s.process(ctx, j)
 				}
 			}
 		}()
 	}
 	wg.Wait()
+	// Jobs still queued are failed now, while the store is open; process
+	// aborts them because ctx is done.
+	for {
+		select {
+		case j := <-s.queue:
+			s.process(ctx, j)
+		default:
+			return
+		}
+	}
 }
 
 // Recover fails jobs a previous process left queued or running. Their
@@ -356,9 +369,11 @@ func (s *Service) Recover(ctx context.Context) error {
 	return nil
 }
 
-// process runs one job. Exactly one of Confirm or Release settles its
-// reservation, including when the generator panics.
-func (s *Service) process(j job) {
+// process runs one job under runCtx, the context of Run: a job is not
+// started once it is done, and a running one is aborted, released and
+// failed. Exactly one of Confirm or Release settles its reservation,
+// including when the generator panics.
+func (s *Service) process(runCtx context.Context, j job) {
 	var once sync.Once
 	settle := func(confirm bool, cost int64) {
 		once.Do(func() {
@@ -385,6 +400,11 @@ func (s *Service) process(j job) {
 		}
 	}()
 
+	if runCtx.Err() != nil {
+		settle(false, 0)
+		s.fail(j.id, msgShutdown)
+		return
+	}
 	// A job that waited too long may outlive its reservation (budget keeps
 	// one for an hour), after which Confirm would hold nothing back.
 	if s.now().Sub(j.enqueuedAt) > maxQueueWait {
@@ -394,12 +414,16 @@ func (s *Service) process(j job) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+	ctx, cancel := context.WithTimeout(runCtx, jobTimeout)
 	defer cancel()
 	if err := s.d.Jobs.SetRunning(ctx, j.id); err != nil {
-		// Failed by Recover or otherwise no longer queued: do not generate.
 		s.log.Warn("image job not runnable", "job", j.id, "err", err)
 		settle(false, 0)
+		// ErrNotFound: failed by Recover or otherwise no longer queued.
+		// Any other error leaves the job queued, so fail it to free the slot.
+		if !errors.Is(err, store.ErrNotFound) {
+			s.fail(j.id, s.abortMessage(runCtx, msgGenericFail))
+		}
 		return
 	}
 
@@ -411,7 +435,7 @@ func (s *Service) process(j job) {
 	if err != nil {
 		settle(false, 0)
 		s.log.Warn("image generation failed", "job", j.id, "err", err)
-		s.fail(j.id, failureMessage(err))
+		s.fail(j.id, s.abortMessage(runCtx, failureMessage(err)))
 		return
 	}
 	// Bill the exact step that answered at its own price. One that is
@@ -539,9 +563,18 @@ func (s *Service) resolveCommit(j job) commitOutcome {
 	return outcomeUnknown
 }
 
-// fail marks a job failed with nothing billed.
+// abortMessage is msg, or the shutdown message when Run is stopping.
+func (s *Service) abortMessage(runCtx context.Context, msg string) string {
+	if runCtx.Err() != nil {
+		return msgShutdown
+	}
+	return msg
+}
+
+// fail marks a job failed with nothing billed. It runs on its own context,
+// so it still works while Run is stopping.
 func (s *Service) fail(id, msg string) {
-	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), failTimeout)
 	defer cancel()
 	if err := s.d.Jobs.Finish(ctx, id, store.ImageJobFailed, msg, 0, 0, 0, nil, s.now()); err != nil {
 		s.log.Warn("mark image job failed", "job", id, "err", err)
@@ -556,6 +589,7 @@ const (
 	msgTimeout     = "Pembuatan gambar terlalu lama. Saldo tidak dipotong."
 	msgGenericFail = "Gambar gagal dibuat. Saldo tidak dipotong."
 	msgBillingFail = "Gagal mencatat pemakaian. Saldo tidak dipotong."
+	msgShutdown    = "Server dimulai ulang, gambar gagal dibuat. Saldo tidak dipotong."
 )
 
 // moderationWords mark a provider refusal of the prompt itself.
