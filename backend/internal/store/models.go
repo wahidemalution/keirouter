@@ -305,8 +305,15 @@ type ChainStep struct {
 	// DisplayName is the provider name the portal shows for this step. Empty
 	// keeps the default: the Surplus label, then the provider's own name.
 	DisplayName string
-	CreatedAt   time.Time
+	// StaticPerImage is the USD price of one generated image on an image step.
+	// StaticPerImage2K overrides it for 2K output; nil = same as StaticPerImage.
+	StaticPerImage   float64
+	StaticPerImage2K *float64
+	CreatedAt        time.Time
 }
+
+// HasImagePrice reports whether the step is billed per generated image.
+func (s ChainStep) HasImagePrice() bool { return s.StaticPerImage > 0 }
 
 // HasStaticPrice reports whether the step is billed at its own fixed price.
 func (s ChainStep) HasStaticPrice() bool {
@@ -354,7 +361,9 @@ type UsageRecord struct {
 	CacheWrite1hTokens int
 	// WebSearchRequests counts provider-side web searches billed per request.
 	WebSearchRequests int
-	UsageSource       string // provider | estimated | cache | none
+	// ImageCount is the number of images generated, billed per image.
+	ImageCount  int
+	UsageSource string // provider | estimated | cache | none
 
 	// CostMicros remains for budget/backward compatibility. CostNanos is the
 	// authoritative value and avoids each small request being rounded to zero.

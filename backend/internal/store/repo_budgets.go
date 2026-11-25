@@ -344,14 +344,14 @@ func (r *ChainRepo) Create(ctx context.Context, c Chain) error {
 
 const insertChainStepSQL = `INSERT INTO chain_steps (id, chain_id, position, provider, model, market_slug,
 	static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent,
-	discount_percent, cost_multiplier, display_name, created_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	discount_percent, cost_multiplier, display_name, static_per_image, static_per_image_2k, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 func chainStepArgs(chainID string, s ChainStep, created time.Time) []any {
 	return []any{s.ID, chainID, s.Position, s.Provider, s.Model, s.MarketSlug,
 		s.StaticInputPerM, s.StaticOutputPerM, nullableFloat(s.StaticCacheReadPerM), nullableFloat(s.StaticCacheWritePerM),
 		nullableFloat(s.MarkupPercent), nullableFloat(s.DiscountPercent), nullableFloat(s.CostMultiplier),
-		strings.TrimSpace(s.DisplayName), formatTime(created)}
+		strings.TrimSpace(s.DisplayName), s.StaticPerImage, nullableFloat(s.StaticPerImage2K), formatTime(created)}
 }
 
 // Get returns a chain with its ordered steps.
@@ -517,7 +517,7 @@ func (r *ChainRepo) Update(ctx context.Context, c Chain) error {
 func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, error) {
 	q := r.db.rebind(`SELECT id, chain_id, position, provider, model, market_slug,
 		static_input_per_m, static_output_per_m, static_cache_read_per_m, static_cache_write_per_m, markup_percent,
-		discount_percent, cost_multiplier, display_name, created_at
+		discount_percent, cost_multiplier, display_name, static_per_image, static_per_image_2k, created_at
 		FROM chain_steps WHERE chain_id = ? ORDER BY position ASC`)
 	rows, err := r.db.sql.QueryContext(ctx, q, chainID)
 	if err != nil {
@@ -532,9 +532,10 @@ func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, err
 			created                   string
 			cacheRead, cacheWrite, mk sql.NullFloat64
 			discount, costMult        sql.NullFloat64
+			image2K                   sql.NullFloat64
 		)
 		if err := rows.Scan(&s.ID, &s.ChainID, &s.Position, &s.Provider, &s.Model, &s.MarketSlug,
-			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &discount, &costMult, &s.DisplayName, &created); err != nil {
+			&s.StaticInputPerM, &s.StaticOutputPerM, &cacheRead, &cacheWrite, &mk, &discount, &costMult, &s.DisplayName, &s.StaticPerImage, &image2K, &created); err != nil {
 			return nil, err
 		}
 		s.StaticCacheReadPerM = floatPtr(cacheRead)
@@ -542,6 +543,7 @@ func (r *ChainRepo) steps(ctx context.Context, chainID string) ([]ChainStep, err
 		s.MarkupPercent = floatPtr(mk)
 		s.DiscountPercent = floatPtr(discount)
 		s.CostMultiplier = floatPtr(costMult)
+		s.StaticPerImage2K = floatPtr(image2K)
 		s.CreatedAt = parseTime(created)
 		out = append(out, s)
 	}
