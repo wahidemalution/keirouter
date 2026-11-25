@@ -207,7 +207,7 @@ func (s *Server) publicModelRows(ctx context.Context) ([]publicModelRow, error) 
 	}
 	rows := make([]publicModelRow, 0, len(chains))
 	for _, c := range chains {
-		if len(c.Steps) == 0 || !c.Listed() {
+		if len(c.Steps) == 0 || !c.Listed() || imageOnlyChain(c) {
 			continue
 		}
 		first := c.Steps[0]

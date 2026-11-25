@@ -58,6 +58,10 @@ func (s *Server) handlePortalModels(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]portalModelPrice, 0, len(chains))
 	for _, c := range chains {
+		// An image-only chain is priced per image on the Buat Gambar page.
+		if imageOnlyChain(c) {
+			continue
+		}
 		row, ok := byName[strings.ToLower(c.Name)]
 		if !ok {
 			// No routable steps: nothing to price, but the key may still name it.

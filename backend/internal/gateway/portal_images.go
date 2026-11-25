@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,6 +52,50 @@ func (s *Server) mountPortalImageRoutes(r chi.Router) {
 	r.Get("/portal/api/images", s.handlePortalListImages)
 	r.Get("/portal/api/images/files/{file_id}", s.handlePortalImageFile)
 	r.Delete("/portal/api/images/{job_id}", s.handlePortalDeleteImage)
+}
+
+// imageWriteAllowed guards the routes that spend balance or delete jobs
+// against cross-site requests. The body of a POST must be JSON, which a
+// cross-site form cannot send without a preflight, and an Origin header,
+// when the browser sends one, must name this server: the request Host, a
+// proxy's X-Forwarded-Host, or the configured portal URL.
+func (s *Server) imageWriteAllowed(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method == http.MethodPost {
+		mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mt != "application/json" {
+			writeImageError(w, http.StatusUnsupportedMediaType, "json_required")
+			return false
+		}
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err == nil && u.Host != "" {
+		host := strings.ToLower(u.Host)
+		for _, allowed := range s.portalOriginHosts(r) {
+			if host == allowed {
+				return true
+			}
+		}
+	}
+	writeImageError(w, http.StatusForbidden, "bad_origin")
+	return false
+}
+
+// portalOriginHosts lists the hosts a portal page may be served from.
+func (s *Server) portalOriginHosts(r *http.Request) []string {
+	hosts := []string{strings.ToLower(r.Host)}
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+		hosts = append(hosts, strings.ToLower(strings.TrimSpace(strings.Split(fwd, ",")[0])))
+	}
+	if s.cfg.PortalSSO.RedirectURL != "" {
+		if u, err := url.Parse(s.cfg.PortalSSO.RedirectURL); err == nil && u.Host != "" {
+			hosts = append(hosts, strings.ToLower(u.Host))
+		}
+	}
+	return hosts
 }
 
 func writeImageError(w http.ResponseWriter, status int, code string) {
@@ -250,7 +296,7 @@ type createImageRequest struct {
 // price are re-resolved for the session's key; nothing priced comes from
 // the client.
 func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request) {
-	if !s.imageGenReady(w) {
+	if !s.imageGenReady(w) || !s.imageWriteAllowed(w, r) {
 		return
 	}
 	var body createImageRequest
@@ -517,7 +563,7 @@ func (s *Server) handlePortalImageFile(w http.ResponseWriter, r *http.Request) {
 
 // handlePortalDeleteImage serves DELETE /portal/api/images/{job_id}.
 func (s *Server) handlePortalDeleteImage(w http.ResponseWriter, r *http.Request) {
-	if !s.imageGenReady(w) {
+	if !s.imageGenReady(w) || !s.imageWriteAllowed(w, r) {
 		return
 	}
 	owner, ok := s.imageOwner(w, r)

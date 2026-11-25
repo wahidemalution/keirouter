@@ -218,6 +218,17 @@ func mulMicro(n, p int64) (int64, bool) {
 	return n * p, true
 }
 
+// responseFormat asks gpt-image and grok-imagine for base64 images; a
+// chain holds one family. gemini-image does not take the field. URL and
+// base64 answers are both stored.
+func responseFormat(model string) string {
+	switch Family(model) {
+	case "gpt-image", "grok-imagine":
+		return "b64_json"
+	}
+	return ""
+}
+
 // Family names the image model family of model, matched on the id after
 // its last "/"; "" when it is not a known image model.
 func Family(model string) string {
@@ -357,7 +368,7 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput) (store.ImageJob, e
 		shown: shown, enqueuedAt: s.now(),
 		req: core.ImageRequest{
 			Model: targets[0].Model, Prompt: prompt, N: n, Size: in.Size,
-			AspectRatio: in.AspectRatio, Resolution: in.Resolution, ResponseFormat: "b64_json",
+			AspectRatio: in.AspectRatio, Resolution: in.Resolution, ResponseFormat: responseFormat(targets[0].Model),
 		},
 	}
 	select {
