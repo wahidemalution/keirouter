@@ -44,6 +44,7 @@ test("deletesIn rounds the time left down to hours, then minutes", () => {
 
 test("imageErrorText maps known codes and falls back otherwise", () => {
   assert.equal(imageErrorText("insufficient_balance", "x"), "Saldo PAYG tidak cukup untuk membuat gambar.");
+  assert.equal(imageErrorText("invalid_aspect_ratio", "x"), "Rasio aspek ini tidak didukung model yang dipilih.");
   assert.equal(imageErrorText("something_new", "Gagal"), "Gagal");
   assert.equal(imageErrorText(undefined, "Gagal"), "Gagal");
 });

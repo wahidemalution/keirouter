@@ -1437,7 +1437,11 @@ function RequestDetail({ record, onClose }: { record: RecentActivity; onClose: (
           <>
             {/* Three across once there is room for the values; stacked on narrow phones. */}
             <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-line bg-line min-[420px]:grid-cols-3">
-              <Metric label="Total tokens" value={fmtInteger(totalTokens)} hint={`${fmtInteger(record.prompt_tokens)} in · ${fmtInteger(record.completion_tokens)} out`} />
+              {(record.image_count ?? 0) > 0 ? (
+                <Metric label="Images" value={`${record.image_count} gambar`} hint="Billed per image" />
+              ) : (
+                <Metric label="Total tokens" value={fmtInteger(totalTokens)} hint={`${fmtInteger(record.prompt_tokens)} in · ${fmtInteger(record.completion_tokens)} out`} />
+              )}
               <Metric label="Charged" value={charged} hint={cacheHit ? "Served from cache" : humanize(record.pricing_status)} />
               <Metric label="End to end" value={fmtMs(record.end_to_end_latency_ms)} hint={`TTFT ${fmtMs(record.ttft_ms)}`} />
             </dl>

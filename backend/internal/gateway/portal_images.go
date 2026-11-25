@@ -33,6 +33,13 @@ var servedImageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "i
 // gptImageSizes are the sizes a gpt-image request may ask for.
 var gptImageSizes = map[string]bool{"1024x1024": true, "1536x1024": true, "1024x1536": true, "auto": true}
 
+// imageAspectRatios are the aspect ratios each family may ask for; the
+// portal page offers the same lists.
+var imageAspectRatios = map[string]map[string]bool{
+	"grok-imagine": {"1:1": true, "16:9": true, "9:16": true, "4:3": true, "3:4": true, "3:2": true, "2:3": true, "21:9": true},
+	"gemini-image": {"1:1": true, "16:9": true, "9:16": true, "4:3": true, "3:4": true},
+}
+
 // mountPortalImageRoutes adds the portal image routes. The caller applies
 // portalSessionMiddleware.
 func (s *Server) mountPortalImageRoutes(r chi.Router) {
@@ -190,7 +197,9 @@ func (s *Server) handlePortalImageModels(w http.ResponseWriter, r *http.Request)
 	out := make([]portalImageModel, 0, len(chains))
 	for _, c := range chains {
 		m := portalImageModel{ChainID: c.chain.ID, Name: c.chain.Name, Family: c.family, PriceMicro: c.price}
-		if c.price2K != c.price {
+		// Only grok-imagine takes a resolution, so only it can be billed at
+		// the 2K price.
+		if c.family == "grok-imagine" && c.price2K != c.price {
 			p := c.price2K
 			m.Price2KMicro = &p
 		}
@@ -289,6 +298,10 @@ func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request)
 		}
 	case "grok-imagine":
 		aspect = strings.TrimSpace(body.AspectRatio)
+		if aspect != "" && !imageAspectRatios[picked.family][aspect] {
+			writeImageError(w, http.StatusBadRequest, "invalid_aspect_ratio")
+			return
+		}
 		resolution = strings.ToLower(strings.TrimSpace(body.Resolution))
 		if resolution != "" && resolution != "1k" && resolution != "2k" {
 			writeImageError(w, http.StatusBadRequest, "invalid_resolution")
@@ -296,6 +309,10 @@ func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request)
 		}
 	case "gemini-image":
 		aspect = strings.TrimSpace(body.AspectRatio)
+		if aspect != "" && !imageAspectRatios[picked.family][aspect] {
+			writeImageError(w, http.StatusBadRequest, "invalid_aspect_ratio")
+			return
+		}
 	}
 
 	lim, err := s.effectiveLimits(r.Context(), key)

@@ -62,6 +62,7 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_n: "Jumlah gambar harus 1 sampai 4.",
   invalid_size: "Ukuran ini tidak didukung model yang dipilih.",
   invalid_resolution: "Resolusi ini tidak didukung model yang dipilih.",
+  invalid_aspect_ratio: "Rasio aspek ini tidak didukung model yang dipilih.",
   chain_required: "Pilih model terlebih dahulu.",
   insufficient_balance: "Saldo PAYG tidak cukup untuk membuat gambar.",
   key_disabled: "API key Anda sedang dinonaktifkan. Hubungi admin.",

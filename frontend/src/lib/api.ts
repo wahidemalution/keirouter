@@ -4212,7 +4212,7 @@ export interface PortalImageModel {
   name: string;
   family: PortalImageFamily;
   price_micro: number;
-  /** Present only when a 2K image costs more than a standard one. */
+  /** Present only for grok-imagine chains whose 2K price differs from price_micro. */
   price_2k_micro?: number;
 }
 

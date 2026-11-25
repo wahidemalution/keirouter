@@ -1,6 +1,6 @@
 ---
 name: keirouter
-description: Entry point for KeiRouter — local/remote AI gateway with OpenAI-compatible REST for chat, image, TTS, embeddings, web search, web fetch. Use when the user mentions KeiRouter, KEIROUTER_URL, or wants AI without writing provider boilerplate. This skill covers setup + indexes capability skills; fetch the relevant capability SKILL.md from the URLs below when needed.
+description: Entry point for KeiRouter — local/remote AI gateway with OpenAI-compatible REST for chat, TTS, embeddings, web search, web fetch. Use when the user mentions KeiRouter, KEIROUTER_URL, or wants AI without writing provider boilerplate. This skill covers setup + indexes capability skills; fetch the relevant capability SKILL.md from the URLs below when needed.
 ---
 
 # KeiRouter
@@ -22,7 +22,7 @@ Verify: `curl $KEIROUTER_URL/healthz` → `{"ok":true}`
 
 ```bash
 curl $KEIROUTER_URL/v1/models                  # chat/LLM (default)
-curl $KEIROUTER_URL/v1/models/image            # image-gen
+curl $KEIROUTER_URL/v1/models/image            # image models (generation runs in the portal page "Buat Gambar", not the API)
 curl $KEIROUTER_URL/v1/models/tts              # text-to-speech
 curl $KEIROUTER_URL/v1/models/embedding        # embeddings
 curl $KEIROUTER_URL/v1/models/web              # web search + fetch (entries have `kind` field)
@@ -46,7 +46,7 @@ When the user needs a specific capability, fetch that skill's `SKILL.md` from it
 | Capability | Raw URL |
 |---|---|
 | Chat / code-gen | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-chat/SKILL.md |
-| Image generation | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-image/SKILL.md |
+| Image generation (portal page "Buat Gambar" only, not the API) | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-image/SKILL.md |
 | Text-to-speech | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-tts/SKILL.md |
 | Speech-to-text | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-stt/SKILL.md |
 | Embeddings | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-embeddings/SKILL.md |

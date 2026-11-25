@@ -16,6 +16,7 @@ import { PageHeader, PanelCard, TD, TH, THEAD, formatDateTime } from "./componen
 const MODELS_QK = ["portal-image-models"];
 const JOBS_QK = ["portal-image-jobs"];
 const POLL_MS = 3000;
+const HISTORY_HEADING_ID = "riwayat-gambar";
 const MAX_PROMPT = 4000;
 const COUNTS = [1, 2, 3, 4];
 // Coarse pointers get 44px controls; the shared controls are 36px.
@@ -97,10 +98,10 @@ function ImageStudio() {
     queryKey: JOBS_QK,
     queryFn: () => fetchPortalImageJobs(50),
     retry: false,
-    // Poll only while a job is queued or running, and never in a hidden tab;
-    // focusing the tab again refetches and resumes polling.
-    refetchInterval: (query) =>
-      query.state.data?.some(isActive) && !document.hidden ? POLL_MS : false,
+    // Poll only while a job is queued or running. react-query pauses the
+    // interval in a hidden tab (refetchIntervalInBackground is false) and
+    // resumes it when the tab is visible again.
+    refetchInterval: (query) => (query.state.data?.some(isActive) ? POLL_MS : false),
   });
 
   const [form, setForm] = useState<Settings>({ chainId: "", prompt: "", n: 1, size: "", aspect: "", resolution: "" });
@@ -215,7 +216,10 @@ function ImageStudio() {
                 <Textarea
                   id={promptId}
                   value={form.prompt}
-                  onChange={(e) => setForm((f) => ({ ...f, prompt: e.target.value }))}
+                  onChange={(e) => {
+                    setForm((f) => ({ ...f, prompt: e.target.value }));
+                    setSubmitError(null);
+                  }}
                   onKeyDown={onPromptKey}
                   maxLength={MAX_PROMPT}
                   rows={5}
@@ -327,7 +331,7 @@ function ImageStudio() {
         )}
       </PanelCard>
 
-      <section aria-labelledby="riwayat-gambar" className="space-y-3">
+      <section aria-labelledby={HISTORY_HEADING_ID} className="space-y-3">
         <div className="flex items-start gap-3 rounded-2xl border border-warn/30 bg-warn/10 px-4 py-3">
           <Clock className="mt-0.5 h-4 w-4 shrink-0 text-warn" strokeWidth={1.75} aria-hidden="true" />
           <p className="text-[13px] text-fg">
@@ -336,7 +340,7 @@ function ImageStudio() {
         </div>
 
         <div className="flex items-baseline justify-between gap-3">
-          <h2 id="riwayat-gambar" className="text-[15px] font-semibold text-fg">Riwayat</h2>
+          <h2 id={HISTORY_HEADING_ID} tabIndex={-1} className="rounded-md text-[15px] font-semibold text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">Riwayat</h2>
           {jobs.data?.some(isActive) && (
             <p className="text-[12.5px] text-fg-muted">Diperbarui otomatis tiap 3 detik.</p>
           )}
@@ -387,6 +391,8 @@ function JobCard({ job, now, modelName, onReuse }: {
     mutationFn: () => deletePortalImage(job.id),
     onSuccess: () => {
       qc.setQueryData<PortalImageJob[]>(JOBS_QK, (old) => (old ?? []).filter((j) => j.id !== job.id));
+      // The card and its focused button are gone; land on the history heading.
+      document.getElementById(HISTORY_HEADING_ID)?.focus();
       void qc.invalidateQueries({ queryKey: JOBS_QK });
     },
     onError: (e) => {
@@ -445,11 +451,15 @@ function JobCard({ job, now, modelName, onReuse }: {
           <p className="text-[13px] font-medium text-fg">{job.status === "queued" ? "Dalam antrean" : "Sedang dibuat"}</p>
           <p className="text-[12px] text-fg-muted">Status diperbarui otomatis.</p>
         </div>
-      ) : (
+      ) : job.status === "failed" ? (
         <div className="flex aspect-[4/3] flex-col items-center justify-center gap-2 bg-subtle px-4 text-center">
           <AlertCircle className="h-5 w-5 text-bad" strokeWidth={1.75} aria-hidden="true" />
           <p className="text-[13px] font-medium text-fg">Gagal</p>
           <p className="text-[12.5px] leading-5 text-fg-muted">{job.error || "Gambar tidak dapat dibuat."}</p>
+        </div>
+      ) : (
+        <div className="flex aspect-[4/3] flex-col items-center justify-center bg-subtle px-4 text-center">
+          <p className="text-[12.5px] text-fg-muted">Gambar sudah tidak tersedia.</p>
         </div>
       )}
 
@@ -535,20 +545,21 @@ function PriceTable({ models }: { models: UseQueryResult<PortalImageModel[]> }) 
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {list.map((m) => (
-                <tr key={m.chain_id}>
-                  <td className={`${TD} font-mono text-[12.5px] text-fg`}>{m.name}</td>
-                  <td className={`${TD} text-fg-muted`}>{FAMILY_LABELS[m.family] ?? m.family}</td>
-                  <td className={`${TD} text-right tabular-nums text-fg`}>{formatImagePriceMicro(m.price_micro)}</td>
-                  <td className={`${TD} text-right tabular-nums ${m.price_2k_micro ? "text-fg" : "text-fg-muted"}`}>
-                    {m.price_2k_micro
-                      ? formatImagePriceMicro(m.price_2k_micro)
-                      : optionsForFamily(m.family).resolutions
-                        ? "Sama"
-                        : "Tidak ada"}
-                  </td>
-                </tr>
-              ))}
+              {list.map((m) => {
+                // Only families with a resolution choice have a 2K price.
+                const has2K = !!optionsForFamily(m.family).resolutions;
+                const price2K = has2K && m.price_2k_micro ? m.price_2k_micro : 0;
+                return (
+                  <tr key={m.chain_id}>
+                    <td className={`${TD} font-mono text-[12.5px] text-fg`}>{m.name}</td>
+                    <td className={`${TD} text-fg-muted`}>{FAMILY_LABELS[m.family] ?? m.family}</td>
+                    <td className={`${TD} text-right tabular-nums text-fg`}>{formatImagePriceMicro(m.price_micro)}</td>
+                    <td className={`${TD} text-right tabular-nums ${price2K ? "text-fg" : "text-fg-muted"}`}>
+                      {price2K ? formatImagePriceMicro(price2K) : has2K ? "Sama" : "Tidak ada"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -276,6 +276,7 @@ func TestPortalImageModelsListsImageChainsOnly(t *testing.T) {
 	two := 0.08
 	createImageChain(t, f.srv.db, "pics-hd", store.ChainStep{Provider: "openai", Model: "gpt-image-1", StaticPerImage: 0.04, StaticPerImage2K: &two})
 	createImageChain(t, f.srv.db, "grok-pics", store.ChainStep{Provider: "xai", Model: "grok-imagine-image", StaticPerImage: 0.02})
+	createImageChain(t, f.srv.db, "grok-hd", store.ChainStep{Provider: "xai", Model: "grok-imagine-image", StaticPerImage: 0.02, StaticPerImage2K: &two})
 	createImageChain(t, f.srv.db, "chatty", store.ChainStep{Provider: "openai", Model: "gpt-4o", StaticInputPerM: 1, StaticOutputPerM: 2})
 	tok, _ := f.user("sub-a", picsPrice)
 
@@ -290,7 +291,7 @@ func TestPortalImageModelsListsImageChainsOnly(t *testing.T) {
 		byName[m["name"].(string)] = m
 	}
 	require.NotContains(t, byName, "chatty")
-	require.Len(t, byName, 3)
+	require.Len(t, byName, 4)
 
 	require.Equal(t, "pics", byName["pics"]["chain_id"])
 	require.Equal(t, "gpt-image", byName["pics"]["family"])
@@ -298,7 +299,10 @@ func TestPortalImageModelsListsImageChainsOnly(t *testing.T) {
 	require.NotContains(t, byName["pics"], "price_2k_micro", "no 2K price when it equals the standard one")
 
 	require.EqualValues(t, picsPrice, byName["pics-hd"]["price_micro"])
-	require.EqualValues(t, 88_000, byName["pics-hd"]["price_2k_micro"])
+	require.NotContains(t, byName["pics-hd"], "price_2k_micro", "only grok-imagine offers a 2K resolution")
+
+	require.EqualValues(t, 22_000, byName["grok-hd"]["price_micro"])
+	require.EqualValues(t, 88_000, byName["grok-hd"]["price_2k_micro"])
 
 	require.Equal(t, "grok-imagine", byName["grok-pics"]["family"])
 	require.EqualValues(t, 22_000, byName["grok-pics"]["price_micro"])
@@ -394,6 +398,7 @@ func TestPortalImageInsufficientBalance(t *testing.T) {
 func TestPortalImageValidation(t *testing.T) {
 	f := newPortalImageFixture(t)
 	createImageChain(t, f.srv.db, "grok-pics", store.ChainStep{Provider: "xai", Model: "grok-imagine-image", StaticPerImage: 0.02})
+	createImageChain(t, f.srv.db, "gem-pics", store.ChainStep{Provider: "google", Model: "gemini-2.5-flash-image", StaticPerImage: 0.02})
 	tok, _ := f.user("sub-a", 100*picsPrice)
 	cases := []struct {
 		name, body string
@@ -408,6 +413,8 @@ func TestPortalImageValidation(t *testing.T) {
 		{"unknown chain", `{"chain_id":"nope","prompt":"x","n":1}`, http.StatusNotFound, "model_not_available"},
 		{"bad size", `{"chain_id":"pics","prompt":"x","n":1,"size":"4096x4096"}`, http.StatusBadRequest, "invalid_size"},
 		{"bad resolution", `{"chain_id":"grok-pics","prompt":"x","n":1,"resolution":"4k"}`, http.StatusBadRequest, "invalid_resolution"},
+		{"bad grok aspect", `{"chain_id":"grok-pics","prompt":"x","n":1,"aspect_ratio":"5:4"}`, http.StatusBadRequest, "invalid_aspect_ratio"},
+		{"gemini lacks 21:9", `{"chain_id":"gem-pics","prompt":"x","n":1,"aspect_ratio":"21:9"}`, http.StatusBadRequest, "invalid_aspect_ratio"},
 		{"bad json", `{"chain_id":`, http.StatusBadRequest, "invalid_request"},
 	}
 	for _, c := range cases {
