@@ -304,6 +304,56 @@ func (m *Meter) QuoteMicros(ev Event) int64 {
 // Record persists a canonical terminal request row and returns its actual cost
 // in micro-USD for the existing budget interface.
 func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
+	if err := checkImageEvent(ev); err != nil {
+		return 0, err
+	}
+	rec := m.buildRecord(ev)
+	for _, t := range m.trackers {
+		t.UsagePending(rec)
+	}
+	if err := m.recordUsage(ctx, rec); err != nil {
+		m.notifyDiscarded(rec)
+		return rec.CostMicros, err
+	}
+	if m.async == nil {
+		m.notifyPersisted(rec)
+	}
+	m.notifyObservers(rec)
+	return rec.CostMicros, nil
+}
+
+// BuildRecord computes the usage row and its cost in micro-USD exactly as
+// Record would write it, without persisting anything. A caller that inserts
+// the row in its own transaction calls Persisted once that commits.
+func (m *Meter) BuildRecord(ev Event) (store.UsageRecord, int64, error) {
+	if err := checkImageEvent(ev); err != nil {
+		return store.UsageRecord{}, 0, err
+	}
+	rec := m.buildRecord(ev)
+	return rec, rec.CostMicros, nil
+}
+
+// Persisted tells trackers and observers that a row from BuildRecord is now
+// in the usage table, as Record does after a synchronous write.
+func (m *Meter) Persisted(rec store.UsageRecord) {
+	for _, t := range m.trackers {
+		t.UsagePending(rec)
+	}
+	m.notifyPersisted(rec)
+	m.notifyObservers(rec)
+}
+
+func (m *Meter) notifyObservers(rec store.UsageRecord) {
+	for _, fn := range m.observers {
+		fn(rec)
+	}
+	if m.hub != nil {
+		m.hub.Publish(usagehub.Event{Provider: rec.Provider, Model: rec.Model, AccountID: rec.AccountID,
+			Tokens: rec.PromptTokens + rec.CompletionTokens})
+	}
+}
+
+func (m *Meter) buildRecord(ev Event) store.UsageRecord {
 	u := clampUsage(ev.Usage)
 	status := ev.Status
 	if status == "" {
@@ -400,24 +450,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	if ev.HeadroomStats != nil {
 		rec.HeadroomTokensSaved, rec.HeadroomBytesSaved, rec.HeadroomActive = ev.HeadroomStats.TokensSaved, ev.HeadroomStats.BytesSaved, ev.HeadroomStats.Active
 	}
-	for _, t := range m.trackers {
-		t.UsagePending(rec)
-	}
-	if err := m.recordUsage(ctx, rec); err != nil {
-		m.notifyDiscarded(rec)
-		return cost.CostMicros, err
-	}
-	if m.async == nil {
-		m.notifyPersisted(rec)
-	}
-	for _, fn := range m.observers {
-		fn(rec)
-	}
-	if m.hub != nil {
-		m.hub.Publish(usagehub.Event{Provider: ev.Provider, Model: ev.Model, AccountID: ev.AccountID,
-			Tokens: u.PromptTokens + u.CompletionTokens})
-	}
-	return cost.CostMicros, nil
+	return rec
 }
 
 // costForEvent resolves the terminal cost for an event, preferring the winning

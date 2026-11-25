@@ -258,6 +258,48 @@ func (r *ImageJobsRepo) Finish(ctx context.Context, id, status, errMsg string, c
 	return tx.Commit()
 }
 
+// FinishSucceededBilled marks a running job succeeded with its files and
+// inserts its usage row in one transaction, so a job is billed exactly when
+// it is shown as succeeded. The count and costs come from usage. A job that
+// is not running yields ErrImageJobNotActive and no rows change.
+func (r *ImageJobsRepo) FinishSucceededBilled(ctx context.Context, id string, files []ImageFile, usage UsageRecord, finishedAt time.Time) error {
+	tx, err := r.db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: finish billed image job: %w", err)
+	}
+	defer tx.Rollback()
+	cost := usage.CostMicros
+	if cost == 0 && usage.CostNanos != 0 {
+		cost = (usage.CostNanos + 500) / 1000
+	}
+	upstream := usage.UpstreamCostMicros
+	if upstream == 0 && usage.UpstreamCostNanos != 0 {
+		upstream = (usage.UpstreamCostNanos + 500) / 1000
+	}
+	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = '', image_count = ?, cost_micro = ?, upstream_cost_micro = ?, finished_at = ?, expires_at = ? WHERE id = ? AND status = ?`)
+	res, err := tx.ExecContext(ctx, q, ImageJobSucceeded, usage.ImageCount, cost, upstream,
+		formatTime(finishedAt), formatTime(finishedAt.Add(imageRetention)), id, ImageJobRunning)
+	if err != nil {
+		return fmt.Errorf("store: finish billed image job: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrImageJobNotActive
+	}
+	fq := r.db.rebind(`INSERT INTO image_files (` + imageFileCols + `) VALUES (?, ?, ?, ?, ?)`)
+	for _, f := range files {
+		if _, err := tx.ExecContext(ctx, fq, f.ID, id, f.Path, f.Mime, f.Bytes); err != nil {
+			return fmt.Errorf("store: insert image file: %w", err)
+		}
+	}
+	if err := insertUsage(ctx, tx, r.db.rebind, usage); err != nil {
+		return fmt.Errorf("store: record image usage: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: finish billed image job: %w", err)
+	}
+	return nil
+}
+
 // GetFile returns a file only when its job belongs to the owner and has not expired.
 func (r *ImageJobsRepo) GetFile(ctx context.Context, ownerSub, fileID string) (ImageFile, error) {
 	q := r.db.rebind(`SELECT f.id, f.job_id, f.path, f.mime, f.bytes FROM image_files f

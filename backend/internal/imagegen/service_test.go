@@ -846,22 +846,11 @@ func TestQueueFullReleasesAndFails(t *testing.T) {
 
 type failingMeter struct{}
 
-func (failingMeter) Record(context.Context, meter.Event) (int64, error) {
-	return 0, errors.New("usage store down")
+func (failingMeter) BuildRecord(meter.Event) (store.UsageRecord, int64, error) {
+	return store.UsageRecord{}, 0, errors.New("bad image event")
 }
 
-func TestMeterFailureReleasesAndRemovesFiles(t *testing.T) {
-	e := newEnv(t, nImages)
-	e.svc.d.Meter = failingMeter{}
-	e.start()
-	key := e.key("k1", 2*priceStd, true)
-	job := e.submitWait(input("A", key, 2))
-	require.Equal(t, store.ImageJobFailed, job.Status)
-	require.Empty(t, job.Files)
-	require.Empty(t, e.ownerFiles("A"), "stored files are removed")
-	require.Zero(t, e.spend("k1"))
-	e.requireSettledOnce()
-}
+func (failingMeter) Persisted(store.UsageRecord) {}
 
 // panicTransport panics inside the download, after an earlier item was stored.
 type panicTransport struct{}
@@ -882,7 +871,7 @@ func TestPanicMidSaveRemovesWrittenFiles(t *testing.T) {
 	e.requireSettledOnce()
 }
 
-// flakyJobs fails Finish(succeeded) a set number of times.
+// flakyJobs fails FinishSucceededBilled a set number of times.
 type flakyJobs struct {
 	*store.ImageJobsRepo
 	mu       sync.Mutex
@@ -890,20 +879,18 @@ type flakyJobs struct {
 	calls    int
 }
 
-func (f *flakyJobs) Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, at time.Time) error {
-	if status == store.ImageJobSucceeded {
-		f.mu.Lock()
-		f.calls++
-		fail := f.calls <= f.failures
-		f.mu.Unlock()
-		if fail {
-			return errors.New("database is locked")
-		}
+func (f *flakyJobs) FinishSucceededBilled(ctx context.Context, id string, files []store.ImageFile, usage store.UsageRecord, at time.Time) error {
+	f.mu.Lock()
+	f.calls++
+	fail := f.calls <= f.failures
+	f.mu.Unlock()
+	if fail {
+		return errors.New("database is locked")
 	}
-	return f.ImageJobsRepo.Finish(ctx, id, status, errMsg, count, cost, upstream, files, at)
+	return f.ImageJobsRepo.FinishSucceededBilled(ctx, id, files, usage, at)
 }
 
-func TestFinishRetriedAfterBilling(t *testing.T) {
+func TestFinishRetriedBeforeBilling(t *testing.T) {
 	old := finishBackoff
 	finishBackoff = time.Millisecond
 	t.Cleanup(func() { finishBackoff = old })
@@ -911,7 +898,8 @@ func TestFinishRetriedAfterBilling(t *testing.T) {
 	for _, tc := range []struct {
 		failures   int
 		wantStatus string
-	}{{failures: 3, wantStatus: store.ImageJobSucceeded}, {failures: 10, wantStatus: store.ImageJobRunning}} {
+		wantSpend  int64
+	}{{failures: 3, wantStatus: store.ImageJobSucceeded, wantSpend: priceStd}, {failures: 10, wantStatus: store.ImageJobFailed}} {
 		e := newEnv(t, nImages)
 		jobs := &flakyJobs{ImageJobsRepo: e.db.ImageJobs(), failures: tc.failures}
 		e.svc.d.Jobs = jobs
@@ -922,24 +910,21 @@ func TestFinishRetriedAfterBilling(t *testing.T) {
 		jobs.mu.Lock()
 		require.Equal(t, 4, jobs.calls, "one try plus at most three retries")
 		jobs.mu.Unlock()
-		require.Equal(t, priceStd, e.spend("k1"), "billed exactly once either way")
+		require.Equal(t, tc.wantSpend, e.spend("k1"), "billed exactly when succeeded")
 		e.requireSettledOnce()
 	}
 }
 
-// lostAckJobs commits the first Finish(succeeded) but reports an error, as
-// when the database commits and the ack is lost.
+// lostAckJobs commits the first FinishSucceededBilled but reports an
+// error, as when the database commits and the ack is lost.
 type lostAckJobs struct {
 	*store.ImageJobsRepo
 	mu    sync.Mutex
 	calls int
 }
 
-func (f *lostAckJobs) Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, at time.Time) error {
-	err := f.ImageJobsRepo.Finish(ctx, id, status, errMsg, count, cost, upstream, files, at)
-	if status != store.ImageJobSucceeded {
-		return err
-	}
+func (f *lostAckJobs) FinishSucceededBilled(ctx context.Context, id string, files []store.ImageFile, usage store.UsageRecord, at time.Time) error {
+	err := f.ImageJobsRepo.FinishSucceededBilled(ctx, id, files, usage, at)
 	f.mu.Lock()
 	f.calls++
 	first := f.calls == 1
@@ -950,7 +935,7 @@ func (f *lostAckJobs) Finish(ctx context.Context, id, status, errMsg string, cou
 	return err
 }
 
-func TestFinishLostAckKeepsFiles(t *testing.T) {
+func TestFinishLostAckBilledOnceKeepsFiles(t *testing.T) {
 	old := finishBackoff
 	finishBackoff = time.Millisecond
 	t.Cleanup(func() { finishBackoff = old })

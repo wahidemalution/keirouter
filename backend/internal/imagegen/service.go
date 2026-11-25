@@ -67,6 +67,7 @@ type Jobs interface {
 	CountActive(ctx context.Context, ownerSub string) (int, error)
 	SetRunning(ctx context.Context, id string) error
 	Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, finishedAt time.Time) error
+	FinishSucceededBilled(ctx context.Context, id string, files []store.ImageFile, usage store.UsageRecord, finishedAt time.Time) error
 	FailStale(ctx context.Context, msg string) (int, error)
 	ListExpired(ctx context.Context, now time.Time) ([]store.ImageJob, error)
 	Delete(ctx context.Context, ownerSub, id string) ([]store.ImageFile, error)
@@ -80,9 +81,12 @@ type Budget interface {
 	Release(scope budget.Scope)
 }
 
-// Meter records a billed usage row and returns its cost in micro-USD.
+// Meter builds an image job's usage row; the row is inserted in the same
+// transaction that marks the job succeeded, then Persisted tells the
+// budget trackers and observers.
 type Meter interface {
-	Record(ctx context.Context, ev meter.Event) (int64, error)
+	BuildRecord(ev meter.Event) (store.UsageRecord, int64, error)
+	Persisted(rec store.UsageRecord)
 }
 
 // Deps wires the service.
@@ -337,7 +341,10 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // Recover fails jobs a previous process left queued or running. Their
-// reservations lived in that process's memory, so nothing is held.
+// reservations lived in that process's memory, so nothing is held. It
+// assumes one instance serves image jobs; with more, a job another
+// instance is still running is failed here, and since billing commits only
+// with the succeeded state, that job then stays unbilled.
 func (s *Service) Recover(ctx context.Context) error {
 	n, err := s.d.Jobs.FailStale(ctx, staleMessage)
 	if err != nil {
@@ -435,68 +442,101 @@ func (s *Service) process(j job) {
 		return
 	}
 
-	// Bookkeeping gets its own deadline so a slow upstream cannot leave
-	// stored images unbilled.
-	bctx, bcancel := context.WithTimeout(context.Background(), settleTimeout)
-	defer bcancel()
-	count := len(files)
-	cost, err := s.d.Meter.Record(bctx, meter.Event{
+	rec, cost, err := s.d.Meter.BuildRecord(meter.Event{
 		RequestID: "img-" + j.id, TenantID: j.scope.TenantID, ProjectID: j.scope.ProjectID,
 		APIKeyID: j.scope.APIKeyID, Provider: step.Provider, Model: step.Model, ChainID: j.chainID,
-		Client: "portal", ImageCount: count,
+		Client: "portal", ImageCount: len(files),
 		ImageBillMicro: float64(price.sell), ImageCostMicro: float64(price.cost),
 	})
 	if err != nil {
-		s.log.Error("record image usage", "job", j.id, "err", err)
+		s.log.Error("build image usage", "job", j.id, "err", err)
 		settle(false, 0)
 		s.removeFiles(files)
-		s.fail(j.id, "Gagal mencatat pemakaian. Saldo tidak dipotong.")
+		s.fail(j.id, msgBillingFail)
 		return
 	}
-	billed = true
-	settle(true, cost)
-	upstream := int64(count) * price.cost
+
+	// The usage row and the succeeded state commit together. The
+	// reservation stays held until the row is counted (Persisted), so the
+	// spend is never uncounted in between.
+	switch s.commitBilled(j, files, rec) {
+	case outcomeBilled:
+		billed = true
+		s.d.Meter.Persisted(rec)
+		settle(true, cost)
+	case outcomeNotBilled:
+		settle(false, 0)
+		s.removeFiles(files)
+	case outcomeUnknown:
+		// Neither state could be confirmed. Spend reads see the usage row
+		// if it committed, so the hold is dropped; the files stay in case
+		// the job is serving them, and the sweeper removes them otherwise.
+		s.log.Error("image job billing outcome unknown", "job", j.id, "key", j.scope.APIKeyID, "cost_micro", cost)
+		settle(false, 0)
+	}
+}
+
+type commitOutcome int
+
+const (
+	outcomeBilled commitOutcome = iota
+	outcomeNotBilled
+	outcomeUnknown
+)
+
+// commitBilled stores the job as succeeded together with its usage row,
+// retrying transient errors. An error may hide a commit whose ack was lost,
+// so a failed commit is settled by reading the job back.
+func (s *Service) commitBilled(j job, files []store.ImageFile, rec store.UsageRecord) commitOutcome {
 	finishedAt := s.now()
-	var err2 error
+	var err error
 	for attempt := 0; attempt <= finishRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(finishBackoff * time.Duration(attempt))
 		}
-		fctx, fcancel := context.WithTimeout(context.Background(), settleTimeout)
-		err2 = s.d.Jobs.Finish(fctx, j.id, store.ImageJobSucceeded, "", count, cost, upstream, files, finishedAt)
-		fcancel()
-		if err2 == nil {
-			return
+		ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
+		err = s.d.Jobs.FinishSucceededBilled(ctx, j.id, files, rec, finishedAt)
+		cancel()
+		if err == nil {
+			return outcomeBilled
 		}
-		if errors.Is(err2, store.ErrImageJobNotActive) {
-			// An earlier try may have committed and lost its ack: then the
-			// job is succeeded and its rows point at these files.
-			if s.finishedOK(j) {
-				return
-			}
-			// The usage row is already billed; never bill again. The job
-			// was failed elsewhere, so its files have no row to serve them.
-			s.log.Error("image job billed but no longer active", "job", j.id, "key", j.scope.APIKeyID, "cost_micro", cost)
-			s.removeFiles(files)
-			return
+		if errors.Is(err, store.ErrImageJobNotActive) {
+			break
 		}
 	}
-	s.log.Error("billed image job could not be finished", "job", j.id, "key", j.scope.APIKeyID,
-		"cost_micro", cost, "images", count, "err", err2)
+	s.log.Warn("finish billed image job", "job", j.id, "err", err)
+	return s.resolveCommit(j)
 }
 
-// finishedOK reports whether the job is stored as succeeded. When the
-// status cannot be read it answers true, so files are kept rather than
-// deleted from a job that may be serving them.
-func (s *Service) finishedOK(j job) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
-	defer cancel()
-	got, err := s.d.Jobs.Get(ctx, j.owner, j.id)
-	if err != nil {
-		s.log.Error("read billed image job", "job", j.id, "err", err)
-		return !errors.Is(err, store.ErrNotFound)
+// resolveCommit decides whether an unacknowledged billed finish committed.
+// A succeeded job was billed. A running one is failed here; that update
+// only applies while the job is running, so once it succeeds the billed
+// commit can no longer happen. Any other state was never billed.
+func (s *Service) resolveCommit(j job) commitOutcome {
+	for attempt := 0; attempt <= finishRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(finishBackoff * time.Duration(attempt))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
+		got, err := s.d.Jobs.Get(ctx, j.owner, j.id)
+		if err == nil && got.Status == store.ImageJobRunning {
+			err = s.d.Jobs.Finish(ctx, j.id, store.ImageJobFailed, msgBillingFail, 0, 0, 0, nil, s.now())
+			cancel()
+			if err == nil {
+				return outcomeNotBilled
+			}
+			continue // succeeded or failed meanwhile: read it again
+		}
+		cancel()
+		switch {
+		case err == nil && got.Status == store.ImageJobSucceeded:
+			return outcomeBilled
+		case err == nil, errors.Is(err, store.ErrNotFound):
+			return outcomeNotBilled
+		}
+		s.log.Warn("read image job after billing error", "job", j.id, "err", err)
 	}
-	return got.Status == store.ImageJobSucceeded
+	return outcomeUnknown
 }
 
 // fail marks a job failed with nothing billed.
@@ -515,6 +555,7 @@ const (
 	msgBusy        = "Layanan sedang sibuk, coba lagi sebentar. Saldo tidak dipotong."
 	msgTimeout     = "Pembuatan gambar terlalu lama. Saldo tidak dipotong."
 	msgGenericFail = "Gambar gagal dibuat. Saldo tidak dipotong."
+	msgBillingFail = "Gagal mencatat pemakaian. Saldo tidak dipotong."
 )
 
 // moderationWords mark a provider refusal of the prompt itself.
