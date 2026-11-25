@@ -443,10 +443,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		SlugSkips:          marketCache.Skips(),
 	})
 
-	imageGen := imagegen.New(imagegen.Deps{
+	imageGen := newImageGen(ctx, imagegen.Deps{
 		Jobs: db.ImageJobs(), Generator: pipe, Budget: bud, Meter: mtr,
 		DataDir: dataDir, Log: sysLog("images"),
-	})
+	}, log)
 
 	// Resolve frontend dist directory. Check common install locations, then cwd.
 	frontendDir := resolveFrontendDir()
@@ -798,11 +798,6 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 	if a.imageGen != nil {
-		// Jobs a previous process left queued or running are failed before
-		// the workers start, so none is picked up twice.
-		if err := a.imageGen.Recover(ctx); err != nil {
-			a.log.Error("recover image jobs", "err", err)
-		}
 		a.bg.Add(2)
 		go func() {
 			defer a.bg.Done()
@@ -955,6 +950,36 @@ func backupOwner() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
 	return host + "-" + hex.EncodeToString(b)
+}
+
+// recoverAttempts and recoverBackoff bound the startup retry of image job
+// recovery.
+const recoverAttempts = 3
+
+var recoverBackoff = 500 * time.Millisecond
+
+// newImageGen builds the portal image service and fails the jobs a previous
+// process left queued or running, before any worker or request can touch
+// them. When recovery keeps failing it returns nil: portal images are then
+// off (the routes answer 503) rather than running beside stale jobs.
+func newImageGen(ctx context.Context, d imagegen.Deps, log *slog.Logger) *imagegen.Service {
+	svc := imagegen.New(d)
+	var err error
+	for attempt := 1; attempt <= recoverAttempts; attempt++ {
+		if err = svc.Recover(ctx); err == nil {
+			return svc
+		}
+		log.Warn("recover image jobs failed", "attempt", attempt, "err", err)
+		if attempt < recoverAttempts {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Duration(attempt) * recoverBackoff):
+			}
+		}
+	}
+	log.Error("portal image generation disabled: could not recover image jobs", "err", err)
+	return nil
 }
 
 // resolveDataDir returns the configured data directory, creating it if needed.

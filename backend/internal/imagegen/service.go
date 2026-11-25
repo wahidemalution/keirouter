@@ -45,7 +45,6 @@ const (
 	settleTimeout = 30 * time.Second
 	ownerStripes  = 64
 	staleMessage  = "server dimulai ulang, saldo tidak dipotong"
-	maxErrorRunes = 300
 	// maxQueueWait stays well inside the budget's one-hour reservation life.
 	maxQueueWait     = 45 * time.Minute
 	queueWaitMessage = "antrian terlalu lama, saldo tidak dipotong"
@@ -404,7 +403,8 @@ func (s *Service) process(j job) {
 	})
 	if err != nil {
 		settle(false, 0)
-		s.fail(j.id, upstreamMessage(err))
+		s.log.Warn("image generation failed", "job", j.id, "err", err)
+		s.fail(j.id, failureMessage(err))
 		return
 	}
 	// Bill the exact step that answered at its own price. One that is
@@ -508,15 +508,40 @@ func (s *Service) fail(id, msg string) {
 	}
 }
 
-// upstreamMessage turns a generation error into a short readable message.
-func upstreamMessage(err error) string {
-	msg := err.Error()
-	if pe := core.AsProviderError(err); pe != nil && pe.Message != "" {
-		msg = pe.Message
+// Fixed failure messages shown to the user. Provider text never reaches the
+// job row: it can name providers or models, or echo a masked upstream key.
+const (
+	msgModeration  = "Prompt ditolak oleh moderasi. Saldo tidak dipotong."
+	msgBusy        = "Layanan sedang sibuk, coba lagi sebentar. Saldo tidak dipotong."
+	msgTimeout     = "Pembuatan gambar terlalu lama. Saldo tidak dipotong."
+	msgGenericFail = "Gambar gagal dibuat. Saldo tidak dipotong."
+)
+
+// moderationWords mark a provider refusal of the prompt itself.
+var moderationWords = []string{"moderation", "content policy", "content_policy", "safety", "content filter", "content_filter"}
+
+// failureMessage picks the user message for a generation error by its class.
+func failureMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return msgTimeout
 	}
-	msg = strings.TrimRight(strings.TrimSpace(msg), ".")
-	if r := []rune(msg); len(r) > maxErrorRunes {
-		msg = string(r[:maxErrorRunes]) + "..."
+	pe := core.AsProviderError(err)
+	if pe == nil {
+		return msgGenericFail
 	}
-	return "Gagal membuat gambar: " + msg + ". Saldo tidak dipotong."
+	text := strings.ToLower(pe.Message)
+	switch {
+	case pe.Kind == core.ErrContentFilter || pe.Kind == core.ErrPolicyBlocked:
+		return msgModeration
+	case pe.Kind == core.ErrRateLimit || pe.StatusCode == http.StatusTooManyRequests:
+		return msgBusy
+	case pe.Kind == core.ErrTimeout || pe.StatusCode == http.StatusGatewayTimeout || pe.StatusCode == http.StatusRequestTimeout:
+		return msgTimeout
+	}
+	for _, w := range moderationWords {
+		if strings.Contains(text, w) {
+			return msgModeration
+		}
+	}
+	return msgGenericFail
 }

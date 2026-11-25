@@ -294,7 +294,7 @@ func TestFailedJobReleasesReservation(t *testing.T) {
 	key := e.key("k1", priceStd, true)
 	job := e.submitWait(input("A", key, 1))
 	require.Equal(t, store.ImageJobFailed, job.Status)
-	require.Contains(t, job.Error, "content policy violation")
+	require.Equal(t, msgModeration, job.Error, "the user sees a fixed message, not the provider text")
 	require.Zero(t, job.CostMicro)
 	require.Zero(t, e.spend("k1"))
 
@@ -996,4 +996,38 @@ func TestDownloadRefusesLoopback(t *testing.T) {
 	_, err := e.svc.download(context.Background(), srv.URL+"/img.png")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "internal address")
+}
+
+func TestFailureMessageHidesUpstreamText(t *testing.T) {
+	secret := "provider wegoo-relay model gpt-image-1 key sk-abc123 refused"
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"moderation kind", &core.ProviderError{Kind: core.ErrContentFilter, Message: secret}, msgModeration},
+		{"moderation 400", &core.ProviderError{Kind: core.ErrBadRequest, StatusCode: 400, Message: "Your request was rejected by the safety system: " + secret}, msgModeration},
+		{"rate limit kind", &core.ProviderError{Kind: core.ErrRateLimit, Message: secret}, msgBusy},
+		{"429", &core.ProviderError{Kind: core.ErrUpstream, StatusCode: 429, Message: secret}, msgBusy},
+		{"timeout kind", &core.ProviderError{Kind: core.ErrTimeout, Message: secret}, msgTimeout},
+		{"deadline", fmt.Errorf("%s: %w", secret, context.DeadlineExceeded), msgTimeout},
+		{"other", &core.ProviderError{Kind: core.ErrAuth, StatusCode: 401, Message: secret}, msgGenericFail},
+		{"plain", errors.New(secret), msgGenericFail},
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, failureMessage(c.err), c.name)
+		require.NotContains(t, c.want, "—")
+	}
+
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return nil, dispatch.Target{}, &core.ProviderError{Kind: core.ErrUpstream, StatusCode: 502, Provider: "wegoo-relay", Message: secret}
+	})
+	e.start()
+	key := e.key("k1", priceStd, true)
+	job := e.submitWait(input("A", key, 1))
+	require.Equal(t, store.ImageJobFailed, job.Status)
+	require.Equal(t, msgGenericFail, job.Error)
+	for _, leak := range []string{"sk-abc", "wegoo", "gpt-image-1"} {
+		require.NotContains(t, job.Error, leak)
+	}
 }

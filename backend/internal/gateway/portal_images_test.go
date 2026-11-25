@@ -321,6 +321,66 @@ func TestPortalImageModelsHonourAllowedModels(t *testing.T) {
 	require.Equal(t, "model_not_available", errorCode(t, rec))
 }
 
+// requirePicsUnavailable asserts the "pics" chain is neither listed nor
+// submittable for tok.
+func (f *portalImageFixture) requirePicsUnavailable(tok string) {
+	f.t.Helper()
+	rec := f.do(http.MethodGet, "/portal/api/images/models", "", tok)
+	require.Equal(f.t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotContains(f.t, rec.Body.String(), `"pics"`)
+	rec = f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","prompt":"x","n":1}`, tok)
+	require.Equal(f.t, http.StatusNotFound, rec.Code, rec.Body.String())
+	require.Equal(f.t, "model_not_available", errorCode(f.t, rec))
+	require.Empty(f.t, f.list(tok))
+}
+
+func TestPortalImageAdminAllowedProviders(t *testing.T) {
+	f := newPortalImageFixture(t)
+	tok, keyID := f.user("sub-a", 10*picsPrice)
+	require.NoError(t, f.srv.identity.Keys().SetAllowedProviders(context.Background(), keyID, []string{"anthropic"}))
+	f.requirePicsUnavailable(tok)
+}
+
+func TestPortalImageUserDisabledProvider(t *testing.T) {
+	f := newPortalImageFixture(t)
+	tok, keyID := f.user("sub-a", 10*picsPrice)
+	require.NoError(t, f.srv.identity.Keys().SetModelProviderEnabled(context.Background(), keyID, "pics", "openai", false))
+	f.requirePicsUnavailable(tok)
+}
+
+// Only the steps the key may use are routed: a disabled first step is skipped
+// and the job runs (and is billed) on the next one.
+func TestPortalImageDisabledStepSkipped(t *testing.T) {
+	f := newPortalImageFixture(t)
+	createImageChain(t, f.srv.db, "duo",
+		store.ChainStep{Provider: "openai", Model: "gpt-image-1", StaticPerImage: 0.04},
+		store.ChainStep{Provider: "azure", Model: "gpt-image-1", StaticPerImage: 0.02})
+	tok, keyID := f.user("sub-a", 10*picsPrice)
+	require.NoError(t, f.srv.identity.Keys().SetModelProviderEnabled(context.Background(), keyID, "duo", "openai", false))
+
+	rec := f.do(http.MethodGet, "/portal/api/images/models", "", tok)
+	require.Contains(t, rec.Body.String(), `"chain_id":"duo","name":"duo","family":"gpt-image","price_micro":22000`)
+	f.submit(tok, `{"chain_id":"duo","prompt":"x","n":1}`)
+	job := f.waitDone(tok, 1)[0]
+	require.Equal(t, store.ImageJobSucceeded, job.Status, job.Error)
+	require.Equal(t, int64(22_000), f.spend(keyID))
+}
+
+func TestPortalImageDisabledKey(t *testing.T) {
+	f := newPortalImageFixture(t)
+	tok, keyID := f.user("sub-a", 10*picsPrice)
+	require.NoError(t, f.srv.identity.Keys().SetDisabled(context.Background(), keyID, true))
+	for _, rq := range []struct{ method, path, body string }{
+		{http.MethodGet, "/portal/api/images/models", ""},
+		{http.MethodPost, "/portal/api/images", `{"chain_id":"pics","prompt":"x","n":1}`},
+	} {
+		rec := f.do(rq.method, rq.path, rq.body, tok)
+		require.Equal(t, http.StatusForbidden, rec.Code, rq.path)
+		require.Equal(t, "key_disabled", errorCode(t, rec))
+	}
+	require.Empty(t, f.list(tok))
+}
+
 func TestPortalImageInsufficientBalance(t *testing.T) {
 	f := newPortalImageFixture(t)
 	tok, keyID := f.user("sub-a", picsPrice)
@@ -346,6 +406,7 @@ func TestPortalImageValidation(t *testing.T) {
 		{"n five", `{"chain_id":"pics","prompt":"x","n":5}`, http.StatusBadRequest, "invalid_n"},
 		{"no chain", `{"prompt":"x","n":1}`, http.StatusBadRequest, "chain_required"},
 		{"unknown chain", `{"chain_id":"nope","prompt":"x","n":1}`, http.StatusNotFound, "model_not_available"},
+		{"bad size", `{"chain_id":"pics","prompt":"x","n":1,"size":"4096x4096"}`, http.StatusBadRequest, "invalid_size"},
 		{"bad resolution", `{"chain_id":"grok-pics","prompt":"x","n":1,"resolution":"4k"}`, http.StatusBadRequest, "invalid_resolution"},
 		{"bad json", `{"chain_id":`, http.StatusBadRequest, "invalid_request"},
 	}

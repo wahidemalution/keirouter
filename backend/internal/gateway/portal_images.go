@@ -30,6 +30,9 @@ const (
 // other stored type is sent as an opaque download.
 var servedImageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/webp": true}
 
+// gptImageSizes are the sizes a gpt-image request may ask for.
+var gptImageSizes = map[string]bool{"1024x1024": true, "1536x1024": true, "1024x1536": true, "auto": true}
+
 // mountPortalImageRoutes adds the portal image routes. The caller applies
 // portalSessionMiddleware.
 func (s *Server) mountPortalImageRoutes(r chi.Router) {
@@ -107,6 +110,9 @@ func (s *Server) portalImageChains(r *http.Request, key store.APIKey, planID str
 				images = append(images, t)
 			}
 		}
+		// The admin's provider ceiling and the customer's Model Settings
+		// apply here as on the API route.
+		images, _ = filterStepsForKey(images, key, c.Name)
 		price, ok := imagegen.ShownPriceMicro(images, "")
 		if !ok {
 			continue
@@ -117,6 +123,31 @@ func (s *Server) portalImageChains(r *http.Request, key store.APIKey, planID str
 		})
 	}
 	return out, nil
+}
+
+// portalImageKey loads the session's key as API auth would see it: a
+// disabled key is refused with 403, and the key carries its provider routing
+// settings. A routing load error fails the request rather than routing
+// through providers the key may not use.
+func (s *Server) portalImageKey(w http.ResponseWriter, r *http.Request, u store.PortalUser) (store.APIKey, bool) {
+	key, ok := s.portalKey(w, r, u)
+	if !ok {
+		return store.APIKey{}, false
+	}
+	if key.Disabled {
+		writeImageError(w, http.StatusForbidden, "key_disabled")
+		return store.APIKey{}, false
+	}
+	routing, err := s.identity.Keys().KeyRouting(r.Context(), key.ID)
+	if err != nil {
+		s.log.Error("portal images: load key routing failed", "err", err)
+		writeImageError(w, http.StatusInternalServerError, "internal_error")
+		return store.APIKey{}, false
+	}
+	key.AllowedProviders = routing.AllowedProviders
+	key.ModelDisabledProviders = routing.DisabledProviders
+	key.ModelFinalFallback = routing.FinalFallback
+	return key, true
 }
 
 func chainHasImageStep(c store.Chain) bool {
@@ -146,7 +177,7 @@ func (s *Server) handlePortalImageModels(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	key, ok := s.portalKey(w, r, u)
+	key, ok := s.portalImageKey(w, r, u)
 	if !ok {
 		return
 	}
@@ -225,7 +256,7 @@ func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	key, ok := s.portalKey(w, r, u)
+	key, ok := s.portalImageKey(w, r, u)
 	if !ok {
 		return
 	}
@@ -251,7 +282,11 @@ func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request)
 	var size, aspect, resolution string
 	switch picked.family {
 	case "gpt-image":
-		size = strings.TrimSpace(body.Size)
+		size = strings.ToLower(strings.TrimSpace(body.Size))
+		if size != "" && !gptImageSizes[size] {
+			writeImageError(w, http.StatusBadRequest, "invalid_size")
+			return
+		}
 	case "grok-imagine":
 		aspect = strings.TrimSpace(body.AspectRatio)
 		resolution = strings.ToLower(strings.TrimSpace(body.Resolution))
