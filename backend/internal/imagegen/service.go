@@ -1,0 +1,467 @@
+// Package imagegen runs portal image jobs. Submit reserves the job's maximum
+// price against the key's prepaid balance and queues it; a worker generates
+// the images, stores them on disk, and bills only the images it stored.
+package imagegen
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"log/slog"
+	"math"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/mydisha/keirouter/backend/internal/budget"
+	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/limits"
+	"github.com/mydisha/keirouter/backend/internal/meter"
+	"github.com/mydisha/keirouter/backend/internal/pipeline"
+	"github.com/mydisha/keirouter/backend/internal/store"
+)
+
+// Errors shown to the user.
+var (
+	ErrTooManyActive       = errors.New("imagegen: too many active image jobs")
+	ErrInsufficientBalance = errors.New("imagegen: insufficient balance")
+	ErrNoImageTarget       = errors.New("imagegen: no priced image target")
+	ErrEmptyPrompt         = errors.New("imagegen: prompt is empty")
+	ErrQueueFull           = errors.New("imagegen: job queue is full")
+)
+
+const (
+	maxActive     = 2
+	maxImages     = 4
+	workerCount   = 4
+	queueSize     = 256
+	jobTimeout    = 5 * time.Minute
+	settleTimeout = 30 * time.Second
+	ownerStripes  = 64
+	staleMessage  = "server dimulai ulang, saldo tidak dipotong"
+	maxErrorRunes = 300
+)
+
+// Generator generates images with fallback across MediaOptions.Targets and
+// reports the provider that answered.
+type Generator interface {
+	GenerateImage(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error)
+}
+
+// Budget is the slice of budget.Engine the service uses.
+type Budget interface {
+	Check(ctx context.Context, scope budget.Scope) (budget.Decision, error)
+	Reserve(ctx context.Context, scope budget.Scope, est budget.Estimate) (budget.Reservation, error)
+	Confirm(scope budget.Scope, actualMicros int64)
+	Release(scope budget.Scope)
+}
+
+// Meter records a billed usage row and returns its cost in micro-USD.
+type Meter interface {
+	Record(ctx context.Context, ev meter.Event) (int64, error)
+}
+
+// Deps wires the service.
+type Deps struct {
+	Jobs      *store.ImageJobsRepo
+	Generator Generator
+	Budget    Budget
+	Meter     Meter
+	// DataDir holds generated files under images/.
+	DataDir string
+	Log     *slog.Logger
+	// Now supplies the clock; nil means time.Now.
+	Now func() time.Time
+}
+
+// SubmitInput is one portal image request.
+type SubmitInput struct {
+	OwnerSub string
+	Key      store.APIKey
+	ChainID  string
+	// Targets is the chain's resolved fallback order; only priced image steps
+	// at or below the shown price are used.
+	Targets                       []dispatch.Target
+	Limits                        limits.EffectiveLimits
+	Prompt                        string
+	N                             int
+	Size, AspectRatio, Resolution string
+}
+
+// Service queues and runs portal image jobs.
+type Service struct {
+	d      Deps
+	log    *slog.Logger
+	queue  chan job
+	owners [ownerStripes]sync.Mutex
+	http   *http.Client
+	// onDone, when set, is called after each job is handled (tests).
+	onDone func(id, owner string)
+}
+
+// job is everything a worker needs, copied by value at submit time so no
+// state is shared between jobs.
+type job struct {
+	id, owner, chainID string
+	scope              budget.Scope
+	targets            []dispatch.Target
+	limits             limits.EffectiveLimits
+	req                core.ImageRequest
+	resolution         string
+}
+
+// New builds the service. Call Recover once, then run Run and RunSweeper.
+func New(d Deps) *Service {
+	log := d.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Service{d: d, log: log, queue: make(chan job, queueSize), http: newDownloadClient()}
+}
+
+func (s *Service) now() time.Time {
+	if s.d.Now != nil {
+		return s.d.Now()
+	}
+	return time.Now()
+}
+
+// stepPrice is one target's per-image price in micro-USD.
+type stepPrice struct{ sell, cost int64 }
+
+// priceOf is the single pricing helper: the shown price, the reservation and
+// the meter event all use it, so shown price × count equals the bill. ok is
+// false for a step that is not a priced image step or would sell below cost.
+func priceOf(t dispatch.Target, resolution string) (stepPrice, bool) {
+	usd := t.ImagePrice
+	if usd <= 0 {
+		return stepPrice{}, false
+	}
+	if isHighRes(resolution) && t.ImagePrice2K > 0 {
+		usd = t.ImagePrice2K
+	}
+	// The 1e-6 micro slack absorbs float noise (0.0042 × 2 × 1e6 is
+	// 8400.000000000001) so it does not ceil to an extra micro.
+	sell := int64(math.Ceil(usd*t.ImageBillMult*1e6 - 1e-6))
+	cost := int64(math.Round(usd * 1e6))
+	if sell <= 0 || sell < cost {
+		return stepPrice{}, false
+	}
+	return stepPrice{sell: sell, cost: cost}, true
+}
+
+// isHighRes reports whether resolution asks for more than the standard 1K output.
+func isHighRes(resolution string) bool {
+	r := strings.ToLower(strings.TrimSpace(resolution))
+	return r != "" && r != "1k"
+}
+
+// ShownPriceMicro is the per-image sell price shown to the user: the price
+// of the first priced image step at that resolution.
+func ShownPriceMicro(targets []dispatch.Target, resolution string) (int64, bool) {
+	for _, t := range targets {
+		if p, ok := priceOf(t, resolution); ok {
+			return p.sell, true
+		}
+	}
+	return 0, false
+}
+
+// eligibleTargets keeps, in order, the priced image steps whose sell price
+// does not exceed the shown price, so a fallback never costs more than shown.
+func eligibleTargets(targets []dispatch.Target, resolution string, shown int64) []dispatch.Target {
+	var out []dispatch.Target
+	for _, t := range targets {
+		if p, ok := priceOf(t, resolution); ok && p.sell <= shown {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (s *Service) ownerLock(owner string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(owner))
+	return &s.owners[h.Sum32()%ownerStripes]
+}
+
+type jobParams struct {
+	ChainID     string `json:"chain_id"`
+	Model       string `json:"model"`
+	Size        string `json:"size"`
+	AspectRatio string `json:"aspect_ratio"`
+	Resolution  string `json:"resolution"`
+	N           int    `json:"n"`
+}
+
+// Submit reserves N × the shown price and queues the job. The owner's active
+// count, the reservation and the insert run under one per-owner lock, so
+// concurrent submits cannot pass the active limit.
+func (s *Service) Submit(ctx context.Context, in SubmitInput) (store.ImageJob, error) {
+	prompt := strings.TrimSpace(in.Prompt)
+	if prompt == "" {
+		return store.ImageJob{}, ErrEmptyPrompt
+	}
+	n := min(max(in.N, 1), maxImages)
+
+	mu := s.ownerLock(in.OwnerSub)
+	mu.Lock()
+	defer mu.Unlock()
+
+	active, err := s.d.Jobs.CountActive(ctx, in.OwnerSub)
+	if err != nil {
+		return store.ImageJob{}, err
+	}
+	if active >= maxActive {
+		return store.ImageJob{}, ErrTooManyActive
+	}
+	shown, ok := ShownPriceMicro(in.Targets, in.Resolution)
+	if !ok {
+		return store.ImageJob{}, ErrNoImageTarget
+	}
+	targets := eligibleTargets(in.Targets, in.Resolution, shown)
+
+	scope := budget.Scope{TenantID: in.Key.TenantID, ProjectID: in.Key.ProjectID, APIKeyID: in.Key.ID}
+	if err := s.requirePrepaid(ctx, scope); err != nil {
+		return store.ImageJob{}, err
+	}
+	res, err := s.d.Budget.Reserve(ctx, scope, budget.Estimate{Micros: int64(n) * shown})
+	if err != nil {
+		if pe := core.AsProviderError(err); pe != nil && pe.Kind == core.ErrBudgetBlocked {
+			return store.ImageJob{}, fmt.Errorf("%w: %s", ErrInsufficientBalance, pe.Message)
+		}
+		return store.ImageJob{}, err
+	}
+	scope.Reservation = res.ID
+
+	params, _ := json.Marshal(jobParams{
+		ChainID: in.ChainID, Model: targets[0].Model, Size: in.Size,
+		AspectRatio: in.AspectRatio, Resolution: in.Resolution, N: n,
+	})
+	rec := store.ImageJob{
+		ID: uuid.NewString(), OwnerSub: in.OwnerSub, KeyID: in.Key.ID, TenantID: in.Key.TenantID,
+		ProjectID: in.Key.ProjectID, ChainID: in.ChainID, Prompt: prompt, Params: string(params),
+		Status: store.ImageJobQueued, CreatedAt: s.now(),
+	}
+	if err := s.d.Jobs.Create(ctx, rec); err != nil {
+		s.d.Budget.Release(scope)
+		return store.ImageJob{}, err
+	}
+	j := job{
+		id: rec.ID, owner: in.OwnerSub, chainID: in.ChainID, scope: scope,
+		targets: targets, limits: in.Limits, resolution: in.Resolution,
+		req: core.ImageRequest{
+			Model: targets[0].Model, Prompt: prompt, N: n, Size: in.Size,
+			AspectRatio: in.AspectRatio, Resolution: in.Resolution, ResponseFormat: "b64_json",
+		},
+	}
+	select {
+	case s.queue <- j:
+	default:
+		s.d.Budget.Release(scope)
+		s.fail(rec.ID, "Antrean gambar sedang penuh, coba lagi sebentar lagi. Saldo tidak dipotong.")
+		return store.ImageJob{}, ErrQueueFull
+	}
+	return rec, nil
+}
+
+// requirePrepaid fails closed unless the key has a hard-cutoff USD balance:
+// without one, Reserve would let the job through unbilled-capped.
+func (s *Service) requirePrepaid(ctx context.Context, scope budget.Scope) error {
+	if scope.APIKeyID == "" {
+		return ErrInsufficientBalance
+	}
+	dec, err := s.d.Budget.Check(ctx, scope)
+	if err != nil {
+		return err
+	}
+	if !dec.Allowed {
+		return ErrInsufficientBalance
+	}
+	for _, bu := range dec.BudgetUsage {
+		b := bu.Budget
+		if b.ScopeKind == store.ScopeAPIKey && b.ScopeID == scope.APIKeyID && b.HardCutoff && b.LimitMicros > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: no prepaid balance on this key", ErrInsufficientBalance)
+}
+
+// Run starts the workers and blocks until ctx is done. Jobs still queued
+// then stay queued and are failed by Recover on the next start.
+func (s *Service) Run(ctx context.Context) {
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case j := <-s.queue:
+					s.process(j)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// Recover fails jobs a previous process left queued or running. Their
+// reservations lived in that process's memory, so nothing is held.
+func (s *Service) Recover(ctx context.Context) error {
+	n, err := s.d.Jobs.FailStale(ctx, staleMessage)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		s.log.Info("failed image jobs left by restart", "count", n)
+	}
+	return nil
+}
+
+// process runs one job. Exactly one of Confirm or Release settles its
+// reservation, including when the generator panics.
+func (s *Service) process(j job) {
+	var once sync.Once
+	settle := func(confirm bool, cost int64) {
+		once.Do(func() {
+			if confirm {
+				s.d.Budget.Confirm(j.scope, cost)
+			} else {
+				s.d.Budget.Release(j.scope)
+			}
+		})
+	}
+	var written []store.ImageFile
+	billed := false
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("image job panicked", "job", j.id, "billed", billed, "panic", r)
+			if !billed {
+				settle(false, 0)
+				s.removeFiles(written)
+				s.fail(j.id, "Terjadi kesalahan internal. Saldo tidak dipotong.")
+			}
+		}
+		if s.onDone != nil {
+			s.onDone(j.id, j.owner)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+	defer cancel()
+	if err := s.d.Jobs.SetRunning(ctx, j.id); err != nil {
+		// Failed by Recover or otherwise no longer queued: do not generate.
+		s.log.Warn("image job not runnable", "job", j.id, "err", err)
+		settle(false, 0)
+		return
+	}
+
+	req := j.req
+	resp, provider, err := s.d.Generator.GenerateImage(ctx, &req, pipeline.MediaOptions{
+		Targets: j.targets, TenantID: j.scope.TenantID, ProjectID: j.scope.ProjectID,
+		APIKeyID: j.scope.APIKeyID, Limits: j.limits, Reserved: true,
+	})
+	if err != nil {
+		settle(false, 0)
+		s.fail(j.id, upstreamMessage(err))
+		return
+	}
+	step, price, ok := winningStep(j.targets, provider, j.resolution)
+	if !ok {
+		s.log.Error("image provider not among job targets", "job", j.id, "provider", provider)
+		settle(false, 0)
+		s.fail(j.id, "Gagal membuat gambar. Saldo tidak dipotong.")
+		return
+	}
+	var items []core.ImageData
+	if resp != nil {
+		items = resp.Data
+	}
+	if len(items) > j.req.N {
+		items = items[:j.req.N]
+	}
+	files, lost := s.saveAll(ctx, j.owner, items)
+	written = files
+	if lost > 0 {
+		s.log.Warn("image lost after upstream success", "job", j.id, "lost", lost)
+	}
+	if len(files) == 0 {
+		settle(false, 0)
+		s.fail(j.id, "Penyedia tidak mengembalikan gambar yang bisa disimpan. Saldo tidak dipotong.")
+		return
+	}
+
+	// Bookkeeping gets its own deadline so a slow upstream cannot leave
+	// stored images unbilled.
+	bctx, bcancel := context.WithTimeout(context.Background(), settleTimeout)
+	defer bcancel()
+	count := len(files)
+	cost, err := s.d.Meter.Record(bctx, meter.Event{
+		RequestID: "img-" + j.id, TenantID: j.scope.TenantID, ProjectID: j.scope.ProjectID,
+		APIKeyID: j.scope.APIKeyID, Provider: step.Provider, Model: step.Model, ChainID: j.chainID,
+		Client: "portal", ImageCount: count,
+		ImageBillMicro: float64(price.sell), ImageCostMicro: float64(price.cost),
+	})
+	if err != nil {
+		s.log.Error("record image usage", "job", j.id, "err", err)
+		settle(false, 0)
+		s.removeFiles(files)
+		s.fail(j.id, "Gagal mencatat pemakaian. Saldo tidak dipotong.")
+		return
+	}
+	billed = true
+	settle(true, cost)
+	upstream := int64(count) * price.cost
+	if err := s.d.Jobs.Finish(bctx, j.id, store.ImageJobSucceeded, "", count, cost, upstream, files, s.now()); err != nil {
+		if errors.Is(err, store.ErrImageJobNotActive) {
+			// The usage row is already billed; never bill again. The job
+			// was failed elsewhere, so its files have no row to serve them.
+			s.log.Error("image job billed but no longer active", "job", j.id, "cost_micro", cost)
+			s.removeFiles(files)
+			return
+		}
+		s.log.Error("finish billed image job", "job", j.id, "cost_micro", cost, "err", err)
+	}
+}
+
+// winningStep is the first job target served by provider, with its price.
+func winningStep(targets []dispatch.Target, provider, resolution string) (dispatch.Target, stepPrice, bool) {
+	for _, t := range targets {
+		if t.Provider == provider {
+			p, ok := priceOf(t, resolution)
+			return t, p, ok
+		}
+	}
+	return dispatch.Target{}, stepPrice{}, false
+}
+
+// fail marks a job failed with nothing billed.
+func (s *Service) fail(id, msg string) {
+	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
+	defer cancel()
+	if err := s.d.Jobs.Finish(ctx, id, store.ImageJobFailed, msg, 0, 0, 0, nil, s.now()); err != nil {
+		s.log.Warn("mark image job failed", "job", id, "err", err)
+	}
+}
+
+// upstreamMessage turns a generation error into a short readable message.
+func upstreamMessage(err error) string {
+	msg := err.Error()
+	if pe := core.AsProviderError(err); pe != nil && pe.Message != "" {
+		msg = pe.Message
+	}
+	msg = strings.TrimRight(strings.TrimSpace(msg), ".")
+	if r := []rune(msg); len(r) > maxErrorRunes {
+		msg = string(r[:maxErrorRunes]) + "..."
+	}
+	return "Gagal membuat gambar: " + msg + ". Saldo tidak dipotong."
+}
