@@ -28,11 +28,11 @@ const imageRetention = 24 * time.Hour
 // ImageJob is one portal image generation request, owned by a portal user.
 type ImageJob struct {
 	ID, OwnerSub, KeyID, TenantID, ProjectID, ChainID, Prompt, Params, Status, Error string
-	ImageCount                                                                     int
-	CostMicro, UpstreamCostMicro                                                   int64
-	CreatedAt                                                                      time.Time
-	FinishedAt, ExpiresAt                                                          *time.Time
-	Files                                                                          []ImageFile
+	ImageCount                                                                       int
+	CostMicro, UpstreamCostMicro                                                     int64
+	CreatedAt                                                                        time.Time
+	FinishedAt, ExpiresAt                                                            *time.Time
+	Files                                                                            []ImageFile
 }
 
 // ImageFile is one generated image stored on disk under Path.
