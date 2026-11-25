@@ -62,6 +62,34 @@ func TestUnderstandImageFallsBackToCanonicalChat(t *testing.T) {
 	require.Equal(t, "https://example.com/cat.jpg", remote.URL)
 }
 
+// modelFailingImageConnector fails image calls for one model.
+type modelFailingImageConnector struct {
+	chatOnlyVisionConnector
+	failModel string
+}
+
+func (c *modelFailingImageConnector) ID() string { return "openai" }
+func (c *modelFailingImageConnector) GenerateImage(_ context.Context, req *core.ImageRequest, _ core.Credentials) (*core.ImageResponse, error) {
+	if req.Model == c.failModel {
+		return nil, &core.ProviderError{Kind: core.ErrUpstream, Message: "model overloaded"}
+	}
+	return &core.ImageResponse{Model: req.Model, Data: []core.ImageData{{B64JSON: "aGk="}}}, nil
+}
+
+// Two steps of one provider: the winner is reported as the exact target, so
+// a caller can bill that step's own price.
+func TestGenerateImageTargetReportsExactStep(t *testing.T) {
+	conn := &modelFailingImageConnector{failModel: "gpt-image-1-mini"}
+	p := New(Deps{Dispatcher: newPlannerDispatcherWithConnector(t, conn, "acc-1", "acc-2")})
+	mini := dispatch.Target{Provider: "openai", Model: "gpt-image-1-mini", ImagePrice: 0.01, ImageBillMult: 1.5}
+	full := dispatch.Target{Provider: "openai", Model: "gpt-image-1", ImagePrice: 0.05, ImageBillMult: 1.16}
+	resp, got, err := p.GenerateImageTarget(context.Background(), &core.ImageRequest{Prompt: "cat"},
+		MediaOptions{Targets: []dispatch.Target{mini, full}, TenantID: store.DefaultTenantID})
+	require.NoError(t, err)
+	require.Equal(t, "gpt-image-1", resp.Model)
+	require.Equal(t, full, got)
+}
+
 type imageOnlyConnector struct{ chatOnlyVisionConnector }
 
 func (c *imageOnlyConnector) ID() string { return "openai" }

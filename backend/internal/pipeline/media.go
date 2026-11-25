@@ -116,13 +116,21 @@ func (p *Pipeline) Embeddings(ctx context.Context, req *core.EmbeddingRequest, o
 
 // GenerateImage runs an image-generation request with fallback.
 func (p *Pipeline) GenerateImage(ctx context.Context, req *core.ImageRequest, opts MediaOptions) (*core.ImageResponse, string, error) {
+	resp, target, err := p.GenerateImageTarget(ctx, req, opts)
+	return resp, target.Provider, err
+}
+
+// GenerateImageTarget is GenerateImage reporting the exact target that
+// answered, so a caller can bill that step's own price even when several
+// targets share a provider.
+func (p *Pipeline) GenerateImageTarget(ctx context.Context, req *core.ImageRequest, opts MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 	attempts, err := p.mediaAttempts(ctx, opts)
 	if err != nil {
-		return nil, "", err
+		return nil, dispatch.Target{}, err
 	}
 	release, err := p.acquireMediaLimit(ctx, opts, 1)
 	if err != nil {
-		return nil, "", err
+		return nil, dispatch.Target{}, err
 	}
 	defer release(0)
 	var lastErr error
@@ -137,15 +145,15 @@ func (p *Pipeline) GenerateImage(ctx context.Context, req *core.ImageRequest, op
 		resp, callErr := conn.GenerateImage(core.WithProxy(ctx, a.Creds), &r, a.Creds)
 		if callErr != nil {
 			if !p.noteMediaFailure(ctx, a, callErr) {
-				return nil, "", callErr
+				return nil, dispatch.Target{}, callErr
 			}
 			lastErr = callErr
 			continue
 		}
 		p.dispatcher.NoteSuccess(ctx, a.Target.Provider, a.Account.ID, a.Target.Model)
-		return resp, a.Target.Provider, nil
+		return resp, a.Target, nil
 	}
-	return nil, "", orInternal(lastErr)
+	return nil, dispatch.Target{}, orInternal(lastErr)
 }
 
 // Transcribe runs a speech-to-text request with fallback.

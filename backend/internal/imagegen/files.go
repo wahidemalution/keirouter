@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,9 +32,38 @@ const (
 // imageExt lists the stored image types; anything else is a lost image.
 var imageExt = map[string]string{"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
+// publicIP reports whether ip may be fetched: not loopback, private
+// (RFC 1918, fc00::/7), link-local, multicast or unspecified.
+func publicIP(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified())
+}
+
+// refuseInternal runs on every dial with the resolved address, so neither a
+// DNS name nor a redirect can reach an internal host.
+func refuseInternal(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !publicIP(ip) {
+		return fmt.Errorf("refusing to download from internal address %s", host)
+	}
+	return nil
+}
+
 func newDownloadClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: refuseInternal}
+	transport := &http.Transport{
+		Proxy:               nil,
+		DialContext:         dialer.DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	}
 	return &http.Client{
-		Timeout: downloadTimeout,
+		Transport: transport,
+		Timeout:   downloadTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > maxRedirects {
 				return errors.New("too many redirects")
@@ -53,11 +84,11 @@ func ownerHash(owner string) string {
 
 func (s *Service) imagesRoot() string { return filepath.Join(s.d.DataDir, "images") }
 
-// saveAll stores each item under the owner's directory and counts the items
-// that could not be stored.
-func (s *Service) saveAll(ctx context.Context, owner string, items []core.ImageData) ([]store.ImageFile, int) {
+// saveAll stores each item under the owner's directory, appending every file
+// to *written as soon as it is on disk (so a panic midway can still remove
+// it), and counts the items that could not be stored.
+func (s *Service) saveAll(ctx context.Context, owner string, items []core.ImageData, written *[]store.ImageFile) int {
 	dir := filepath.Join(s.imagesRoot(), ownerHash(owner))
-	var files []store.ImageFile
 	lost := 0
 	for i, it := range items {
 		f, err := s.saveOne(ctx, dir, it)
@@ -66,9 +97,9 @@ func (s *Service) saveAll(ctx context.Context, owner string, items []core.ImageD
 			lost++
 			continue
 		}
-		files = append(files, f)
+		*written = append(*written, f)
 	}
-	return files, lost
+	return lost
 }
 
 func (s *Service) saveOne(ctx context.Context, dir string, it core.ImageData) (store.ImageFile, error) {

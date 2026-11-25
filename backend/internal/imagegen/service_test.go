@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,7 +47,7 @@ func b64Item(tag string) core.ImageData {
 	return core.ImageData{B64JSON: base64.StdEncoding.EncodeToString(pngBytes(tag))}
 }
 
-type genFunc func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error)
+type genFunc func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error)
 
 type fakeGen struct {
 	mu    sync.Mutex
@@ -54,7 +55,7 @@ type fakeGen struct {
 	fn    genFunc
 }
 
-func (g *fakeGen) GenerateImage(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+func (g *fakeGen) GenerateImageTarget(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 	g.mu.Lock()
 	g.calls = append(g.calls, opts)
 	g.mu.Unlock()
@@ -68,12 +69,12 @@ func (g *fakeGen) callCount() int {
 }
 
 // nImages returns req.N distinct images tagged with the prompt.
-func nImages(_ context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+func nImages(_ context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 	resp := &core.ImageResponse{}
 	for i := range req.N {
 		resp.Data = append(resp.Data, b64Item(fmt.Sprintf("%s|%d", req.Prompt, i)))
 	}
-	return resp, opts.Targets[0].Provider, nil
+	return resp, opts.Targets[0], nil
 }
 
 // countingBudget counts Confirm and Release per reservation.
@@ -227,8 +228,8 @@ func TestSubmitExactBalanceSucceeds(t *testing.T) {
 }
 
 func TestPartialImagesBilledByStoredCount(t *testing.T) {
-	e := newEnv(t, func(_ context.Context, req *core.ImageRequest, _ pipeline.MediaOptions) (*core.ImageResponse, string, error) {
-		return &core.ImageResponse{Data: []core.ImageData{b64Item("1"), b64Item("2")}}, "openai", nil
+	e := newEnv(t, func(_ context.Context, req *core.ImageRequest, _ pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("1"), b64Item("2")}}, stepA, nil
 	})
 	e.start()
 	key := e.key("k1", 4*priceStd, true)
@@ -242,8 +243,8 @@ func TestPartialImagesBilledByStoredCount(t *testing.T) {
 }
 
 func TestLostImageNotBilled(t *testing.T) {
-	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, string, error) {
-		return &core.ImageResponse{Data: []core.ImageData{b64Item("ok"), {B64JSON: "!!not base64!!"}}}, "openai", nil
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("ok"), {B64JSON: "!!not base64!!"}}}, stepA, nil
 	})
 	e.start()
 	key := e.key("k1", 2*priceStd, true)
@@ -254,9 +255,9 @@ func TestLostImageNotBilled(t *testing.T) {
 }
 
 func TestNonImageBytesNotBilled(t *testing.T) {
-	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 		html := base64.StdEncoding.EncodeToString([]byte("<html>error</html>"))
-		return &core.ImageResponse{Data: []core.ImageData{{B64JSON: html}}}, "openai", nil
+		return &core.ImageResponse{Data: []core.ImageData{{B64JSON: html}}}, stepA, nil
 	})
 	e.start()
 	key := e.key("k1", priceStd, true)
@@ -267,8 +268,8 @@ func TestNonImageBytesNotBilled(t *testing.T) {
 }
 
 func TestExtraItemsNotBilled(t *testing.T) {
-	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, string, error) {
-		return &core.ImageResponse{Data: []core.ImageData{b64Item("1"), b64Item("2"), b64Item("3")}}, "openai", nil
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("1"), b64Item("2"), b64Item("3")}}, stepA, nil
 	})
 	e.start()
 	key := e.key("k1", priceStd, true)
@@ -280,12 +281,12 @@ func TestExtraItemsNotBilled(t *testing.T) {
 func TestFailedJobReleasesReservation(t *testing.T) {
 	fail := true
 	var mu sync.Mutex
-	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 		mu.Lock()
 		f := fail
 		mu.Unlock()
 		if f {
-			return nil, "", &core.ProviderError{Kind: core.ErrUpstream, Message: "content policy violation"}
+			return nil, dispatch.Target{}, &core.ProviderError{Kind: core.ErrUpstream, Message: "content policy violation"}
 		}
 		return nImages(ctx, req, opts)
 	})
@@ -324,8 +325,8 @@ func TestFallbackNeverAboveShownPrice(t *testing.T) {
 }
 
 func TestFallbackBillsWinningStep(t *testing.T) {
-	e := newEnv(t, func(_ context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error) {
-		return &core.ImageResponse{Data: []core.ImageData{b64Item("x")}}, "gemini", nil
+	e := newEnv(t, func(_ context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("x")}}, opts.Targets[1], nil
 	})
 	e.start()
 	cheaper := dispatch.Target{Provider: "gemini", Model: "gemini-image", ImagePrice: 0.02, ImageBillMult: 1.5}
@@ -334,6 +335,42 @@ func TestFallbackBillsWinningStep(t *testing.T) {
 	require.Equal(t, int64(30_000), job.CostMicro)
 	require.Equal(t, int64(20_000), job.UpstreamCostMicro)
 	require.Equal(t, int64(30_000), e.spend("k1"))
+}
+
+// Two eligible steps of one provider: the step that answered is billed at
+// its own price and cost, never at the first same-provider step's.
+func TestSameProviderStepsBillExactWinner(t *testing.T) {
+	e := newEnv(t, func(_ context.Context, _ *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("x")}}, opts.Targets[2], nil
+	})
+	e.start()
+	xai := dispatch.Target{Provider: "xai", Model: "grok-imagine", ImagePrice: 0.04, ImageBillMult: 1.5}         // shown 60k
+	mini := dispatch.Target{Provider: "openai", Model: "gpt-image-1-mini", ImagePrice: 0.01, ImageBillMult: 1.5} // 15k / 10k
+	full := dispatch.Target{Provider: "openai", Model: "gpt-image-1", ImagePrice: 0.05, ImageBillMult: 1.16}     // 58k / 50k
+	key := e.key("k1", priceStd, true)
+	job := e.submitWait(input("A", key, 1, xai, mini, full))
+	require.Equal(t, store.ImageJobSucceeded, job.Status, job.Error)
+	require.Equal(t, int64(58_000), job.CostMicro)
+	require.Equal(t, int64(50_000), job.UpstreamCostMicro)
+	require.Equal(t, int64(58_000), e.spend("k1"))
+	var model string
+	require.NoError(t, e.db.SQL().QueryRow(`SELECT model FROM usage_records WHERE api_key_id = ?`, "k1").Scan(&model))
+	require.Equal(t, "gpt-image-1", model)
+}
+
+// A winner priced above the shown price (never passed by Submit) is not billed.
+func TestWinnerAboveShownPriceFailsClosed(t *testing.T) {
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("x")}},
+			dispatch.Target{Provider: "openai", Model: "gpt-image-1", ImagePrice: 1, ImageBillMult: 1.5}, nil
+	})
+	e.start()
+	key := e.key("k1", priceStd, true)
+	job := e.submitWait(input("A", key, 1))
+	require.Equal(t, store.ImageJobFailed, job.Status)
+	require.Empty(t, job.Files)
+	require.Zero(t, e.spend("k1"))
+	e.requireSettledOnce()
 }
 
 func TestZeroPriceTargetRefused(t *testing.T) {
@@ -514,13 +551,13 @@ func TestURLItemsDownloaded(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 		return &core.ImageResponse{Data: []core.ImageData{
 			{URL: srv.URL + "/img.png"},
 			{URL: strings.Replace(srv.URL, "https://", "http://", 1) + "/img.png"},
 			{URL: srv.URL + "/redirect-http"},
 			{URL: srv.URL + "/missing"},
-		}}, "openai", nil
+		}}, stepA, nil
 	})
 	e.svc.http.Transport = srv.Client().Transport
 	e.start()
@@ -537,7 +574,7 @@ func TestURLItemsDownloaded(t *testing.T) {
 
 func TestConcurrentUsersNoCrossover(t *testing.T) {
 	const users, jobsPerUser = 20, 3
-	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 		time.Sleep(time.Duration(rand.IntN(3000)) * time.Microsecond) // jitter only, never for correctness
 		return nImages(ctx, req, opts)
 	})
@@ -679,18 +716,18 @@ func TestConcurrentSubmitBalanceNeverNegative(t *testing.T) {
 }
 
 func TestConfirmExactlyOnce(t *testing.T) {
-	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error) {
+	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
 		switch {
 		case strings.HasSuffix(req.Prompt, "panic"):
 			panic("connector bug")
 		case strings.HasSuffix(req.Prompt, "error"):
-			return nil, "", errors.New("upstream down")
+			return nil, dispatch.Target{}, errors.New("upstream down")
 		case strings.HasSuffix(req.Prompt, "empty"):
-			return &core.ImageResponse{}, "openai", nil
+			return &core.ImageResponse{}, stepA, nil
 		case strings.HasSuffix(req.Prompt, "nil"):
-			return nil, "openai", nil
+			return nil, stepA, nil
 		case strings.HasSuffix(req.Prompt, "stranger"):
-			return &core.ImageResponse{Data: []core.ImageData{b64Item("x")}}, "unknown-provider", nil
+			return &core.ImageResponse{Data: []core.ImageData{b64Item("x")}}, dispatch.Target{Provider: "unknown-provider", Model: "x"}, nil
 		}
 		return nImages(ctx, req, opts)
 	})
@@ -722,4 +759,192 @@ func TestConfirmExactlyOnce(t *testing.T) {
 	}
 	require.Equal(t, priceStd, e.spend("k1"), "only the ok job is billed")
 	e.requireSettledOnce()
+}
+
+// ---- Fix round 1 ----
+
+// testClock is a settable clock safe to read from workers.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *testClock) set(t time.Time) {
+	c.mu.Lock()
+	c.t = t
+	c.mu.Unlock()
+}
+
+func (e *env) ownerFiles(owner string) []os.DirEntry {
+	e.t.Helper()
+	entries, err := os.ReadDir(filepath.Join(e.dataDir, "images", ownerHash(owner)))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	require.NoError(e.t, err)
+	return entries
+}
+
+// A job that waited in the queue past 45 minutes is dropped before any
+// upstream call: its reservation may be near the budget's one-hour expiry.
+func TestQueuedTooLongDropped(t *testing.T) {
+	e := newEnv(t, nImages)
+	clock := &testClock{t: time.Now()}
+	e.svc.d.Now = clock.now
+	key := e.key("k1", priceStd, true)
+	job, err := e.svc.Submit(context.Background(), input("A", key, 1))
+	require.NoError(t, err)
+
+	clock.set(clock.now().Add(45*time.Minute + time.Second))
+	e.start()
+	e.waitFor(job.ID)
+	got, err := e.db.ImageJobs().Get(context.Background(), "A", job.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.ImageJobFailed, got.Status)
+	require.Equal(t, "antrian terlalu lama, saldo tidak dipotong", got.Error)
+	require.Zero(t, e.gen.callCount())
+	require.Zero(t, e.spend("k1"))
+	e.requireSettledOnce()
+}
+
+func TestQueuedJustUnderLimitRuns(t *testing.T) {
+	e := newEnv(t, nImages)
+	clock := &testClock{t: time.Now()}
+	e.svc.d.Now = clock.now
+	key := e.key("k1", priceStd, true)
+	job, err := e.svc.Submit(context.Background(), input("A", key, 1))
+	require.NoError(t, err)
+	clock.set(clock.now().Add(44 * time.Minute))
+	e.start()
+	e.waitFor(job.ID)
+	require.Equal(t, priceStd, e.spend("k1"))
+}
+
+func TestQueueFullReleasesAndFails(t *testing.T) {
+	e := newEnv(t, nImages) // no workers: the queue only fills
+	key := e.key("k1", 100*priceStd, true)
+	ctx := context.Background()
+	for i := range queueSize {
+		_, err := e.svc.Submit(ctx, input(fmt.Sprintf("owner-%d", i/2), key, 1))
+		require.NoError(t, err)
+	}
+	_, err := e.svc.Submit(ctx, input("late", key, 1))
+	require.ErrorIs(t, err, ErrQueueFull)
+
+	jobs, err := e.db.ImageJobs().ListByOwner(ctx, "late", 10)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	require.Equal(t, store.ImageJobFailed, jobs[0].Status)
+	require.Zero(t, e.spend("k1"))
+	e.bud.mu.Lock()
+	last := e.bud.reserved[len(e.bud.reserved)-1]
+	require.Equal(t, 1, e.bud.settled[last], "the refused job's reservation is released")
+	require.Len(t, e.bud.settled, 1, "queued jobs keep their reservations")
+	e.bud.mu.Unlock()
+}
+
+type failingMeter struct{}
+
+func (failingMeter) Record(context.Context, meter.Event) (int64, error) {
+	return 0, errors.New("usage store down")
+}
+
+func TestMeterFailureReleasesAndRemovesFiles(t *testing.T) {
+	e := newEnv(t, nImages)
+	e.svc.d.Meter = failingMeter{}
+	e.start()
+	key := e.key("k1", 2*priceStd, true)
+	job := e.submitWait(input("A", key, 2))
+	require.Equal(t, store.ImageJobFailed, job.Status)
+	require.Empty(t, job.Files)
+	require.Empty(t, e.ownerFiles("A"), "stored files are removed")
+	require.Zero(t, e.spend("k1"))
+	e.requireSettledOnce()
+}
+
+// panicTransport panics inside the download, after an earlier item was stored.
+type panicTransport struct{}
+
+func (panicTransport) RoundTrip(*http.Request) (*http.Response, error) { panic("transport bug") }
+
+func TestPanicMidSaveRemovesWrittenFiles(t *testing.T) {
+	e := newEnv(t, func(context.Context, *core.ImageRequest, pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		return &core.ImageResponse{Data: []core.ImageData{b64Item("first"), {URL: "https://images.example.com/2.png"}}}, stepA, nil
+	})
+	e.svc.http.Transport = panicTransport{}
+	e.start()
+	key := e.key("k1", 2*priceStd, true)
+	job := e.submitWait(input("A", key, 2))
+	require.Equal(t, store.ImageJobFailed, job.Status)
+	require.Empty(t, e.ownerFiles("A"), "the file stored before the panic is removed")
+	require.Zero(t, e.spend("k1"))
+	e.requireSettledOnce()
+}
+
+// flakyJobs fails Finish(succeeded) a set number of times.
+type flakyJobs struct {
+	*store.ImageJobsRepo
+	mu       sync.Mutex
+	failures int
+	calls    int
+}
+
+func (f *flakyJobs) Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, at time.Time) error {
+	if status == store.ImageJobSucceeded {
+		f.mu.Lock()
+		f.calls++
+		fail := f.calls <= f.failures
+		f.mu.Unlock()
+		if fail {
+			return errors.New("database is locked")
+		}
+	}
+	return f.ImageJobsRepo.Finish(ctx, id, status, errMsg, count, cost, upstream, files, at)
+}
+
+func TestFinishRetriedAfterBilling(t *testing.T) {
+	old := finishBackoff
+	finishBackoff = time.Millisecond
+	t.Cleanup(func() { finishBackoff = old })
+
+	for _, tc := range []struct {
+		failures   int
+		wantStatus string
+	}{{failures: 3, wantStatus: store.ImageJobSucceeded}, {failures: 10, wantStatus: store.ImageJobRunning}} {
+		e := newEnv(t, nImages)
+		jobs := &flakyJobs{ImageJobsRepo: e.db.ImageJobs(), failures: tc.failures}
+		e.svc.d.Jobs = jobs
+		e.start()
+		key := e.key("k1", priceStd, true)
+		job := e.submitWait(input("A", key, 1))
+		require.Equal(t, tc.wantStatus, job.Status)
+		jobs.mu.Lock()
+		require.Equal(t, 4, jobs.calls, "one try plus at most three retries")
+		jobs.mu.Unlock()
+		require.Equal(t, priceStd, e.spend("k1"), "billed exactly once either way")
+		e.requireSettledOnce()
+	}
+}
+
+func TestPublicIP(t *testing.T) {
+	for _, s := range []string{"127.0.0.1", "::1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "fc00::1", "fd12::1",
+		"169.254.169.254", "fe80::1", "0.0.0.0", "::", "::ffff:127.0.0.1", "224.0.0.1"} {
+		require.False(t, publicIP(net.ParseIP(s)), s)
+	}
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700::1111"} {
+		require.True(t, publicIP(net.ParseIP(s)), s)
+	}
+}
+
+// The real download client refuses a loopback server at dial time.
+func TestDownloadRefusesLoopback(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(pngBytes("internal"))
+	}))
+	t.Cleanup(srv.Close)
+	e := newEnv(t, nImages)
+	_, err := e.svc.download(context.Background(), srv.URL+"/img.png")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "internal address")
 }

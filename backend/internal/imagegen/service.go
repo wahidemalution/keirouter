@@ -40,18 +40,36 @@ const (
 	maxActive     = 2
 	maxImages     = 4
 	workerCount   = 4
-	queueSize     = 256
+	queueSize     = 32
 	jobTimeout    = 5 * time.Minute
 	settleTimeout = 30 * time.Second
 	ownerStripes  = 64
 	staleMessage  = "server dimulai ulang, saldo tidak dipotong"
 	maxErrorRunes = 300
+	// maxQueueWait stays well inside the budget's one-hour reservation life.
+	maxQueueWait     = 45 * time.Minute
+	queueWaitMessage = "antrian terlalu lama, saldo tidak dipotong"
+	finishRetries    = 3
 )
 
+// finishBackoff is the base delay between Finish retries.
+var finishBackoff = 200 * time.Millisecond
+
 // Generator generates images with fallback across MediaOptions.Targets and
-// reports the provider that answered.
+// reports the exact target that answered.
 type Generator interface {
-	GenerateImage(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, string, error)
+	GenerateImageTarget(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error)
+}
+
+// Jobs is the slice of store.ImageJobsRepo the service uses.
+type Jobs interface {
+	Create(ctx context.Context, j store.ImageJob) error
+	CountActive(ctx context.Context, ownerSub string) (int, error)
+	SetRunning(ctx context.Context, id string) error
+	Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, finishedAt time.Time) error
+	FailStale(ctx context.Context, msg string) (int, error)
+	ListExpired(ctx context.Context, now time.Time) ([]store.ImageJob, error)
+	Delete(ctx context.Context, ownerSub, id string) ([]store.ImageFile, error)
 }
 
 // Budget is the slice of budget.Engine the service uses.
@@ -69,7 +87,7 @@ type Meter interface {
 
 // Deps wires the service.
 type Deps struct {
-	Jobs      *store.ImageJobsRepo
+	Jobs      Jobs
 	Generator Generator
 	Budget    Budget
 	Meter     Meter
@@ -114,6 +132,9 @@ type job struct {
 	limits             limits.EffectiveLimits
 	req                core.ImageRequest
 	resolution         string
+	// shown is the per-image price the reservation was sized on.
+	shown      int64
+	enqueuedAt time.Time
 }
 
 // New builds the service. Call Recover once, then run Run and RunSweeper.
@@ -256,6 +277,7 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput) (store.ImageJob, e
 	j := job{
 		id: rec.ID, owner: in.OwnerSub, chainID: in.ChainID, scope: scope,
 		targets: targets, limits: in.Limits, resolution: in.Resolution,
+		shown: shown, enqueuedAt: s.now(),
 		req: core.ImageRequest{
 			Model: targets[0].Model, Prompt: prompt, N: n, Size: in.Size,
 			AspectRatio: in.AspectRatio, Resolution: in.Resolution, ResponseFormat: "b64_json",
@@ -356,6 +378,15 @@ func (s *Service) process(j job) {
 		}
 	}()
 
+	// A job that waited too long may outlive its reservation (budget keeps
+	// one for an hour), after which Confirm would hold nothing back.
+	if s.now().Sub(j.enqueuedAt) > maxQueueWait {
+		s.log.Warn("image job waited too long in queue", "job", j.id)
+		settle(false, 0)
+		s.fail(j.id, queueWaitMessage)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
 	defer cancel()
 	if err := s.d.Jobs.SetRunning(ctx, j.id); err != nil {
@@ -366,7 +397,7 @@ func (s *Service) process(j job) {
 	}
 
 	req := j.req
-	resp, provider, err := s.d.Generator.GenerateImage(ctx, &req, pipeline.MediaOptions{
+	resp, step, err := s.d.Generator.GenerateImageTarget(ctx, &req, pipeline.MediaOptions{
 		Targets: j.targets, TenantID: j.scope.TenantID, ProjectID: j.scope.ProjectID,
 		APIKeyID: j.scope.APIKeyID, Limits: j.limits, Reserved: true,
 	})
@@ -375,9 +406,12 @@ func (s *Service) process(j job) {
 		s.fail(j.id, upstreamMessage(err))
 		return
 	}
-	step, price, ok := winningStep(j.targets, provider, j.resolution)
-	if !ok {
-		s.log.Error("image provider not among job targets", "job", j.id, "provider", provider)
+	// Bill the exact step that answered at its own price. One that is
+	// unpriced or above the shown price cannot be billed correctly: fail
+	// closed and store nothing.
+	price, ok := priceOf(step, j.resolution)
+	if !ok || price.sell > j.shown {
+		s.log.Error("image step not billable for this job", "job", j.id, "provider", step.Provider, "model", step.Model)
 		settle(false, 0)
 		s.fail(j.id, "Gagal membuat gambar. Saldo tidak dipotong.")
 		return
@@ -389,8 +423,8 @@ func (s *Service) process(j job) {
 	if len(items) > j.req.N {
 		items = items[:j.req.N]
 	}
-	files, lost := s.saveAll(ctx, j.owner, items)
-	written = files
+	lost := s.saveAll(ctx, j.owner, items, &written)
+	files := written
 	if lost > 0 {
 		s.log.Warn("image lost after upstream success", "job", j.id, "lost", lost)
 	}
@@ -421,27 +455,28 @@ func (s *Service) process(j job) {
 	billed = true
 	settle(true, cost)
 	upstream := int64(count) * price.cost
-	if err := s.d.Jobs.Finish(bctx, j.id, store.ImageJobSucceeded, "", count, cost, upstream, files, s.now()); err != nil {
-		if errors.Is(err, store.ErrImageJobNotActive) {
+	finishedAt := s.now()
+	var err2 error
+	for attempt := 0; attempt <= finishRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(finishBackoff * time.Duration(attempt))
+		}
+		fctx, fcancel := context.WithTimeout(context.Background(), settleTimeout)
+		err2 = s.d.Jobs.Finish(fctx, j.id, store.ImageJobSucceeded, "", count, cost, upstream, files, finishedAt)
+		fcancel()
+		if err2 == nil {
+			return
+		}
+		if errors.Is(err2, store.ErrImageJobNotActive) {
 			// The usage row is already billed; never bill again. The job
 			// was failed elsewhere, so its files have no row to serve them.
-			s.log.Error("image job billed but no longer active", "job", j.id, "cost_micro", cost)
+			s.log.Error("image job billed but no longer active", "job", j.id, "key", j.scope.APIKeyID, "cost_micro", cost)
 			s.removeFiles(files)
 			return
 		}
-		s.log.Error("finish billed image job", "job", j.id, "cost_micro", cost, "err", err)
 	}
-}
-
-// winningStep is the first job target served by provider, with its price.
-func winningStep(targets []dispatch.Target, provider, resolution string) (dispatch.Target, stepPrice, bool) {
-	for _, t := range targets {
-		if t.Provider == provider {
-			p, ok := priceOf(t, resolution)
-			return t, p, ok
-		}
-	}
-	return dispatch.Target{}, stepPrice{}, false
+	s.log.Error("billed image job could not be finished", "job", j.id, "key", j.scope.APIKeyID,
+		"cost_micro", cost, "images", count, "err", err2)
 }
 
 // fail marks a job failed with nothing billed.
