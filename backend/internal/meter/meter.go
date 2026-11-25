@@ -209,6 +209,13 @@ type Event struct {
 	// at it and the user bill at it × UpstreamCostMult.
 	MinChargeMicro float64
 
+	// ImageCount images generated, billed ImageBillMicro each (micro-USD,
+	// after markup) and costing the operator ImageCostMicro each. Image
+	// events carry no tokens and skip every token billing path.
+	ImageCount     int
+	ImageBillMicro float64
+	ImageCostMicro float64
+
 	Provider  string
 	Model     string
 	AccountID string
@@ -311,7 +318,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		switch {
 		case ev.CacheHit:
 			usageSource = "cache"
-		case u.PromptTokens+u.CompletionTokens > 0:
+		case u.PromptTokens+u.CompletionTokens > 0, isImageEvent(ev):
 			usageSource = "provider"
 		default:
 			usageSource = "none"
@@ -325,7 +332,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		savedTokens += ev.HeadroomStats.TokensSaved
 	}
 	var cost CostBreakdown
-	if u.PromptTokens+u.CompletionTokens == 0 && !ev.CacheHit && !reportedUpstreamCost(ev) {
+	if _, image := imageCost(ev); !image && u.PromptTokens+u.CompletionTokens == 0 && !ev.CacheHit && !reportedUpstreamCost(ev) {
 		// A terminal request without upstream usage has no applicable price,
 		// including a nominally successful response whose provider omitted usage.
 		// Do not inflate coverage merely because the target exists in the catalog.
@@ -373,13 +380,14 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		GuardrailDirection: ev.Guardrail.Direction, GuardrailMidStream: ev.Guardrail.MidStream,
 		GuardrailMS:     int(ev.Guardrail.Elapsed.Milliseconds()),
 		EstPromptTokens: ev.EstPromptTokens, EstCostMicros: ev.EstCostMicros,
-		CreatedAt: recordedAt,
+		ImageCount: ev.ImageCount,
+		CreatedAt:  recordedAt,
 	}
 	streamedID := ""
 	if ev.Streamed {
 		streamedID = ev.UpstreamRequestID
 	}
-	if ev.CostLookup && !ev.CacheHit && (u.PromptTokens+u.CompletionTokens > 0 || streamedID != "") {
+	if ev.CostLookup && !ev.CacheHit && !isImageEvent(ev) && (u.PromptTokens+u.CompletionTokens > 0 || streamedID != "") {
 		// Billed now at the step's ceiling price; the cost-lookup sweeper later
 		// rewrites the cost from the provider's usage log. Failed and
 		// cancelled streams count too: the provider may still have charged.
@@ -415,6 +423,9 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 // costForEvent resolves the terminal cost for an event, preferring the winning
 // step's market slug, then the chain aggregate, then the catalog.
 func (m *Meter) costForEvent(ev Event) CostBreakdown {
+	if out, ok := imageCost(ev); ok {
+		return out
+	}
 	u := clampUsage(ev.Usage)
 	savedTokens := 0
 	if ev.SlimStats != nil {

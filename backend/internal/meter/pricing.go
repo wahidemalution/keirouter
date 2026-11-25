@@ -457,6 +457,9 @@ func rateOr(rate, fallback float64) float64 {
 // It returns zero when no market slug is bound because the true upstream cost is
 // then unknown; charging zero is the safe default for a profit view.
 func upstreamCostForEvent(ev Event) CostBreakdown {
+	if isImageEvent(ev) {
+		return imageUpstreamCost(ev)
+	}
 	if micro, ok := upstreamReportedMicro(ev); ok {
 		return upstreamBilledCost(ev, micro, 0)
 	}
