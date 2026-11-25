@@ -2,7 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BarChart3, Bell, BookOpen, Coins, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, ShoppingCart, SlidersHorizontal, Sun, Wallet, X,
+  BarChart3, Bell, BookOpen, Coins, ImagePlus, Key, Layers, LayoutGrid, LogOut, Menu, Monitor, Moon, Server, ShoppingCart, SlidersHorizontal, Sun, Wallet, X,
   type LucideIcon,
 } from "lucide-react";
 import { fetchPortalStatus, PORTAL_DEV_EMAIL, portalLogout, type LandingNotification } from "../../lib/api";
@@ -40,6 +40,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: portal("/key"), label: "API Key", icon: Key },
       { to: portal("/usage"), label: "Usage", icon: BarChart3 },
+      { to: portal("/images"), label: "Buat Gambar", icon: ImagePlus },
       { to: portal("/models"), label: "Models", icon: Layers },
       { to: portal("/model-settings"), label: "Model Settings", icon: SlidersHorizontal },
       { to: portal("/topup"), label: "Topup", icon: Wallet },
@@ -71,6 +72,7 @@ const TITLES: Record<string, string> = {
   "/portal": "Dashboard",
   "/portal/key": "API Key",
   "/portal/usage": "Usage",
+  "/portal/images": "Buat Gambar",
   "/portal/models": "Models",
   "/portal/model-settings": "Model Settings",
   "/portal/topup": "Topup",
