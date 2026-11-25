@@ -36,6 +36,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/identity"
+	"github.com/mydisha/keirouter/backend/internal/imagegen"
 	"github.com/mydisha/keirouter/backend/internal/inflight"
 	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
@@ -153,6 +154,8 @@ type Server struct {
 	fin              *finance.Loader   // admin finance dashboard data
 	turnstile        turnstileVerifier
 	router           chi.Router
+	// imageGen runs portal image jobs; nil answers the image routes with 503.
+	imageGen *imagegen.Service
 	// skillsMu serializes custom-skill writes (load-modify-save on one
 	// settings key); skillsBlock caches the rendered prompt block injected
 	// into every chat request. Nil means not loaded yet.
@@ -220,6 +223,8 @@ type Deps struct {
 	// Inflight is the shared per-provider in-flight upstream counter, also
 	// fed by the pipeline. Optional; nil reports nothing running.
 	Inflight *inflight.Tracker
+	// ImageGen runs portal image jobs. Optional; nil disables portal images.
+	ImageGen *imagegen.Service
 }
 
 // New builds a gateway Server and wires its routes.
@@ -300,6 +305,7 @@ func New(d Deps) *Server {
 		probeRunner:         d.ProbeRunner,
 		paymentClient:       d.Payment,
 		inflight:            d.Inflight,
+		imageGen:            d.ImageGen,
 	}
 	if d.Config.PortalSSO.DevLogin {
 		s.log.Warn("portal dev login is ON: anyone on this machine can open the portal")
@@ -489,6 +495,7 @@ func (s *Server) routes() chi.Router {
 		r.Post("/portal/api/token/orders", s.handlePortalCreateTokenOrder)
 		r.Get("/portal/api/token/orders", s.handlePortalListTokenOrders)
 		r.Get("/portal/api/token/usage", s.handlePortalTokenUsage)
+		s.mountPortalImageRoutes(r)
 		r.Post("/portal/auth/logout", s.handlePortalLogout)
 	})
 

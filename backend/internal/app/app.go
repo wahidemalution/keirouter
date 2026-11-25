@@ -46,6 +46,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
+	"github.com/mydisha/keirouter/backend/internal/imagegen"
 	"github.com/mydisha/keirouter/backend/internal/inflight"
 	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -68,6 +69,8 @@ type App struct {
 	cfg config.Config
 	// costLookup reconciles provider bills from their usage logs (Subrouter).
 	costLookup *costlookup.Sweeper
+	// imageGen runs portal image jobs and sweeps expired ones.
+	imageGen *imagegen.Service
 	// financeBox seals hosting secrets (the master-key sealer).
 	financeBox         hosting.SecretBox
 	log                *slog.Logger
@@ -440,6 +443,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		SlugSkips:          marketCache.Skips(),
 	})
 
+	imageGen := imagegen.New(imagegen.Deps{
+		Jobs: db.ImageJobs(), Generator: pipe, Budget: bud, Meter: mtr,
+		DataDir: dataDir, Log: sysLog("images"),
+	})
+
 	// Resolve frontend dist directory. Check common install locations, then cwd.
 	frontendDir := resolveFrontendDir()
 	if frontendDir == "" {
@@ -543,6 +551,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		ProviderHealth:         healthSvc,
 		ProbeRunner:            probeRunner,
 		Inflight:               inflightTracker,
+		ImageGen:               imageGen,
 	})
 
 	srv := &http.Server{
@@ -567,6 +576,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
 	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState, backupJob: backupJob}
+	app.imageGen = imageGen
 	app.costLookup = costlookup.New(costlookup.Deps{
 		Usage: db.Usage(), Providers: db.CustomProviders(), DB: db,
 		Open:   func(stored string) (string, error) { return costlookup.OpenToken(sealer, stored) },
@@ -785,6 +795,22 @@ func (a *App) Run(ctx context.Context) error {
 		go func() {
 			defer a.bg.Done()
 			a.costLookup.Run(ctx)
+		}()
+	}
+	if a.imageGen != nil {
+		// Jobs a previous process left queued or running are failed before
+		// the workers start, so none is picked up twice.
+		if err := a.imageGen.Recover(ctx); err != nil {
+			a.log.Error("recover image jobs", "err", err)
+		}
+		a.bg.Add(2)
+		go func() {
+			defer a.bg.Done()
+			a.imageGen.Run(ctx)
+		}()
+		go func() {
+			defer a.bg.Done()
+			a.imageGen.RunSweeper(ctx, 10*time.Minute)
 		}()
 	}
 	if a.db != nil {

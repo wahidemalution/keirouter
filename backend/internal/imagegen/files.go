@@ -203,13 +203,19 @@ func (s *Service) download(ctx context.Context, raw string) ([]byte, error) {
 	return data, nil
 }
 
+// LocalPath returns f's cleaned path, and false when that path is not inside
+// the images directory, whatever the row says.
+func (s *Service) LocalPath(f store.ImageFile) (string, bool) {
+	p := filepath.Clean(f.Path)
+	return p, strings.HasPrefix(p, s.imagesRoot()+string(filepath.Separator))
+}
+
 // removeFiles deletes stored images. Only paths inside the images directory
-// are touched, whatever a row says.
+// are touched.
 func (s *Service) removeFiles(files []store.ImageFile) {
-	root := s.imagesRoot() + string(filepath.Separator)
 	for _, f := range files {
-		p := filepath.Clean(f.Path)
-		if !strings.HasPrefix(p, root) {
+		p, ok := s.LocalPath(f)
+		if !ok {
 			s.log.Error("refusing to remove image outside the images directory", "file", f.ID)
 			continue
 		}

@@ -27,6 +27,18 @@ func (s *Service) Sweep(ctx context.Context, now time.Time) error {
 	return errors.Join(errs...)
 }
 
+// Delete removes one of the owner's finished jobs, then its files. Another
+// owner's job is store.ErrNotFound; a queued or running job is
+// store.ErrImageJobActive and stays untouched.
+func (s *Service) Delete(ctx context.Context, ownerSub, id string) error {
+	files, err := s.d.Jobs.Delete(ctx, ownerSub, id)
+	if err != nil {
+		return err
+	}
+	s.removeFiles(files)
+	return nil
+}
+
 // RunSweeper sweeps now and then every interval until ctx is done.
 func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
 	if every <= 0 {
