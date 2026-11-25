@@ -26,6 +26,8 @@ type oaiImageRequest struct {
 	Quality        string `json:"quality,omitempty"`
 	Style          string `json:"style,omitempty"`
 	ResponseFormat string `json:"response_format,omitempty"`
+	AspectRatio    string `json:"aspect_ratio,omitempty"`
+	Resolution     string `json:"resolution,omitempty"`
 }
 
 type oaiImageResponse struct {
@@ -46,6 +48,7 @@ func (c *OpenAICompatible) GenerateImage(ctx context.Context, req *core.ImageReq
 	body, err := json.Marshal(oaiImageRequest{
 		Model: req.Model, Prompt: req.Prompt, N: n, Size: req.Size,
 		Quality: req.Quality, Style: req.Style, ResponseFormat: req.ResponseFormat,
+		AspectRatio: req.AspectRatio, Resolution: req.Resolution,
 	})
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
