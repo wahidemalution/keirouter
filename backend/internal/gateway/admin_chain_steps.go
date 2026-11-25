@@ -26,6 +26,8 @@ type chainStepInput struct {
 	DiscountPercent      *float64 `json:"discount_percent"`
 	CostMultiplier       *float64 `json:"cost_multiplier"`
 	DisplayName          string   `json:"display_name"`
+	StaticPerImage       float64  `json:"static_per_image"`
+	StaticPerImage2K     *float64 `json:"static_per_image_2k"`
 }
 
 // maxStepDisplayName bounds the portal provider name of a step, in runes.
@@ -41,7 +43,8 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		StaticInputPerM: in.StaticInputPerM, StaticOutputPerM: in.StaticOutputPerM,
 		StaticCacheReadPerM: in.StaticCacheReadPerM, StaticCacheWritePerM: in.StaticCacheWritePerM,
 		MarkupPercent: in.MarkupPercent, DiscountPercent: in.DiscountPercent, CostMultiplier: in.CostMultiplier,
-		DisplayName: strings.TrimSpace(in.DisplayName), CreatedAt: now,
+		DisplayName:    strings.TrimSpace(in.DisplayName),
+		StaticPerImage: in.StaticPerImage, StaticPerImage2K: in.StaticPerImage2K, CreatedAt: now,
 	}
 	if utf8.RuneCountInString(st.DisplayName) > maxStepDisplayName {
 		return st, prefix + fmt.Sprintf("display_name must be at most %d characters", maxStepDisplayName)
@@ -57,6 +60,18 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		if r != nil && !validRate(*r) {
 			return st, prefix + "invalid static price: rates must be finite and non-negative"
 		}
+	}
+	if msg := in.imagePriceProblem(prefix); msg != "" {
+		return st, msg
+	}
+	if !st.HasStaticPrice() && st.HasImagePrice() {
+		if in.StaticCacheReadPerM != nil || in.StaticCacheWritePerM != nil {
+			return st, prefix + "cache overrides only apply to a static-price step"
+		}
+		if in.MarkupPercent != nil && !validMarkup(*in.MarkupPercent) {
+			return st, prefix + "markup_percent must be between 0 and 1000"
+		}
+		return st, ""
 	}
 	if !st.HasStaticPrice() {
 		if in.StaticCacheReadPerM != nil || in.StaticCacheWritePerM != nil || in.MarkupPercent != nil ||
@@ -82,6 +97,44 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 		return st, prefix + "markup_percent must be between 0 and 1000"
 	}
 	return st, in.discountProblem(prefix)
+}
+
+// imagePriceProblem validates the per-image price of a step; "" when valid.
+// An image step is billed cost × (1 + markup), so a discount or cost
+// multiplier has no meaning on it.
+func (in chainStepInput) imagePriceProblem(prefix string) string {
+	for _, r := range []*float64{&in.StaticPerImage, in.StaticPerImage2K} {
+		if r != nil && !validRate(*r) {
+			return prefix + "invalid image price: prices must be finite and non-negative"
+		}
+	}
+	if in.StaticPerImage2K != nil && (in.StaticPerImage <= 0 || *in.StaticPerImage2K <= 0) {
+		return prefix + "static_per_image_2k needs static_per_image, and must be greater than 0; leave it empty to use static_per_image"
+	}
+	if in.StaticPerImage > 0 && (in.DiscountPercent != nil || in.CostMultiplier != nil) {
+		return prefix + "Step gambar tidak bisa diberi diskon"
+	}
+	return ""
+}
+
+// imageFamilyProblem returns the 400 message for a chain whose image-priced
+// steps span more than one image model family; "" when valid.
+func imageFamilyProblem(steps []store.ChainStep) string {
+	family := ""
+	for _, st := range steps {
+		if !st.HasImagePrice() {
+			continue
+		}
+		f := imageFamily(st.Model)
+		if f == "" {
+			continue
+		}
+		if family != "" && f != family {
+			return "Satu chain gambar hanya boleh berisi satu keluarga model"
+		}
+		family = f
+	}
+	return ""
 }
 
 // discountProblem validates the discount fields of a static step; "" when
@@ -120,5 +173,7 @@ func chainStepJSON(st store.ChainStep) map[string]any {
 		"markup_percent":           st.MarkupPercent,
 		"discount_percent":         st.DiscountPercent,
 		"cost_multiplier":          st.CostMultiplier,
+		"static_per_image":         st.StaticPerImage,
+		"static_per_image_2k":      st.StaticPerImage2K,
 	}
 }

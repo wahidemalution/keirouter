@@ -178,6 +178,15 @@ type Target struct {
 	CostMultiplier    float64
 	CostMultiplierSet bool
 
+	// ImagePrice is the step's cost in USD per generated image, copied from
+	// the chain step; zero means the step is not billed per image.
+	// ImagePrice2K is the 2K-output cost; zero means the same as ImagePrice.
+	// ImageBillMult is the customer price factor over that cost, stamped by
+	// the gateway (1 + step markup, else the chain-effective markup).
+	ImagePrice    float64
+	ImagePrice2K  float64
+	ImageBillMult float64
+
 	// ChainFallback marks the chain's last-resort fallback target, billed at
 	// the chain price.
 	ChainFallback bool
@@ -1381,6 +1390,10 @@ func TargetsFromChain(chain store.Chain) []Target {
 		}
 		if s.CostMultiplier != nil {
 			t.CostMultiplier, t.CostMultiplierSet = *s.CostMultiplier, true
+		}
+		t.ImagePrice = s.StaticPerImage
+		if s.StaticPerImage2K != nil {
+			t.ImagePrice2K = *s.StaticPerImage2K
 		}
 		out = append(out, t)
 	}
