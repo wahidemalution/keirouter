@@ -471,7 +471,6 @@ const CATALOGUE: { group: string; note?: string; entries: CatalogueEntry[] }[] =
     group: "Media and tools",
     entries: [
       { method: "POST", path: "/v1/embeddings", purpose: "Text embeddings", format: "OpenAI" },
-      { method: "POST", path: "/v1/images/generations", purpose: "Generate images from a prompt", format: "OpenAI" },
       { method: "POST", path: "/v1/images/understanding", purpose: "Describe or analyse an image", format: "KeiRouter" },
       { method: "POST", path: "/v1/videos/generations", purpose: "Start a video generation job", format: "KeiRouter" },
       { method: "GET", path: "/v1/videos/{id}", purpose: "Poll a video job for status and result", format: "KeiRouter" },

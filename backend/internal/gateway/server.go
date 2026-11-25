@@ -379,7 +379,6 @@ func (s *Server) routes() chi.Router {
 				"/v1/models",
 				"/v1/pricing",
 				"/v1/embeddings",
-				"/v1/images/generations",
 				"/v1/images/understanding",
 				"/v1/videos/generations",
 				"/v1/audio/speech",
