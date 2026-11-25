@@ -111,14 +111,21 @@ func (in chainStepInput) imagePriceProblem(prefix string) string {
 	if in.StaticPerImage2K != nil && (in.StaticPerImage <= 0 || *in.StaticPerImage2K <= 0) {
 		return prefix + "static_per_image_2k needs static_per_image, and must be greater than 0; leave it empty to use static_per_image"
 	}
-	if in.StaticPerImage > 0 && (in.DiscountPercent != nil || in.CostMultiplier != nil) {
+	if in.StaticPerImage <= 0 {
+		return ""
+	}
+	if in.DiscountPercent != nil || in.CostMultiplier != nil {
 		return prefix + "Step gambar tidak bisa diberi diskon"
+	}
+	if imageFamily(in.Model) == "" {
+		return prefix + "Model gambar tidak dikenali untuk harga per gambar"
 	}
 	return ""
 }
 
 // imageFamilyProblem returns the 400 message for a chain whose image-priced
-// steps span more than one image model family; "" when valid.
+// steps span more than one image model family; "" when valid. Each step's
+// family is known: imagePriceProblem refuses an unrecognised model.
 func imageFamilyProblem(steps []store.ChainStep) string {
 	family := ""
 	for _, st := range steps {
@@ -126,9 +133,6 @@ func imageFamilyProblem(steps []store.ChainStep) string {
 			continue
 		}
 		f := imageFamily(st.Model)
-		if f == "" {
-			continue
-		}
 		if family != "" && f != family {
 			return "Satu chain gambar hanya boleh berisi satu keluarga model"
 		}

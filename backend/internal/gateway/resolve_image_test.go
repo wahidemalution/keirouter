@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,7 +70,7 @@ func createImageChain(t *testing.T, db *store.DB, name string, steps ...store.Ch
 	t.Helper()
 	now := time.Now().UTC()
 	for i := range steps {
-		steps[i].ID, steps[i].Position = name+"-s"+string(rune('0'+i)), i
+		steps[i].ID, steps[i].Position = name+"-s"+strconv.Itoa(i), i
 	}
 	require.NoError(t, db.Chains().Create(context.Background(), store.Chain{
 		ID: name, TenantID: store.DefaultTenantID, Name: name, Strategy: "priority",
@@ -136,6 +138,45 @@ func TestAdminRejectsMixedImageFamilies(t *testing.T) {
 		{"provider":"openai","model":"gemini-3-pro-image-preview","static_per_image":0.05}]}`)
 	require.Equal(t, http.StatusBadRequest, code, body)
 	require.Contains(t, body, "Satu chain gambar hanya boleh berisi satu keluarga model")
+}
+
+func TestAdminRejectsUnknownImageModel(t *testing.T) {
+	s := newChainPricingTestServer(t)
+	code, _, body := postChain(t, s, `{"name":"img","steps":[
+		{"provider":"openai","model":"dall-e-3","static_per_image":0.04}]}`)
+	require.Equal(t, http.StatusBadRequest, code, body)
+	require.Contains(t, body, "Model gambar tidak dikenali untuk harga per gambar")
+}
+
+// countingUpstream answers every request with a chat completion and counts
+// the calls, so a test can prove a request never reached the provider.
+func countingUpstream(calls *atomic.Int32) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1","model":"gpt-image-1","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}`))
+	}
+}
+
+func TestImageOnlyChainRejectedOffImageRoutes(t *testing.T) {
+	routes := []struct{ name, path, body string }{
+		{"chat", "/v1/chat/completions", `{"model":"pics","messages":[{"role":"user","content":"hi"}]}`},
+		{"gemini", "/v1beta/models/pics:generateContent", `{"contents":[{"parts":[{"text":"hi"}]}]}`},
+		{"embeddings", "/v1/embeddings", `{"model":"pics","input":"hi"}`},
+		{"image understanding", "/v1/images/understanding", `{"model":"pics","prompt":"what is this","images":["https://example.test/a.png"]}`},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			h := newE2E(t, countingUpstream(&calls))
+			createImageChain(t, h.db, "pics", store.ChainStep{Provider: "openai", Model: "gpt-image-1", StaticPerImage: 0.04})
+			resp := h.post(t, rt.path, rt.body, h.apiKey)
+			body := readAllString(t, resp)
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode, body)
+			require.Contains(t, body, "pics")
+			require.Zero(t, calls.Load(), "the upstream must never be called")
+		})
+	}
 }
 
 func TestAdminImageStepRoundTrip(t *testing.T) {

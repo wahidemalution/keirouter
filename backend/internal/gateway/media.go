@@ -20,12 +20,30 @@ import (
 
 // mediaOptions builds pipeline.MediaOptions from a resolved request: it maps
 // the model string to fallback targets and attaches tenant/scope metadata.
+// Image-only steps are priced per generated image, so every media route but
+// image generation drops them; a route left empty answers like an unknown
+// model.
 func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOptions, error) {
+	return s.mediaOptionsFor(r, model, false)
+}
+
+// imageGenOptions is mediaOptions for image generation, which keeps
+// image-only steps.
+func (s *Server) imageGenOptions(r *http.Request, model string) (pipeline.MediaOptions, error) {
+	return s.mediaOptionsFor(r, model, true)
+}
+
+func (s *Server) mediaOptionsFor(r *http.Request, model string, imageGen bool) (pipeline.MediaOptions, error) {
 	key, _ := authedKey(r.Context())
 	tenantID := tenantOf(key)
 	resolved, err := s.resolveTargets(r.Context(), tenantID, model)
 	if err != nil {
 		return pipeline.MediaOptions{}, err
+	}
+	if !imageGen {
+		if resolved.Targets = dropImageOnlySteps(resolved.Targets); len(resolved.Targets) == 0 {
+			return pipeline.MediaOptions{}, errUnknownModel(model)
+		}
 	}
 	if len(resolved.Targets) > 0 {
 		filtered, ferr := s.filterAllowedTargets(r.Context(), key.ID, key.PlanID, model, resolved.PlanOpts.ChainID != "", resolved.Targets)
@@ -154,7 +172,7 @@ func (s *Server) handleImageGeneration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "model and prompt are required")
 		return
 	}
-	opts, err := s.mediaOptions(r, req.Model)
+	opts, err := s.imageGenOptions(r, req.Model)
 	if err != nil {
 		s.writeMediaError(w, err)
 		return
