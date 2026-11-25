@@ -150,7 +150,41 @@ export const formatImagePrice = (usd: number): string => {
   return `$${int},${frac.padEnd(2, "0")}`;
 };
 
+// imageFamily mirrors the gateway's imageFamily: the image model family of a
+// model id, matched on the part after the last "/"; "" for any other model.
+export const imageFamily = (model: string): string => {
+  const id = model.toLowerCase().split("/").pop() ?? "";
+  if (id.startsWith("gpt-image")) return "gpt-image";
+  if (id.startsWith("grok-imagine")) return "grok-imagine";
+  if (id.startsWith("gemini-") && id.includes("image")) return "gemini-image";
+  return "";
+};
+
+// showsImagePrice decides whether a step gets the per-image price block: an
+// image model, or any step that already holds an image price so it can be
+// seen and cleared.
+export const showsImagePrice = (step: Pick<DraftChainStep, "model" | "imageCost" | "imageCost2k">): boolean =>
+  imageFamily(step.model) !== "" || step.imageCost.trim() !== "" || step.imageCost2k.trim() !== "";
+
 export type ImageCostCheck = { ok: true; cost: number | null; cost2k: number | null } | { ok: false; error: string };
+
+// imageMarkupProblem checks the step markup of an image step ("" inherits).
+// It only applies while an image cost is set, so a stale markup on a chat step
+// is never flagged. Returns "" when valid.
+export const imageMarkupProblem = (step: Pick<DraftChainStep, "imageCost" | "stepMarkup">): string => {
+  const cost = parseOptional(step.imageCost);
+  if (!(cost !== undefined && cost > 0)) return "";
+  const markup = parseOptional(step.stepMarkup);
+  if (markup === undefined) return "";
+  return Number.isFinite(markup) && markup >= 0 && markup <= 1000 ? "" : "Markup harus antara 0 dan 1000.";
+};
+
+// imageStepProblem is the first validation error of a step's image price
+// fields, or "".
+export const imageStepProblem = (step: Pick<DraftChainStep, "imageCost" | "imageCost2k" | "stepMarkup">): string => {
+  const check = checkImageCost(step);
+  return check.ok ? imageMarkupProblem(step) : check.error;
+};
 
 // checkImageCost validates the two per-image cost inputs. Both empty is a
 // normal (non-image) step.

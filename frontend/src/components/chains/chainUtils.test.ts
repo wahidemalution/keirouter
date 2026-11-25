@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoMarketSlug, imageSellPrice, formatImagePrice, checkImageCost, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, imageSellPrice, formatImagePrice, checkImageCost, imageMarkupProblem, imageStepProblem, imageFamily, showsImagePrice, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -305,6 +305,33 @@ test("checkImageCost rejects a 2K cost without a base cost", () => {
   assert.equal(checkImageCost({ imageCost: "", imageCost2k: "0.01" }).ok, false);
   assert.equal(checkImageCost({ imageCost: "0.004", imageCost2k: "" }).ok, true);
   assert.equal(checkImageCost({ imageCost: "-1", imageCost2k: "" }).ok, false);
+});
+
+test("imageMarkupProblem blocks a bad step markup only when an image cost is set", () => {
+  for (const bad of ["abc", "-5", "1001"]) {
+    assert.notEqual(imageMarkupProblem({ imageCost: "0.004", stepMarkup: bad }), "", bad);
+    assert.notEqual(imageStepProblem({ imageCost: "0.004", imageCost2k: "", stepMarkup: bad }), "", bad);
+  }
+  assert.equal(imageMarkupProblem({ imageCost: "0.004", stepMarkup: "" }), "");
+  assert.equal(imageMarkupProblem({ imageCost: "0.004", stepMarkup: "0" }), "");
+  assert.equal(imageMarkupProblem({ imageCost: "0.004", stepMarkup: "1000" }), "");
+  assert.equal(imageMarkupProblem({ imageCost: "", stepMarkup: "abc" }), "");
+});
+
+test("imageFamily mirrors the gateway rule", () => {
+  assert.equal(imageFamily("gpt-image-1"), "gpt-image");
+  assert.equal(imageFamily("openai/GPT-Image-2"), "gpt-image");
+  assert.equal(imageFamily("xai/grok-imagine-image"), "grok-imagine");
+  assert.equal(imageFamily("google/gemini-2.5-flash-image"), "gemini-image");
+  assert.equal(imageFamily("gemini-2.5-pro"), "");
+  assert.equal(imageFamily("gpt-image/other"), "");
+  assert.equal(imageFamily("gpt-4o"), "");
+});
+
+test("showsImagePrice shows for image models or a saved price", () => {
+  assert.equal(showsImagePrice({ model: "gpt-image-1", imageCost: "", imageCost2k: "" }), true);
+  assert.equal(showsImagePrice({ model: "gpt-4o", imageCost: "", imageCost2k: "" }), false);
+  assert.equal(showsImagePrice({ model: "gpt-4o", imageCost: "0.004", imageCost2k: "" }), true);
 });
 
 test("stepPayload carries image costs and makeDraftStep reads them back", () => {

@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { Field, Input } from "../ui";
 import { DiscountPriceFields } from "./DiscountPriceFields";
 import { FieldMessage } from "./FieldMessage";
-import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, checkImageCost, formatImagePrice, imageSellPrice, type DraftChainStep, type StepPriceSource as Source, staticStepPreview } from "./chainUtils";
+import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, checkImageCost, formatImagePrice, imageMarkupProblem, imageSellPrice, showsImagePrice, type DraftChainStep, type StepPriceSource as Source, staticStepPreview } from "./chainUtils";
 
 const focusRing = "peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500";
 
@@ -52,9 +52,8 @@ export function StepPriceSource({
   const imagePreviewId = `${uid}-image-preview`;
   const image = checkImageCost(step);
   const imageOn = image.ok && (image.cost ?? 0) > 0;
-  const rawStepMarkup = step.stepMarkup.trim() === "" ? undefined : Number(step.stepMarkup);
-  const stepMarkupBad = rawStepMarkup !== undefined && !(Number.isFinite(rawStepMarkup) && rawStepMarkup >= 0 && rawStepMarkup <= 1000);
-  const stepMarkup = stepMarkupBad ? undefined : rawStepMarkup;
+  const markupProblem = imageMarkupProblem(step);
+  const stepMarkup = step.stepMarkup.trim() === "" ? undefined : Number(step.stepMarkup);
   const sell = imageOn ? imageSellPrice(image.cost ?? 0, stepMarkup ?? null, inheritedMarkup ?? 0) : 0;
 
   return (
@@ -150,7 +149,7 @@ export function StepPriceSource({
         </div>
       )}
 
-      {step.priceSource !== "discount" && (
+      {step.priceSource !== "discount" && showsImagePrice(step) && (
         <div className="space-y-2">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Field label="Modal per gambar (USD)" optional hint="Isi hanya untuk step model gambar.">
@@ -174,8 +173,8 @@ export function StepPriceSource({
           <div id={imagePreviewId} aria-live="polite">
             {!image.ok ? (
               <FieldMessage>{image.error}</FieldMessage>
-            ) : imageOn && (stepMarkupBad || markupPending) ? (
-              <FieldMessage tone={stepMarkupBad ? "bad" : "muted"}>{stepMarkupBad ? "Markup harus antara 0 dan 1000." : `Memuat ${inheritedLabel} untuk harga jual.`}</FieldMessage>
+            ) : imageOn && (markupProblem !== "" || markupPending) ? (
+              <FieldMessage tone={markupProblem ? "bad" : "muted"}>{markupProblem || `Memuat ${inheritedLabel} untuk harga jual.`}</FieldMessage>
             ) : imageOn ? (
               <p className="rounded-lg border border-line bg-subtle px-3 py-2 text-[13px] text-fg">
                 Harga jual: <span className="font-medium tabular-nums">{formatImagePrice(sell)}</span> / gambar

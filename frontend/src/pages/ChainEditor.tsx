@@ -17,7 +17,7 @@ import { StepPriceSource } from "../components/chains/StepPriceSource";
 import { SurplusStepsAdder, type NewStep } from "../components/chains/SurplusStepsAdder";
 import { loadSurplusLabels, useSurplusLabels } from "../components/chains/useSurplusLabels";
 import { ChainRoutePreview, StepNumber } from "../components/chains/ChainRoutePreview";
-import { type ChainStrategy, type DraftChainStep, type FallbackPriceDraft, autoMarketSlug, checkImageCost, resolveSurplusProvider, surplusProviderOf, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, discountStepPreview, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
+import { type ChainStrategy, type DraftChainStep, type FallbackPriceDraft, autoMarketSlug, imageStepProblem, resolveSurplusProvider, surplusProviderOf, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, deriveCacheRates, isValidChainName, makeDraftStep, normalizeChainStrategy, discountStepPreview, staticStepPreview, stepKey, stepPayload, strategyDescription, strategyIcon, strategyLabel, toDraftSteps } from "../components/chains/chainUtils";
 
 const parseMarketSlugs = (raw: string): string[] => {
   const seen = new Set<string>();
@@ -275,7 +275,7 @@ export function ChainEditorPage() {
   const badStaticStep = completeSteps.findIndex((step) =>
     (step.priceSource === "static" && !staticStepPreview(step, inheritedMarkup ?? 0).ok) ||
     (step.priceSource === "discount" && !discountStepPreview(step).ok));
-  const badImageStep = completeSteps.findIndex((step) => !checkImageCost(step).ok);
+  const badImageStep = completeSteps.findIndex((step) => imageStepProblem(step) !== "");
   const officialInputNumber = Number(officialInput);
   const officialOutputNumber = Number(officialOutput);
   const officialAuto = existing?.official_auto ?? null;
