@@ -72,6 +72,7 @@ type Jobs interface {
 	Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, finishedAt time.Time) error
 	FinishSucceededBilled(ctx context.Context, id string, files []store.ImageFile, usage store.UsageRecord, finishedAt time.Time) error
 	FailStale(ctx context.Context, msg string) (int, error)
+	FailStuck(ctx context.Context, createdBefore time.Time, msg string) (int, error)
 	ListExpired(ctx context.Context, now time.Time) ([]store.ImageJob, error)
 	Delete(ctx context.Context, ownerSub, id string) ([]store.ImageFile, error)
 }
@@ -343,7 +344,11 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput) (store.ImageJob, e
 		Status: store.ImageJobQueued, CreatedAt: s.now(),
 	}
 	if err := s.d.Jobs.Create(ctx, rec); err != nil {
+		// The insert may have committed and lost its ack. Failing the id
+		// changes only a row that exists and is still queued, so the job is
+		// never left holding a slot of its owner.
 		s.d.Budget.Release(scope)
+		s.fail(rec.ID, msgGenericFail)
 		return store.ImageJob{}, err
 	}
 	j := job{

@@ -368,6 +368,20 @@ func (r *ImageJobsRepo) Delete(ctx context.Context, ownerSub, id string) ([]Imag
 	return files, nil
 }
 
+// FailStuck marks failed the queued or running jobs created before
+// createdBefore: jobs no worker will finish.
+func (r *ImageJobsRepo) FailStuck(ctx context.Context, createdBefore time.Time, msg string) (int, error) {
+	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = ?, finished_at = ?, expires_at = ? WHERE status IN (?, ?) AND created_at < ?`)
+	now := r.now()
+	res, err := r.db.sql.ExecContext(ctx, q, ImageJobFailed, msg, formatTime(now), formatTime(now.Add(imageRetention)),
+		ImageJobQueued, ImageJobRunning, formatTime(createdBefore))
+	if err != nil {
+		return 0, fmt.Errorf("store: fail stuck image jobs: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // FailStale marks every queued or running job failed (jobs orphaned by a restart).
 func (r *ImageJobsRepo) FailStale(ctx context.Context, msg string) (int, error) {
 	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = ?, finished_at = ?, expires_at = ? WHERE status IN (?, ?)`)
