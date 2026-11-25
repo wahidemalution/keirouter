@@ -1,15 +1,13 @@
 package gateway
 
 import (
-	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
 // imageUpstream answers both the OpenAI chat and images endpoints. Chat is
@@ -30,51 +28,26 @@ func imageUpstream() http.HandlerFunc {
 	}
 }
 
-// TestMediaEndpointDoesNotDebitBudget documents SEC-MEDIA-NO-DEBIT: a successful
-// image-generation call rides only on a read-only budget *check*
-// (pipeline.mediaAttempts -> Engine.CheckOrError) and never records usage, so
-// the caller's spend never increases and the endpoint is usable indefinitely at
-// any budget level, including one too small to fund a single image.
-//
-// If this test starts failing because spend is now recorded, the finding has
-// been fixed and the assertion should be inverted (spend must become > 0).
-func TestMediaEndpointDoesNotDebitBudget(t *testing.T) {
-	h := newE2E(t, imageUpstream())
-	ctx := context.Background()
+// TestImageGenerationClosedForAPIKeys: /v1/images/generations never debits
+// (SEC-MEDIA-NO-DEBIT), so it refuses every API key before any upstream call.
+// Image generation is offered through the customer portal only.
+func TestImageGenerationClosedForAPIKeys(t *testing.T) {
+	var imageCalls atomic.Int32
+	inner := imageUpstream()
+	h := newE2E(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/images/generations" {
+			imageCalls.Add(1)
+		}
+		inner(w, r)
+	})
 
-	key, err := h.gateway.identity.Authenticate(ctx, h.apiKey)
-	require.NoError(t, err)
-
-	// A budget far smaller than any real image cost, hard cutoff enabled.
-	// Kept at/above the $0.05 minimum-key-balance gate so the metered chat
-	// sanity call below is admitted; it is still too small to fund an image.
-	require.NoError(t, h.db.Budgets().Create(ctx, store.Budget{
-		ID:          "media-budget",
-		TenantID:    adminTenant,
-		ScopeKind:   store.ScopeAPIKey,
-		ScopeID:     key.ID,
-		LimitMicros: 50_000, // $0.05 — still cannot fund a real image
-		Period:      "total",
-		AlertPct:    80,
-		HardCutoff:  true,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-	}))
-
-	// Sanity: chat is metered (spend rises), proving the harness records usage.
-	chatResp := h.post(t, "/v1/chat/completions",
-		`{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}`, h.apiKey)
-	_ = chatResp.Body.Close()
-	require.Equal(t, http.StatusOK, chatResp.StatusCode)
-
-	// The media endpoint returns a real upstream image...
 	resp := h.post(t, "/v1/images/generations",
 		`{"model":"openai/dall-e-3","prompt":"a cat"}`, h.apiKey)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "image generation should succeed")
-
-	// ...but records no spend for the key, so the budget is never debited.
-	spent, _, err := h.db.Usage().SpendAndTokens(ctx, store.ScopeAPIKey, key.ID, time.Time{})
+	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	require.Equal(t, int64(0), spent, "media call must not have recorded spend (documents the bypass)")
+
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Contains(t, string(body), "image generation tersedia di panel")
+	require.Equal(t, int32(0), imageCalls.Load(), "upstream must not be called")
 }
