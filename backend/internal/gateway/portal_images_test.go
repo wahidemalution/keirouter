@@ -80,13 +80,16 @@ func newPortalImageFixture(t *testing.T) *portalImageFixture {
 	m := meter.New(srv.db.Usage(), nil, nil)
 	m.AddUsageTracker(eng)
 	gen := &portalImageGen{}
-	srv.imageGen = imagegen.New(imagegen.Deps{
+	// The workers run on svc itself, so a test may later swap srv.imageGen
+	// without racing them.
+	svc := imagegen.New(imagegen.Deps{
 		Jobs: srv.db.ImageJobs(), Generator: gen, Budget: eng, Meter: m,
 		DataDir: t.TempDir(), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
+	srv.imageGen = svc
 	ctx, cancel := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
-	go func() { srv.imageGen.Run(ctx); close(stopped) }()
+	go func() { svc.Run(ctx); close(stopped) }()
 	t.Cleanup(func() { cancel(); <-stopped })
 
 	createImageChain(t, srv.db, "pics", store.ChainStep{Provider: "openai", Model: "gpt-image-1", StaticPerImage: 0.04})

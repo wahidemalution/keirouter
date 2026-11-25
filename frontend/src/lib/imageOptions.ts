@@ -81,7 +81,7 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_resolution: "Resolusi ini tidak didukung model yang dipilih.",
   invalid_aspect_ratio: "Rasio aspek ini tidak didukung model yang dipilih.",
   chain_required: "Pilih model terlebih dahulu.",
-  insufficient_balance: "Saldo PAYG tidak cukup untuk membuat gambar.",
+  insufficient_balance: "Saldo PAYG tidak cukup. Dibutuhkan minimal $0,05 tersisa ditambah harga gambar.",
   key_disabled: "API key Anda sedang dinonaktifkan. Hubungi admin.",
   model_not_available: "Model ini tidak lagi tersedia untuk akun Anda. Pilih model lain.",
   too_many_active: "Masih ada 2 job yang berjalan. Tunggu salah satunya selesai, lalu coba lagi.",

@@ -294,11 +294,19 @@ test("imageSellPrice applies the step markup, else the chain markup", () => {
   assert.equal(imageSellPrice(0.0042, 0, 50), 0.0042);
 });
 
-test("formatImagePrice uses a decimal comma and four significant digits", () => {
+test("formatImagePrice shows the exact billed micro-dollar with a decimal comma", () => {
   assert.equal(formatImagePrice(0.0084), "$0,0084");
   assert.equal(formatImagePrice(0.008432), "$0,008432");
   assert.equal(formatImagePrice(0.04), "$0,04");
   assert.equal(formatImagePrice(1.5), "$1,50");
+  // Never rounded down: the gateway bills 12,345 micro-dollars here.
+  assert.equal(formatImagePrice(0.012345), "$0,012345");
+  assert.equal(formatImagePrice(0.123456), "$0,123456");
+  // A fraction of a micro-dollar is billed as the next one up.
+  assert.equal(formatImagePrice(0.0123451), "$0,012346");
+  assert.equal(formatImagePrice(0.0000015), "$0,000002");
+  // Float noise (0.0042 × 1.5) is not a fraction.
+  assert.equal(formatImagePrice(0.0042 * 1.5), "$0,0063");
 });
 
 test("checkImageCost rejects a 2K cost without a base cost", () => {

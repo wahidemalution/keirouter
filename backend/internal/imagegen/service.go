@@ -511,10 +511,12 @@ func (s *Service) process(runCtx context.Context, j job) {
 	}
 
 	req := j.req
+	started := time.Now()
 	resp, step, err := s.d.Generator.GenerateImageTarget(ctx, &req, pipeline.MediaOptions{
 		Targets: j.targets, TenantID: j.scope.TenantID, ProjectID: j.scope.ProjectID,
 		APIKeyID: j.scope.APIKeyID, Limits: j.limits, Reserved: true,
 	})
+	latency := time.Since(started)
 	if err != nil {
 		settle(false, 0)
 		s.log.Warn("image generation failed", "job", j.id, "err", err)
@@ -552,7 +554,7 @@ func (s *Service) process(runCtx context.Context, j job) {
 	rec, cost, err := s.d.Meter.BuildRecord(meter.Event{
 		RequestID: "img-" + j.id, TenantID: j.scope.TenantID, ProjectID: j.scope.ProjectID,
 		APIKeyID: j.scope.APIKeyID, Provider: step.Provider, Model: step.Model, ChainID: j.chainID,
-		Client: "portal", ImageCount: len(files),
+		Client: "portal", ImageCount: len(files), Latency: latency,
 		ImageBillMicro: float64(price.sell), ImageCostMicro: float64(price.cost),
 	})
 	if err != nil {

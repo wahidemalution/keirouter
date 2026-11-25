@@ -1,6 +1,6 @@
 ---
 name: keirouter
-description: Entry point for KeiRouter — local/remote AI gateway with OpenAI-compatible REST for chat, TTS, embeddings, web search, web fetch. Use when the user mentions KeiRouter, KEIROUTER_URL, or wants AI without writing provider boilerplate. This skill covers setup + indexes capability skills; fetch the relevant capability SKILL.md from the URLs below when needed.
+description: Entry point for KeiRouter, a local or remote AI gateway with OpenAI-compatible REST for chat, TTS, embeddings, web search, web fetch. Use when the user mentions KeiRouter, KEIROUTER_URL, or wants AI without writing provider boilerplate. This skill covers setup + indexes capability skills; fetch the relevant capability SKILL.md from the URLs below when needed.
 ---
 
 # KeiRouter

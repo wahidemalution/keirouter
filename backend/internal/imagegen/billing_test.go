@@ -3,12 +3,16 @@ package imagegen
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mydisha/keirouter/backend/internal/core"
+	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/meter"
+	"github.com/mydisha/keirouter/backend/internal/pipeline"
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
@@ -48,6 +52,42 @@ func (m dupIDMeter) BuildRecord(ev meter.Event) (store.UsageRecord, int64, error
 	rec, cost, err := m.Meter.BuildRecord(ev)
 	rec.ID = "dup"
 	return rec, cost, err
+}
+
+// recordingMeter keeps the rows it built.
+type recordingMeter struct {
+	*meter.Meter
+	mu   sync.Mutex
+	rows []store.UsageRecord
+}
+
+func (m *recordingMeter) BuildRecord(ev meter.Event) (store.UsageRecord, int64, error) {
+	rec, cost, err := m.Meter.BuildRecord(ev)
+	m.mu.Lock()
+	m.rows = append(m.rows, rec)
+	m.mu.Unlock()
+	return rec, cost, err
+}
+
+// The image usage row carries the generation latency and the job's
+// request id.
+func TestImageUsageRowCarriesLatency(t *testing.T) {
+	e := newEnv(t, func(ctx context.Context, req *core.ImageRequest, opts pipeline.MediaOptions) (*core.ImageResponse, dispatch.Target, error) {
+		time.Sleep(30 * time.Millisecond)
+		return nImages(ctx, req, opts)
+	})
+	m := &recordingMeter{Meter: meter.New(e.db.Usage(), nil, nil)}
+	e.svc.d.Meter = m
+	e.start()
+	key := e.key("k1", priceStd, true)
+	job := e.submitWait(input("A", key, 1))
+	require.Equal(t, store.ImageJobSucceeded, job.Status)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	require.Len(t, m.rows, 1)
+	require.GreaterOrEqual(t, m.rows[0].UpstreamLatencyMS, 30)
+	require.Equal(t, "img-"+job.ID, m.rows[0].RequestID)
+	require.Equal(t, 1, m.rows[0].ImageCount)
 }
 
 func TestUsageInsertFailureInsideTxNeverBills(t *testing.T) {

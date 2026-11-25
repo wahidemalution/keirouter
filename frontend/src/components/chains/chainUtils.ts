@@ -140,12 +140,14 @@ export const makeDraftStep = (step?: Partial<ChainStep> & { provider: string; mo
 export const imageSellPrice = (costUsd: number, markupPct: number | null, chainMarkupPct: number): number =>
   Math.round(costUsd * (1 + (markupPct ?? chainMarkupPct) / 100) * 1e9) / 1e9;
 
-// formatImagePrice prints a per-image USD price with an Indonesian decimal
-// comma and four significant digits below one cent: 0.0084 -> $0,0084.
+// formatImagePrice prints a per-image USD price as the gateway bills it, in
+// whole micro-dollars with a fraction rounded up (the 1e-6 slack absorbs
+// float noise), with an Indonesian decimal comma: 0.0084 -> $0,0084,
+// 0.012345 -> $0,012345. It never shows less than the bill.
 export const formatImagePrice = (usd: number): string => {
   if (!Number.isFinite(usd) || usd <= 0) return "$0,00";
-  const decimals = usd >= 0.01 ? 4 : Math.min(12, Math.ceil(-Math.log10(usd)) + 3);
-  const text = usd.toFixed(decimals).replace(/0+$/, "").replace(/\.$/, "");
+  const micro = Math.ceil(usd * 1e6 - 1e-6);
+  const text = (micro / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
   const [int, frac = ""] = text.split(".");
   return `$${int},${frac.padEnd(2, "0")}`;
 };

@@ -25,7 +25,7 @@ Paste to your AI (Claude, Cursor, ChatGPT, …):
 Read this skill and use it: https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter/SKILL.md
 ```
 
-Then ask normally — *"transcribe this URL"*, *"search the web for ..."*, etc.
+Then ask normally: *"transcribe this URL"*, *"search the web for ..."*, etc.
 
 ## Configure your shell once
 
