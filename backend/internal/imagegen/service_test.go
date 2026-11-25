@@ -927,12 +927,61 @@ func TestFinishRetriedAfterBilling(t *testing.T) {
 	}
 }
 
+// lostAckJobs commits the first Finish(succeeded) but reports an error, as
+// when the database commits and the ack is lost.
+type lostAckJobs struct {
+	*store.ImageJobsRepo
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *lostAckJobs) Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, at time.Time) error {
+	err := f.ImageJobsRepo.Finish(ctx, id, status, errMsg, count, cost, upstream, files, at)
+	if status != store.ImageJobSucceeded {
+		return err
+	}
+	f.mu.Lock()
+	f.calls++
+	first := f.calls == 1
+	f.mu.Unlock()
+	if first && err == nil {
+		return context.DeadlineExceeded
+	}
+	return err
+}
+
+func TestFinishLostAckKeepsFiles(t *testing.T) {
+	old := finishBackoff
+	finishBackoff = time.Millisecond
+	t.Cleanup(func() { finishBackoff = old })
+
+	e := newEnv(t, nImages)
+	jobs := &lostAckJobs{ImageJobsRepo: e.db.ImageJobs()}
+	e.svc.d.Jobs = jobs
+	e.start()
+	key := e.key("k1", priceStd, true)
+	job := e.submitWait(input("A", key, 1))
+	require.Equal(t, store.ImageJobSucceeded, job.Status)
+	require.Len(t, job.Files, 1)
+	_, err := os.Stat(job.Files[0].Path)
+	require.NoError(t, err, "the committed job's file stays on disk")
+	f, err := e.db.ImageJobs().GetFile(context.Background(), "A", job.Files[0].ID)
+	require.NoError(t, err, "and is still served")
+	require.Equal(t, job.Files[0].Path, f.Path)
+	jobs.mu.Lock()
+	require.Equal(t, 2, jobs.calls, "the retry saw the job already finished")
+	jobs.mu.Unlock()
+	require.Equal(t, priceStd, e.spend("k1"), "billed once")
+	e.requireSettledOnce()
+}
+
 func TestPublicIP(t *testing.T) {
 	for _, s := range []string{"127.0.0.1", "::1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "fc00::1", "fd12::1",
-		"169.254.169.254", "fe80::1", "0.0.0.0", "::", "::ffff:127.0.0.1", "224.0.0.1"} {
+		"169.254.169.254", "fe80::1", "0.0.0.0", "::", "::ffff:127.0.0.1", "224.0.0.1",
+		"100.64.0.1", "100.127.255.254", "64:ff9b::a00:1"} {
 		require.False(t, publicIP(net.ParseIP(s)), s)
 	}
-	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700::1111"} {
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700::1111", "100.128.0.1", "100.63.255.255"} {
 		require.True(t, publicIP(net.ParseIP(s)), s)
 	}
 }

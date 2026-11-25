@@ -64,6 +64,7 @@ type Generator interface {
 // Jobs is the slice of store.ImageJobsRepo the service uses.
 type Jobs interface {
 	Create(ctx context.Context, j store.ImageJob) error
+	Get(ctx context.Context, ownerSub, id string) (store.ImageJob, error)
 	CountActive(ctx context.Context, ownerSub string) (int, error)
 	SetRunning(ctx context.Context, id string) error
 	Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []store.ImageFile, finishedAt time.Time) error
@@ -468,6 +469,11 @@ func (s *Service) process(j job) {
 			return
 		}
 		if errors.Is(err2, store.ErrImageJobNotActive) {
+			// An earlier try may have committed and lost its ack: then the
+			// job is succeeded and its rows point at these files.
+			if s.finishedOK(j) {
+				return
+			}
 			// The usage row is already billed; never bill again. The job
 			// was failed elsewhere, so its files have no row to serve them.
 			s.log.Error("image job billed but no longer active", "job", j.id, "key", j.scope.APIKeyID, "cost_micro", cost)
@@ -477,6 +483,20 @@ func (s *Service) process(j job) {
 	}
 	s.log.Error("billed image job could not be finished", "job", j.id, "key", j.scope.APIKeyID,
 		"cost_micro", cost, "images", count, "err", err2)
+}
+
+// finishedOK reports whether the job is stored as succeeded. When the
+// status cannot be read it answers true, so files are kept rather than
+// deleted from a job that may be serving them.
+func (s *Service) finishedOK(j job) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), settleTimeout)
+	defer cancel()
+	got, err := s.d.Jobs.Get(ctx, j.owner, j.id)
+	if err != nil {
+		s.log.Error("read billed image job", "job", j.id, "err", err)
+		return !errors.Is(err, store.ErrNotFound)
+	}
+	return got.Status == store.ImageJobSucceeded
 }
 
 // fail marks a job failed with nothing billed.

@@ -32,11 +32,30 @@ const (
 // imageExt lists the stored image types; anything else is a lost image.
 var imageExt = map[string]string{"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
+// blockedNets are internal ranges the net.IP predicates miss: CGNAT and NAT64.
+var blockedNets = []*net.IPNet{mustCIDR("100.64.0.0/10"), mustCIDR("64:ff9b::/96")}
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
 // publicIP reports whether ip may be fetched: not loopback, private
-// (RFC 1918, fc00::/7), link-local, multicast or unspecified.
+// (RFC 1918, fc00::/7), CGNAT, NAT64, link-local, multicast or unspecified.
 func publicIP(ip net.IP) bool {
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified())
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	for _, n := range blockedNets {
+		if n.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 // refuseInternal runs on every dial with the resolved address, so neither a
