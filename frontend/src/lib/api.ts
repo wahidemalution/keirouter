@@ -4212,7 +4212,7 @@ export interface PortalImageModel {
   name: string;
   family: PortalImageFamily;
   price_micro: number;
-  /** Present only for grok-imagine chains whose 2K price differs from price_micro. */
+  /** The 2K price of a grok-imagine chain; absent when it cannot make 2K images. */
   price_2k_micro?: number;
 }
 
@@ -4238,6 +4238,8 @@ export interface CreatePortalImageInput {
   size: string;
   aspect_ratio: string;
   resolution: string;
+  /** The per-image price the page showed; the server refuses the job if it changed. */
+  expected_price_micro: number;
 }
 
 // The image endpoints answer {"error":"<code>"}; older helpers on the same

@@ -47,13 +47,6 @@ func TestImageFamily(t *testing.T) {
 	}
 }
 
-func TestImageOnlyStep(t *testing.T) {
-	require.True(t, imageOnlyStep(dispatch.Target{ImagePrice: 0.04}))
-	require.False(t, imageOnlyStep(dispatch.Target{ImagePrice: 0.04, StaticInputPerM: 1, StaticOutputPerM: 2}))
-	require.False(t, imageOnlyStep(dispatch.Target{ImagePrice: 0.04, MarketSlug: "openai/gpt-image-1"}))
-	require.False(t, imageOnlyStep(dispatch.Target{}))
-}
-
 func TestTargetsFromChainCopiesImagePrice(t *testing.T) {
 	two := 0.08
 	ts := dispatch.TargetsFromChain(store.Chain{Steps: []store.ChainStep{
@@ -125,7 +118,7 @@ func TestAdminRejectsMixedImageFamilies(t *testing.T) {
 	s := newChainPricingTestServer(t)
 	code, _, body := postChain(t, s, `{"name":"img","steps":[
 		{"provider":"openai","model":"gpt-image-1","static_per_image":0.04},
-		{"provider":"openai","model":"grok-imagine-image","static_per_image":0.05}]}`)
+		{"provider":"openai","model":"grok-imagine-image","static_per_image":0.05,"static_per_image_2k":0.08}]}`)
 	require.Equal(t, http.StatusBadRequest, code, body)
 	require.Contains(t, body, "Satu chain gambar hanya boleh berisi satu keluarga model")
 

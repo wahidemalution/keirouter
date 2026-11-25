@@ -3,9 +3,11 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -79,9 +81,13 @@ func (s *Server) imageOwner(w http.ResponseWriter, r *http.Request) (string, boo
 type portalImageChain struct {
 	chain   store.Chain
 	targets []dispatch.Target
-	family  string
-	price   int64
-	price2K int64
+	// declared is targets in the chain's declared step order: the shown
+	// price is its first priced step, whatever order the route runs in.
+	declared []dispatch.Target
+	family   string
+	price    int64
+	price2K  int64
+	has2K    bool
 }
 
 // portalImageChains lists the chains the key may call that have at least one
@@ -120,13 +126,15 @@ func (s *Server) portalImageChains(r *http.Request, key store.APIKey, planID str
 		// The admin's provider ceiling and the customer's Model Settings
 		// apply here as on the API route.
 		images, _ = filterStepsForKey(images, key, c.Name)
-		price, ok := imagegen.ShownPriceMicro(images, "")
+		declared := declaredOrder(c, images)
+		price, ok := imagegen.ShownPriceMicro(declared, "")
 		if !ok {
 			continue
 		}
-		price2K, _ := imagegen.ShownPriceMicro(images, "2k")
+		price2K, has2K := imagegen.ShownPriceMicro(declared, "2k")
 		out = append(out, portalImageChain{
-			chain: c, targets: images, family: imageFamily(images[0].Model), price: price, price2K: price2K,
+			chain: c, targets: images, declared: declared, family: imageFamily(images[0].Model),
+			price: price, price2K: price2K, has2K: has2K,
 		})
 	}
 	return out, nil
@@ -157,6 +165,24 @@ func (s *Server) portalImageKey(w http.ResponseWriter, r *http.Request, u store.
 	return key, true
 }
 
+// declaredOrder returns ts sorted by the position of their step in c, so a
+// reordered route (latency, cost, market, round-robin) never changes the
+// shown price. A target matches the first step with its provider, model and
+// image price; steps that match alike have the same price.
+func declaredOrder(c store.Chain, ts []dispatch.Target) []dispatch.Target {
+	pos := func(t dispatch.Target) int {
+		for _, st := range c.Steps {
+			if st.Provider == t.Provider && st.Model == t.Model && st.StaticPerImage == t.ImagePrice {
+				return st.Position
+			}
+		}
+		return math.MaxInt
+	}
+	out := append([]dispatch.Target(nil), ts...)
+	sort.SliceStable(out, func(i, j int) bool { return pos(out[i]) < pos(out[j]) })
+	return out
+}
+
 func chainHasImageStep(c store.Chain) bool {
 	for _, st := range c.Steps {
 		if st.HasImagePrice() {
@@ -171,7 +197,8 @@ type portalImageModel struct {
 	Name       string `json:"name"`
 	Family     string `json:"family"`
 	PriceMicro int64  `json:"price_micro"`
-	// Price2KMicro is set only when 2K images cost more than standard ones.
+	// Price2KMicro is the 2K price of a grok-imagine chain; absent when
+	// the chain cannot make 2K images.
 	Price2KMicro *int64 `json:"price_2k_micro,omitempty"`
 }
 
@@ -198,8 +225,8 @@ func (s *Server) handlePortalImageModels(w http.ResponseWriter, r *http.Request)
 	for _, c := range chains {
 		m := portalImageModel{ChainID: c.chain.ID, Name: c.chain.Name, Family: c.family, PriceMicro: c.price}
 		// Only grok-imagine takes a resolution, so only it can be billed at
-		// the 2K price.
-		if c.family == "grok-imagine" && c.price2K != c.price {
+		// a 2K price.
+		if c.family == "grok-imagine" && c.has2K {
 			p := c.price2K
 			m.Price2KMicro = &p
 		}
@@ -215,6 +242,8 @@ type createImageRequest struct {
 	Size        string `json:"size"`
 	AspectRatio string `json:"aspect_ratio"`
 	Resolution  string `json:"resolution"`
+	// ExpectedPriceMicro is the per-image price the page showed.
+	ExpectedPriceMicro *int64 `json:"expected_price_micro"`
 }
 
 // handlePortalCreateImage serves POST /portal/api/images. The chain and its
@@ -315,6 +344,13 @@ func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// The job is billed at the server's shown price. It must be the price
+	// the page showed: a price that changed since is refused.
+	if body.ExpectedPriceMicro == nil || *body.ExpectedPriceMicro <= 0 {
+		writeImageError(w, http.StatusConflict, "price_changed")
+		return
+	}
+
 	lim, err := s.effectiveLimits(r.Context(), key)
 	if err != nil {
 		s.log.Error("portal images: load limits failed", "err", err)
@@ -324,6 +360,7 @@ func (s *Server) handlePortalCreateImage(w http.ResponseWriter, r *http.Request)
 	job, err := s.imageGen.Submit(r.Context(), imagegen.SubmitInput{
 		OwnerSub: owner, Key: key, ChainID: picked.chain.ID, Targets: picked.targets, Limits: lim,
 		Prompt: prompt, N: n, Size: size, AspectRatio: aspect, Resolution: resolution,
+		PriceOrder: picked.declared, ExpectedPriceMicro: *body.ExpectedPriceMicro,
 	})
 	if err != nil {
 		s.writeSubmitError(w, err)
@@ -342,6 +379,8 @@ func (s *Server) writeSubmitError(w http.ResponseWriter, err error) {
 		writeImageError(w, http.StatusNotFound, "model_not_available")
 	case errors.Is(err, imagegen.ErrEmptyPrompt):
 		writeImageError(w, http.StatusBadRequest, "empty_prompt")
+	case errors.Is(err, imagegen.ErrPriceChanged):
+		writeImageError(w, http.StatusConflict, "price_changed")
 	case errors.Is(err, imagegen.ErrQueueFull):
 		writeImageError(w, http.StatusServiceUnavailable, "queue_full")
 	default:

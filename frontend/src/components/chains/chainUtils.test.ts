@@ -318,6 +318,20 @@ test("imageMarkupProblem blocks a bad step markup only when an image cost is set
   assert.equal(imageMarkupProblem({ imageCost: "", stepMarkup: "abc" }), "");
 });
 
+test("imageStepProblem mirrors the gateway's image step rules", () => {
+  const base = { imageCost: "0.02", imageCost2k: "", stepMarkup: "", priceSource: "market" as const, marketSlug: "" };
+  assert.equal(imageStepProblem({ ...base, model: "gpt-image-1" }), "");
+  assert.equal(imageStepProblem({ ...base, model: "grok-imagine-image" }), "Model Grok wajib diisi modal 2K.");
+  assert.equal(imageStepProblem({ ...base, model: "grok-imagine-image", imageCost2k: "0.05" }), "");
+  assert.equal(imageStepProblem({ ...base, model: "gpt-image-1", imageCost: "100.01" }), "Modal per gambar maksimal $100.");
+  assert.equal(imageStepProblem({ ...base, model: "gpt-image-1", imageCost: "100" }), "");
+  assert.equal(imageStepProblem({ ...base, model: "grok-imagine-image", imageCost: "1", imageCost2k: "101" }), "Modal per gambar maksimal $100.");
+  assert.match(imageStepProblem({ ...base, model: "gpt-image-1", marketSlug: "openai/gpt-image-1" }), /tidak boleh punya harga token atau market slug/);
+  assert.match(imageStepProblem({ ...base, model: "gpt-image-1", priceSource: "static" }), /tidak boleh punya harga token atau market slug/);
+  // A chat step (no image cost) is never flagged.
+  assert.equal(imageStepProblem({ ...base, imageCost: "", model: "grok-imagine-image", priceSource: "static" }), "");
+});
+
 test("imageFamily mirrors the gateway rule", () => {
   assert.equal(imageFamily("gpt-image-1"), "gpt-image");
   assert.equal(imageFamily("openai/GPT-Image-2"), "gpt-image");

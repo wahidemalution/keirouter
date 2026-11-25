@@ -28,10 +28,27 @@ export const FAMILY_LABELS: Record<string, string> = {
   "gemini-image": "Gemini Image",
 };
 
-/** Price of n images; a 2K resolution uses the 2K price when one is set. */
+/**
+ * Resolutions a model can make. grok-imagine offers 2K only when the server
+ * sent a 2K price; without one a 2K image cannot be billed.
+ */
+export function resolutionsFor(model: { family: string; price_2k_micro?: number }): string[] | undefined {
+  const all = optionsForFamily(model.family).resolutions;
+  if (!all) return undefined;
+  return model.price_2k_micro ? all : all.filter((r) => r !== "2k");
+}
+
+/**
+ * The per-image price the page shows and sends as expected_price_micro: the
+ * 2K price for a 2K image, else the standard price. 0 when 2K has no price.
+ */
+export function unitPriceMicro(priceMicro: number, price2kMicro: number, resolution: string): number {
+  return resolution.toLowerCase() === "2k" ? price2kMicro : priceMicro;
+}
+
+/** Price of n images at unitPriceMicro. */
 export function totalPriceMicro(priceMicro: number, price2kMicro: number, resolution: string, n: number): number {
-  const per = resolution.toLowerCase() === "2k" && price2kMicro > 0 ? price2kMicro : priceMicro;
-  return per * n;
+  return unitPriceMicro(priceMicro, price2kMicro, resolution) * n;
 }
 
 /** Micro-USD as "$0,0084", formatted like the admin chain editor's prices. */
@@ -72,6 +89,7 @@ const ERROR_TEXT: Record<string, string> = {
   image_generation_unavailable: "Pembuatan gambar sedang tidak tersedia. Coba lagi nanti.",
   job_active: "Job ini masih berjalan dan belum bisa dihapus.",
   request_too_large: "Permintaan terlalu besar. Persingkat prompt Anda.",
+  price_changed: "Harga berubah, silakan cek lagi lalu buat ulang.",
 };
 
 /** User-facing sentence for an error code from the image endpoints. */

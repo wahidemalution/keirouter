@@ -9,7 +9,8 @@ import {
 import { Button, EmptyState, ErrorBanner, ErrorCard, Field, Select, Spinner, Textarea } from "../../components/ui";
 import { portal } from "../../lib/portalRoutes";
 import {
-  FAMILY_LABELS, deletesIn, formatImagePriceMicro, imageAlt, imageErrorText, optionsForFamily, totalPriceMicro,
+  FAMILY_LABELS, deletesIn, formatImagePriceMicro, imageAlt, imageErrorText, optionsForFamily, resolutionsFor,
+  unitPriceMicro,
 } from "../../lib/imageOptions";
 import { PageHeader, PanelCard, TD, TH, THEAD, formatDateTime } from "./components";
 
@@ -113,8 +114,12 @@ function ImageStudio() {
   const opts = optionsForFamily(model?.family ?? "");
   const size = pick(opts.sizes, form.size);
   const aspect = pick(opts.aspectRatios, form.aspect);
-  const resolution = pick(opts.resolutions, form.resolution);
-  const total = model ? totalPriceMicro(model.price_micro, model.price_2k_micro ?? 0, resolution, form.n) : 0;
+  const resolutions = model ? resolutionsFor(model) : undefined;
+  const resolution = pick(resolutions, form.resolution);
+  // The per-image price shown here is the price the server must still
+  // charge; it is sent with the job and a changed price is refused.
+  const unit = model ? unitPriceMicro(model.price_micro, model.price_2k_micro ?? 0, resolution) : 0;
+  const total = unit * form.n;
 
   const create = useMutation({
     mutationFn: () =>
@@ -125,13 +130,17 @@ function ImageStudio() {
         size,
         aspect_ratio: aspect,
         resolution,
+        expected_price_micro: unit,
       }),
     onSuccess: (job) => {
       setSubmitError(null);
       qc.setQueryData<PortalImageJob[]>(JOBS_QK, (old) => [job, ...(old ?? []).filter((j) => j.id !== job.id)]);
       void qc.invalidateQueries({ queryKey: JOBS_QK });
     },
-    onError: (e) => setSubmitError(toSubmitError(e)),
+    onError: (e) => {
+      setSubmitError(toSubmitError(e));
+      if (e instanceof PortalAPIError && e.code === "price_changed") void qc.invalidateQueries({ queryKey: MODELS_QK });
+    },
   });
 
   const promptEmpty = form.prompt.trim() === "";
@@ -271,10 +280,10 @@ function ImageStudio() {
                     </Select>
                   </Field>
                 )}
-                {opts.resolutions && (
+                {resolutions && (
                   <Field label="Resolusi">
                     <Select value={resolution} onChange={(e) => setForm((f) => ({ ...f, resolution: e.target.value }))} className={TAP}>
-                      {opts.resolutions.map((r) => (
+                      {resolutions.map((r) => (
                         <option key={r} value={r}>
                           {r.toUpperCase()}
                           {r === "2k" && model?.price_2k_micro ? ` · ${formatImagePriceMicro(model.price_2k_micro)}/gambar` : ""}
@@ -295,7 +304,7 @@ function ImageStudio() {
                 <div className="flex items-baseline justify-between gap-3">
                   <dt className="text-fg-muted">Harga per gambar</dt>
                   <dd className="tabular-nums text-fg">
-                    {model ? formatImagePriceMicro(totalPriceMicro(model.price_micro, model.price_2k_micro ?? 0, resolution, 1)) : ""}
+                    {model ? formatImagePriceMicro(unit) : ""}
                   </dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-3 border-t border-line pt-2.5">
@@ -546,16 +555,16 @@ function PriceTable({ models }: { models: UseQueryResult<PortalImageModel[]> }) 
             </thead>
             <tbody className="divide-y divide-line">
               {list.map((m) => {
-                // Only families with a resolution choice have a 2K price.
-                const has2K = !!optionsForFamily(m.family).resolutions;
-                const price2K = has2K && m.price_2k_micro ? m.price_2k_micro : 0;
+                // Only grok-imagine has a resolution choice, and it shows a 2K
+                // price only when the server sent one.
+                const price2K = optionsForFamily(m.family).resolutions && m.price_2k_micro ? m.price_2k_micro : 0;
                 return (
                   <tr key={m.chain_id}>
                     <td className={`${TD} font-mono text-[12.5px] text-fg`}>{m.name}</td>
                     <td className={`${TD} text-fg-muted`}>{FAMILY_LABELS[m.family] ?? m.family}</td>
                     <td className={`${TD} text-right tabular-nums text-fg`}>{formatImagePriceMicro(m.price_micro)}</td>
                     <td className={`${TD} text-right tabular-nums ${price2K ? "text-fg" : "text-fg-muted"}`}>
-                      {price2K ? formatImagePriceMicro(price2K) : has2K ? "Sama" : "Tidak ada"}
+                      {price2K ? formatImagePriceMicro(price2K) : "Tidak ada"}
                     </td>
                   </tr>
                 );

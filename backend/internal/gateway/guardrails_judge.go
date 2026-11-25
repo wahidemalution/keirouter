@@ -56,8 +56,8 @@ func (s *Server) resolveJudgeTargets(ctx context.Context, tenant, model string) 
 	if err != nil {
 		return res, err
 	}
-	// The judge sends a chat request, so it cannot run on an image-only step.
-	if res.Targets = dropImageOnlySteps(res.Targets); len(res.Targets) == 0 {
+	// The judge sends a chat request, so it cannot run on an image step.
+	if res.Targets = dropImageSteps(res.Targets); len(res.Targets) == 0 {
 		return resolveResult{}, errUnknownModel(model)
 	}
 	return res, nil

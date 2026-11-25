@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  deletesIn, formatImagePriceMicro, imageAlt, imageErrorText, optionsForFamily, totalPriceMicro,
+  deletesIn, formatImagePriceMicro, imageAlt, imageErrorText, optionsForFamily, resolutionsFor, totalPriceMicro,
+  unitPriceMicro,
 } from "./imageOptions.ts";
 
 test("optionsForFamily lists each family's own options", () => {
@@ -14,16 +15,25 @@ test("optionsForFamily lists each family's own options", () => {
   assert.deepEqual(optionsForFamily("unknown"), {});
 });
 
+test("resolutionsFor offers 2K only when the model has a 2K price", () => {
+  assert.deepEqual(resolutionsFor({ family: "grok-imagine", price_2k_micro: 55000 }), ["1k", "2k"]);
+  assert.deepEqual(resolutionsFor({ family: "grok-imagine" }), ["1k"]);
+  assert.equal(resolutionsFor({ family: "gpt-image", price_2k_micro: 55000 }), undefined);
+});
+
+test("unitPriceMicro is the price the page shows and sends", () => {
+  assert.equal(unitPriceMicro(8400, 45000, ""), 8400);
+  assert.equal(unitPriceMicro(8400, 45000, "1k"), 8400);
+  assert.equal(unitPriceMicro(8400, 45000, "2K"), 45000);
+  // No 2K price: 2K cannot be priced, never the standard price.
+  assert.equal(unitPriceMicro(8400, 0, "2k"), 0);
+});
+
 test("totalPriceMicro multiplies the per-image price by n", () => {
   assert.equal(totalPriceMicro(8400, 0, "", 2), 16800);
   assert.equal(totalPriceMicro(8400, 45000, "1k", 3), 25200);
-});
-
-test("totalPriceMicro uses the 2K price for a 2K resolution, any case", () => {
   assert.equal(totalPriceMicro(8400, 45000, "2K", 1), 45000);
   assert.equal(totalPriceMicro(8400, 45000, "2k", 2), 90000);
-  // No separate 2K price: 2K costs the standard price.
-  assert.equal(totalPriceMicro(8400, 0, "2k", 1), 8400);
 });
 
 test("formatImagePriceMicro writes dollars with a decimal comma", () => {
@@ -43,8 +53,8 @@ test("deletesIn rounds the time left down to hours, then minutes", () => {
 });
 
 test("imageErrorText maps known codes and falls back otherwise", () => {
-  assert.equal(imageErrorText("insufficient_balance", "x"), "Saldo PAYG tidak cukup untuk membuat gambar.");
   assert.equal(imageErrorText("invalid_aspect_ratio", "x"), "Rasio aspek ini tidak didukung model yang dipilih.");
+  assert.equal(imageErrorText("price_changed", "x"), "Harga berubah, silakan cek lagi lalu buat ulang.");
   assert.equal(imageErrorText("something_new", "Gagal"), "Gagal");
   assert.equal(imageErrorText(undefined, "Gagal"), "Gagal");
 });

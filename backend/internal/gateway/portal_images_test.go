@@ -33,6 +33,9 @@ import (
 // the default 10% markup.
 const picsPrice int64 = 44_000
 
+// grok2K is a grok-imagine 2K cost: $0.05, sold at 55,000 micro-USD.
+var grok2K = 0.05
+
 func portalPNG(tag string) []byte {
 	return append([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), tag...)
 }
@@ -210,7 +213,7 @@ func TestPortalImageFlow(t *testing.T) {
 	f := newPortalImageFixture(t)
 	tok, keyID := f.user("sub-a", 10*picsPrice)
 
-	job := f.submit(tok, `{"chain_id":"pics","prompt":"  a red cat  ","n":1,"size":"1024x1024"}`)
+	job := f.submit(tok, `{"chain_id":"pics","expected_price_micro":44000,"prompt":"  a red cat  ","n":1,"size":"1024x1024"}`)
 	require.Equal(t, store.ImageJobQueued, job.Status)
 	require.Equal(t, "a red cat", job.Prompt)
 
@@ -249,7 +252,7 @@ func TestPortalImageIsolation(t *testing.T) {
 	tokA, _ := f.user("sub-a", 10*picsPrice)
 	tokB, _ := f.user("sub-b", 10*picsPrice)
 
-	f.submit(tokA, `{"chain_id":"pics","prompt":"secret of A","n":1}`)
+	f.submit(tokA, `{"chain_id":"pics","expected_price_micro":44000,"prompt":"secret of A","n":1}`)
 	jobA := f.waitDone(tokA, 1)[0]
 	fileURL := jobA.Files[0].URL
 
@@ -306,6 +309,7 @@ func TestPortalImageModelsListsImageChainsOnly(t *testing.T) {
 
 	require.Equal(t, "grok-imagine", byName["grok-pics"]["family"])
 	require.EqualValues(t, 22_000, byName["grok-pics"]["price_micro"])
+	require.NotContains(t, byName["grok-pics"], "price_2k_micro", "a grok step without a 2K cost cannot make 2K images")
 	require.NotContains(t, rec.Body.String(), "openai")
 }
 
@@ -332,7 +336,7 @@ func (f *portalImageFixture) requirePicsUnavailable(tok string) {
 	rec := f.do(http.MethodGet, "/portal/api/images/models", "", tok)
 	require.Equal(f.t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NotContains(f.t, rec.Body.String(), `"pics"`)
-	rec = f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","prompt":"x","n":1}`, tok)
+	rec = f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"x","n":1}`, tok)
 	require.Equal(f.t, http.StatusNotFound, rec.Code, rec.Body.String())
 	require.Equal(f.t, "model_not_available", errorCode(f.t, rec))
 	require.Empty(f.t, f.list(tok))
@@ -364,7 +368,7 @@ func TestPortalImageDisabledStepSkipped(t *testing.T) {
 
 	rec := f.do(http.MethodGet, "/portal/api/images/models", "", tok)
 	require.Contains(t, rec.Body.String(), `"chain_id":"duo","name":"duo","family":"gpt-image","price_micro":22000`)
-	f.submit(tok, `{"chain_id":"duo","prompt":"x","n":1}`)
+	f.submit(tok, `{"chain_id":"duo","expected_price_micro":22000,"prompt":"x","n":1}`)
 	job := f.waitDone(tok, 1)[0]
 	require.Equal(t, store.ImageJobSucceeded, job.Status, job.Error)
 	require.Equal(t, int64(22_000), f.spend(keyID))
@@ -376,7 +380,7 @@ func TestPortalImageDisabledKey(t *testing.T) {
 	require.NoError(t, f.srv.identity.Keys().SetDisabled(context.Background(), keyID, true))
 	for _, rq := range []struct{ method, path, body string }{
 		{http.MethodGet, "/portal/api/images/models", ""},
-		{http.MethodPost, "/portal/api/images", `{"chain_id":"pics","prompt":"x","n":1}`},
+		{http.MethodPost, "/portal/api/images", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"x","n":1}`},
 	} {
 		rec := f.do(rq.method, rq.path, rq.body, tok)
 		require.Equal(t, http.StatusForbidden, rec.Code, rq.path)
@@ -388,7 +392,7 @@ func TestPortalImageDisabledKey(t *testing.T) {
 func TestPortalImageInsufficientBalance(t *testing.T) {
 	f := newPortalImageFixture(t)
 	tok, keyID := f.user("sub-a", picsPrice)
-	rec := f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","prompt":"two cats","n":2}`, tok)
+	rec := f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"two cats","n":2}`, tok)
 	require.Equal(t, http.StatusPaymentRequired, rec.Code, rec.Body.String())
 	require.Equal(t, "insufficient_balance", errorCode(t, rec))
 	require.Empty(t, f.list(tok))
@@ -405,13 +409,13 @@ func TestPortalImageValidation(t *testing.T) {
 		status     int
 		code       string
 	}{
-		{"empty prompt", `{"chain_id":"pics","prompt":"   ","n":1}`, http.StatusBadRequest, "empty_prompt"},
-		{"long prompt", `{"chain_id":"pics","prompt":"` + strings.Repeat("a", 4001) + `","n":1}`, http.StatusBadRequest, "prompt_too_long"},
-		{"n zero", `{"chain_id":"pics","prompt":"x","n":0}`, http.StatusBadRequest, "invalid_n"},
-		{"n five", `{"chain_id":"pics","prompt":"x","n":5}`, http.StatusBadRequest, "invalid_n"},
+		{"empty prompt", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"   ","n":1}`, http.StatusBadRequest, "empty_prompt"},
+		{"long prompt", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"` + strings.Repeat("a", 4001) + `","n":1}`, http.StatusBadRequest, "prompt_too_long"},
+		{"n zero", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"x","n":0}`, http.StatusBadRequest, "invalid_n"},
+		{"n five", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"x","n":5}`, http.StatusBadRequest, "invalid_n"},
 		{"no chain", `{"prompt":"x","n":1}`, http.StatusBadRequest, "chain_required"},
 		{"unknown chain", `{"chain_id":"nope","prompt":"x","n":1}`, http.StatusNotFound, "model_not_available"},
-		{"bad size", `{"chain_id":"pics","prompt":"x","n":1,"size":"4096x4096"}`, http.StatusBadRequest, "invalid_size"},
+		{"bad size", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"x","n":1,"size":"4096x4096"}`, http.StatusBadRequest, "invalid_size"},
 		{"bad resolution", `{"chain_id":"grok-pics","prompt":"x","n":1,"resolution":"4k"}`, http.StatusBadRequest, "invalid_resolution"},
 		{"bad grok aspect", `{"chain_id":"grok-pics","prompt":"x","n":1,"aspect_ratio":"5:4"}`, http.StatusBadRequest, "invalid_aspect_ratio"},
 		{"gemini lacks 21:9", `{"chain_id":"gem-pics","prompt":"x","n":1,"aspect_ratio":"21:9"}`, http.StatusBadRequest, "invalid_aspect_ratio"},
@@ -433,17 +437,17 @@ func TestPortalImageValidation(t *testing.T) {
 
 func TestPortalImageFamilyGating(t *testing.T) {
 	f := newPortalImageFixture(t)
-	createImageChain(t, f.srv.db, "grok-pics", store.ChainStep{Provider: "xai", Model: "grok-imagine-image", StaticPerImage: 0.02})
+	createImageChain(t, f.srv.db, "grok-pics", store.ChainStep{Provider: "xai", Model: "grok-imagine-image", StaticPerImage: 0.02, StaticPerImage2K: &grok2K})
 	tok, _ := f.user("sub-a", 100*picsPrice)
 
-	f.submit(tok, `{"chain_id":"pics","prompt":"gpt","n":1,"size":"1024x1536","aspect_ratio":"16:9","resolution":"2k"}`)
+	f.submit(tok, `{"chain_id":"pics","expected_price_micro":44000,"prompt":"gpt","n":1,"size":"1024x1536","aspect_ratio":"16:9","resolution":"2k"}`)
 	f.waitDone(tok, 1)
 	req := f.gen.last()
 	require.Equal(t, "1024x1536", req.Size)
 	require.Empty(t, req.AspectRatio)
 	require.Empty(t, req.Resolution)
 
-	f.submit(tok, `{"chain_id":"grok-pics","prompt":"grok","n":1,"size":"1024x1536","aspect_ratio":"16:9","resolution":"2K"}`)
+	f.submit(tok, `{"chain_id":"grok-pics","expected_price_micro":55000,"prompt":"grok","n":1,"size":"1024x1536","aspect_ratio":"16:9","resolution":"2K"}`)
 	f.waitDone(tok, 2)
 	req = f.gen.last()
 	require.Empty(t, req.Size)
@@ -461,9 +465,9 @@ func TestPortalImageTooManyActive(t *testing.T) {
 		Jobs: f.srv.db.ImageJobs(), Generator: f.gen, Budget: eng,
 		Meter: meter.New(f.srv.db.Usage(), nil, nil), DataDir: t.TempDir(),
 	})
-	f.submit(tok, `{"chain_id":"pics","prompt":"one","n":1}`)
-	f.submit(tok, `{"chain_id":"pics","prompt":"two","n":1}`)
-	rec := f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","prompt":"three","n":1}`, tok)
+	f.submit(tok, `{"chain_id":"pics","expected_price_micro":44000,"prompt":"one","n":1}`)
+	f.submit(tok, `{"chain_id":"pics","expected_price_micro":44000,"prompt":"two","n":1}`)
+	rec := f.do(http.MethodPost, "/portal/api/images", `{"chain_id":"pics","expected_price_micro":44000,"prompt":"three","n":1}`, tok)
 	require.Equal(t, http.StatusConflict, rec.Code)
 	require.Equal(t, "too_many_active", errorCode(t, rec))
 
@@ -510,7 +514,7 @@ func TestPortalImageConcurrentUsers(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				body := fmt.Sprintf(`{"chain_id":"pics","prompt":"owner %s job %d","n":%d}`, u.sub, i, i+1)
+				body := fmt.Sprintf(`{"chain_id":"pics","expected_price_micro":44000,"prompt":"owner %s job %d","n":%d}`, u.sub, i, i+1)
 				rec := f.do(http.MethodPost, "/portal/api/images", body, u.tok)
 				if rec.Code != http.StatusCreated {
 					errs <- rec.Body.String()

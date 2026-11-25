@@ -64,10 +64,7 @@ func (in chainStepInput) toStore(chainID string, pos int, now time.Time) (store.
 	if msg := in.imagePriceProblem(prefix); msg != "" {
 		return st, msg
 	}
-	if !st.HasStaticPrice() && st.HasImagePrice() {
-		if in.StaticCacheReadPerM != nil || in.StaticCacheWritePerM != nil {
-			return st, prefix + "cache overrides only apply to a static-price step"
-		}
+	if st.HasImagePrice() {
 		if in.MarkupPercent != nil && !validMarkup(*in.MarkupPercent) {
 			return st, prefix + "markup_percent must be between 0 and 1000"
 		}
@@ -114,14 +111,32 @@ func (in chainStepInput) imagePriceProblem(prefix string) string {
 	if in.StaticPerImage <= 0 {
 		return ""
 	}
+	if in.StaticPerImage > maxImagePriceUSD || (in.StaticPerImage2K != nil && *in.StaticPerImage2K > maxImagePriceUSD) {
+		return prefix + "Modal per gambar maksimal $100"
+	}
+	// An image step bills per image only, through the portal image service.
+	// A token price or market slug would let a chat route bill it as tokens.
+	if strings.TrimSpace(in.MarketSlug) != "" || in.StaticInputPerM > 0 || in.StaticOutputPerM > 0 ||
+		in.StaticCacheReadPerM != nil || in.StaticCacheWritePerM != nil {
+		return prefix + "Step gambar tidak boleh punya harga token atau market slug"
+	}
 	if in.DiscountPercent != nil || in.CostMultiplier != nil {
 		return prefix + "Step gambar tidak bisa diberi diskon"
 	}
-	if imageFamily(in.Model) == "" {
+	family := imageFamily(in.Model)
+	if family == "" {
 		return prefix + "Model gambar tidak dikenali untuk harga per gambar"
+	}
+	// grok-imagine bills 2K images at the 2K cost; without one a 2K image
+	// cannot be priced.
+	if family == "grok-imagine" && in.StaticPerImage2K == nil {
+		return prefix + "Model Grok wajib diisi modal 2K"
 	}
 	return ""
 }
+
+// maxImagePriceUSD caps a step's cost per image.
+const maxImagePriceUSD = 100.0
 
 // imageFamilyProblem returns the 400 message for a chain whose image-priced
 // steps span more than one image model family; "" when valid. Each step's

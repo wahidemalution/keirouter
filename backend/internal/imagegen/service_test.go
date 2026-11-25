@@ -484,10 +484,10 @@ func TestHighResPricing(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, want, got, "resolution %q", res)
 	}
-	no2K := []dispatch.Target{{Provider: "xai", Model: "grok-imagine", ImagePrice: 0.02, ImageBillMult: 1.25}}
+	no2K := []dispatch.Target{{Provider: "openai", Model: "gpt-image-1", ImagePrice: 0.02, ImageBillMult: 1.25}}
 	got, ok := ShownPriceMicro(no2K, "2k")
 	require.True(t, ok)
-	require.Equal(t, int64(25_000), got, "no 2K price means the standard price")
+	require.Equal(t, int64(25_000), got, "outside grok-imagine, no 2K price means the standard price")
 	_, ok = ShownPriceMicro([]dispatch.Target{{Provider: "openai", Model: "gpt-4o"}}, "")
 	require.False(t, ok)
 	require.False(t, isHighRes(""))

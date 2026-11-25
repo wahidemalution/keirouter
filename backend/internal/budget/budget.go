@@ -408,6 +408,9 @@ func isKeyCredit(b store.Budget) bool {
 	return b.ScopeKind == store.ScopeAPIKey && (b.Period == "" || b.Period == "total")
 }
 
+// IsKeyCredit reports whether b is an API key's prepaid (PAYG) credit.
+func IsKeyCredit(b store.Budget) bool { return isKeyCredit(b) }
+
 func blockedError(dec Decision) error {
 	return &core.ProviderError{
 		Kind:             core.ErrBudgetBlocked,

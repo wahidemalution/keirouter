@@ -179,11 +179,27 @@ export const imageMarkupProblem = (step: Pick<DraftChainStep, "imageCost" | "ste
   return Number.isFinite(markup) && markup >= 0 && markup <= 1000 ? "" : "Markup harus antara 0 dan 1000.";
 };
 
+// MAX_IMAGE_COST_USD mirrors the gateway's cap on a step's cost per image.
+export const MAX_IMAGE_COST_USD = 100;
+
+type ImageStepFields = Pick<DraftChainStep, "imageCost" | "imageCost2k" | "stepMarkup"> &
+  Partial<Pick<DraftChainStep, "model" | "priceSource" | "marketSlug">>;
+
 // imageStepProblem is the first validation error of a step's image price
-// fields, or "".
-export const imageStepProblem = (step: Pick<DraftChainStep, "imageCost" | "imageCost2k" | "stepMarkup">): string => {
+// fields, or "". It mirrors the gateway: an image step has no token price
+// or market slug, costs at most $100 per image, and a Grok step needs its
+// 2K cost.
+export const imageStepProblem = (step: ImageStepFields): string => {
   const check = checkImageCost(step);
-  return check.ok ? imageMarkupProblem(step) : check.error;
+  if (!check.ok) return check.error;
+  const cost = check.cost ?? 0;
+  if (cost <= 0) return "";
+  if (cost > MAX_IMAGE_COST_USD || (check.cost2k ?? 0) > MAX_IMAGE_COST_USD) return "Modal per gambar maksimal $100.";
+  if ((step.priceSource !== undefined && step.priceSource !== "market") || (step.marketSlug ?? "").trim() !== "") {
+    return "Step gambar tidak boleh punya harga token atau market slug. Pilih Market slug dan kosongkan slug-nya.";
+  }
+  if (imageFamily(step.model ?? "") === "grok-imagine" && check.cost2k === null) return "Model Grok wajib diisi modal 2K.";
+  return imageMarkupProblem(step);
 };
 
 // checkImageCost validates the two per-image cost inputs. Both empty is a

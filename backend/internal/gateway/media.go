@@ -20,7 +20,7 @@ import (
 
 // mediaOptions builds pipeline.MediaOptions from a resolved request: it maps
 // the model string to fallback targets and attaches tenant/scope metadata.
-// Image-only steps are priced per generated image, so media routes drop them;
+// Image steps are priced per generated image, so media routes drop them;
 // a route left empty answers like an unknown model.
 func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOptions, error) {
 	key, _ := authedKey(r.Context())
@@ -29,7 +29,7 @@ func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOpti
 	if err != nil {
 		return pipeline.MediaOptions{}, err
 	}
-	if resolved.Targets = dropImageOnlySteps(resolved.Targets); len(resolved.Targets) == 0 {
+	if resolved.Targets = dropImageSteps(resolved.Targets); len(resolved.Targets) == 0 {
 		return pipeline.MediaOptions{}, errUnknownModel(model)
 	}
 	if len(resolved.Targets) > 0 {

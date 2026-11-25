@@ -34,6 +34,7 @@ var (
 	ErrNoImageTarget       = errors.New("imagegen: no priced image target")
 	ErrEmptyPrompt         = errors.New("imagegen: prompt is empty")
 	ErrQueueFull           = errors.New("imagegen: job queue is full")
+	ErrPriceChanged        = errors.New("imagegen: price changed")
 )
 
 const (
@@ -116,6 +117,12 @@ type SubmitInput struct {
 	Prompt                        string
 	N                             int
 	Size, AspectRatio, Resolution string
+	// PriceOrder is the image steps in the chain's declared order; the
+	// shown price is the first priced one. Empty means Targets.
+	PriceOrder []dispatch.Target
+	// ExpectedPriceMicro is the per-image price the client showed; when
+	// set, a different shown price refuses the job with ErrPriceChanged.
+	ExpectedPriceMicro int64
 }
 
 // Service queues and runs portal image jobs.
@@ -164,23 +171,68 @@ type stepPrice struct{ sell, cost int64 }
 
 // priceOf is the single pricing helper: the shown price, the reservation and
 // the meter event all use it, so shown price × count equals the bill. ok is
-// false for a step that is not a priced image step or would sell below cost.
+// false for a step that is not a priced image step, has a non-finite or
+// out-of-range price, or would sell below cost. A grok-imagine step without
+// a 2K cost cannot price a 2K image: its standard price may sell below the
+// 2K cost.
 func priceOf(t dispatch.Target, resolution string) (stepPrice, bool) {
 	usd := t.ImagePrice
-	if usd <= 0 {
+	if !finite(usd) || usd <= 0 || !finite(t.ImagePrice2K) || !finite(t.ImageBillMult) {
 		return stepPrice{}, false
 	}
-	if isHighRes(resolution) && t.ImagePrice2K > 0 {
-		usd = t.ImagePrice2K
+	if isHighRes(resolution) {
+		switch {
+		case t.ImagePrice2K > 0:
+			usd = t.ImagePrice2K
+		case Family(t.Model) == "grok-imagine":
+			return stepPrice{}, false
+		}
 	}
 	// The 1e-6 micro slack absorbs float noise (0.0042 × 2 × 1e6 is
 	// 8400.000000000001) so it does not ceil to an extra micro.
-	sell := int64(math.Ceil(usd*t.ImageBillMult*1e6 - 1e-6))
-	cost := int64(math.Round(usd * 1e6))
-	if sell <= 0 || sell < cost {
+	sellF := math.Ceil(usd*t.ImageBillMult*1e6 - 1e-6)
+	costF := math.Round(usd * 1e6)
+	if !(sellF > 0 && sellF <= float64(maxImageMicro)) || costF > float64(maxImageMicro) {
+		return stepPrice{}, false
+	}
+	sell, cost := int64(sellF), int64(costF)
+	if sell < cost {
 		return stepPrice{}, false
 	}
 	return stepPrice{sell: sell, cost: cost}, true
+}
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// maxImageMicro caps one image's sell price at $10,000, far above the $100
+// admin cap even after markup.
+const maxImageMicro int64 = 10_000 * 1_000_000
+
+// mulMicro is n × p micro-USD, refusing a negative input, an overflow or a
+// per-image price above maxImageMicro.
+func mulMicro(n, p int64) (int64, bool) {
+	if n < 0 || p < 0 || p > maxImageMicro || (p > 0 && n > math.MaxInt64/p) {
+		return 0, false
+	}
+	return n * p, true
+}
+
+// Family names the image model family of model, matched on the id after
+// its last "/"; "" when it is not a known image model.
+func Family(model string) string {
+	id := strings.ToLower(model)
+	if i := strings.LastIndex(id, "/"); i >= 0 {
+		id = id[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(id, "gpt-image"):
+		return "gpt-image"
+	case strings.HasPrefix(id, "grok-imagine"):
+		return "grok-imagine"
+	case strings.HasPrefix(id, "gemini-") && strings.Contains(id, "image"):
+		return "gemini-image"
+	}
+	return ""
 }
 
 // isHighRes reports whether resolution asks for more than the standard 1K output.
@@ -248,17 +300,31 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput) (store.ImageJob, e
 	if active >= maxActive {
 		return store.ImageJob{}, ErrTooManyActive
 	}
-	shown, ok := ShownPriceMicro(in.Targets, in.Resolution)
+	order := in.PriceOrder
+	if len(order) == 0 {
+		order = in.Targets
+	}
+	shown, ok := ShownPriceMicro(order, in.Resolution)
 	if !ok {
 		return store.ImageJob{}, ErrNoImageTarget
 	}
+	if in.ExpectedPriceMicro != 0 && in.ExpectedPriceMicro != shown {
+		return store.ImageJob{}, ErrPriceChanged
+	}
 	targets := eligibleTargets(in.Targets, in.Resolution, shown)
+	if len(targets) == 0 {
+		return store.ImageJob{}, ErrNoImageTarget
+	}
+	maxCost, ok := mulMicro(int64(n), shown)
+	if !ok {
+		return store.ImageJob{}, ErrNoImageTarget
+	}
 
 	scope := budget.Scope{TenantID: in.Key.TenantID, ProjectID: in.Key.ProjectID, APIKeyID: in.Key.ID}
 	if err := s.requirePrepaid(ctx, scope); err != nil {
 		return store.ImageJob{}, err
 	}
-	res, err := s.d.Budget.Reserve(ctx, scope, budget.Estimate{Micros: int64(n) * shown})
+	res, err := s.d.Budget.Reserve(ctx, scope, budget.Estimate{Micros: maxCost})
 	if err != nil {
 		if pe := core.AsProviderError(err); pe != nil && pe.Kind == core.ErrBudgetBlocked {
 			return store.ImageJob{}, fmt.Errorf("%w: %s", ErrInsufficientBalance, pe.Message)
@@ -299,8 +365,9 @@ func (s *Service) Submit(ctx context.Context, in SubmitInput) (store.ImageJob, e
 	return rec, nil
 }
 
-// requirePrepaid fails closed unless the key has a hard-cutoff USD balance:
-// without one, Reserve would let the job through unbilled-capped.
+// requirePrepaid fails closed unless the key has PAYG credit: a hard-cutoff
+// USD budget on the key that never resets. Without one, Reserve would let
+// the job through uncapped, and a periodic cap is not a balance.
 func (s *Service) requirePrepaid(ctx context.Context, scope budget.Scope) error {
 	if scope.APIKeyID == "" {
 		return ErrInsufficientBalance
@@ -314,7 +381,7 @@ func (s *Service) requirePrepaid(ctx context.Context, scope budget.Scope) error 
 	}
 	for _, bu := range dec.BudgetUsage {
 		b := bu.Budget
-		if b.ScopeKind == store.ScopeAPIKey && b.ScopeID == scope.APIKeyID && b.HardCutoff && b.LimitMicros > 0 {
+		if budget.IsKeyCredit(b) && b.ScopeID == scope.APIKeyID && b.HardCutoff && b.LimitMicros > 0 {
 			return nil
 		}
 	}
