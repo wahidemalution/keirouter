@@ -16,6 +16,12 @@ const (
 	ImageJobFailed    = "failed"
 )
 
+// ErrImageJobNotActive means the job is not queued or running, so it cannot be finished.
+var ErrImageJobNotActive = errors.New("store: image job is not active")
+
+// ErrImageJobActive means the job is still queued or running, so it cannot be deleted.
+var ErrImageJobActive = errors.New("store: image job is still active")
+
 // imageRetention is how long a finished job's files stay available.
 const imageRetention = 24 * time.Hour
 
@@ -162,9 +168,24 @@ func (r *ImageJobsRepo) listJobs(ctx context.Context, q string, args ...any) ([]
 
 func (r *ImageJobsRepo) filesFor(ctx context.Context, jobIDs []string) (map[string][]ImageFile, error) {
 	out := map[string][]ImageFile{}
-	q := r.db.rebind(`SELECT ` + imageFileCols + ` FROM image_files WHERE job_id = ? ORDER BY id`)
-	for _, id := range jobIDs {
-		rows, err := r.db.sql.QueryContext(ctx, q, id)
+	const chunk = 500
+	for start := 0; start < len(jobIDs); start += chunk {
+		end := start + chunk
+		if end > len(jobIDs) {
+			end = len(jobIDs)
+		}
+		ids := jobIDs[start:end]
+		args := make([]any, len(ids))
+		marks := make([]byte, 0, len(ids)*2)
+		for i, id := range ids {
+			args[i] = id
+			if i > 0 {
+				marks = append(marks, ',')
+			}
+			marks = append(marks, '?')
+		}
+		q := r.db.rebind(`SELECT ` + imageFileCols + ` FROM image_files WHERE job_id IN (` + string(marks) + `) ORDER BY id`)
+		rows, err := r.db.sql.QueryContext(ctx, q, args...)
 		if err != nil {
 			return nil, fmt.Errorf("store: list image files: %w", err)
 		}
@@ -174,7 +195,7 @@ func (r *ImageJobsRepo) filesFor(ctx context.Context, jobIDs []string) (map[stri
 				rows.Close()
 				return nil, fmt.Errorf("store: scan image file: %w", err)
 			}
-			out[id] = append(out[id], f)
+			out[f.JobID] = append(out[f.JobID], f)
 		}
 		err = rows.Err()
 		rows.Close()
@@ -195,29 +216,38 @@ func (r *ImageJobsRepo) CountActive(ctx context.Context, ownerSub string) (int, 
 	return n, nil
 }
 
-// SetRunning marks a queued job as running.
+// SetRunning marks a queued job as running. ErrNotFound when the job is gone or not queued.
 func (r *ImageJobsRepo) SetRunning(ctx context.Context, id string) error {
 	q := r.db.rebind(`UPDATE image_jobs SET status = ? WHERE id = ? AND status = ?`)
-	if _, err := r.db.sql.ExecContext(ctx, q, ImageJobRunning, id, ImageJobQueued); err != nil {
+	res, err := r.db.sql.ExecContext(ctx, q, ImageJobRunning, id, ImageJobQueued)
+	if err != nil {
 		return fmt.Errorf("store: set image job running: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
 
 // Finish records the outcome and its files; the job expires 24h after finishedAt.
+// Only a queued or running job can finish (status succeeded or failed); any
+// other job yields ErrImageJobNotActive and no rows change.
 func (r *ImageJobsRepo) Finish(ctx context.Context, id, status, errMsg string, count int, cost, upstream int64, files []ImageFile, finishedAt time.Time) error {
+	if status != ImageJobSucceeded && status != ImageJobFailed {
+		return fmt.Errorf("store: finish image job: invalid status %q", status)
+	}
 	tx, err := r.db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: finish image job: %w", err)
 	}
 	defer tx.Rollback()
-	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = ?, image_count = ?, cost_micro = ?, upstream_cost_micro = ?, finished_at = ?, expires_at = ? WHERE id = ?`)
-	res, err := tx.ExecContext(ctx, q, status, errMsg, count, cost, upstream, formatTime(finishedAt), formatTime(finishedAt.Add(imageRetention)), id)
+	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = ?, image_count = ?, cost_micro = ?, upstream_cost_micro = ?, finished_at = ?, expires_at = ? WHERE id = ? AND status IN (?, ?)`)
+	res, err := tx.ExecContext(ctx, q, status, errMsg, count, cost, upstream, formatTime(finishedAt), formatTime(finishedAt.Add(imageRetention)), id, ImageJobQueued, ImageJobRunning)
 	if err != nil {
 		return fmt.Errorf("store: finish image job: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+		return ErrImageJobNotActive
 	}
 	fq := r.db.rebind(`INSERT INTO image_files (` + imageFileCols + `) VALUES (?, ?, ?, ?, ?)`)
 	for _, f := range files {
@@ -245,19 +275,29 @@ func (r *ImageJobsRepo) GetFile(ctx context.Context, ownerSub, fileID string) (I
 }
 
 // Delete removes one of the owner's jobs and returns its files so the caller
-// can delete them from disk. Another owner's id is ErrNotFound.
+// can delete them from disk. Another owner's id is ErrNotFound; a queued or
+// running job is ErrImageJobActive and stays untouched.
 func (r *ImageJobsRepo) Delete(ctx context.Context, ownerSub, id string) ([]ImageFile, error) {
 	tx, err := r.db.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("store: delete image job: %w", err)
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, r.db.rebind(`DELETE FROM image_jobs WHERE owner_sub = ? AND id = ?`), ownerSub, id)
+	res, err := tx.ExecContext(ctx, r.db.rebind(`DELETE FROM image_jobs WHERE owner_sub = ? AND id = ? AND status NOT IN (?, ?)`),
+		ownerSub, id, ImageJobQueued, ImageJobRunning)
 	if err != nil {
 		return nil, fmt.Errorf("store: delete image job: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, ErrNotFound
+		var one int
+		err := tx.QueryRowContext(ctx, r.db.rebind(`SELECT 1 FROM image_jobs WHERE owner_sub = ? AND id = ?`), ownerSub, id).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, fmt.Errorf("store: delete image job: %w", err)
+		}
+		return nil, ErrImageJobActive
 	}
 	rows, err := tx.QueryContext(ctx, r.db.rebind(`SELECT `+imageFileCols+` FROM image_files WHERE job_id = ? ORDER BY id`), id)
 	if err != nil {
@@ -288,8 +328,9 @@ func (r *ImageJobsRepo) Delete(ctx context.Context, ownerSub, id string) ([]Imag
 
 // FailStale marks every queued or running job failed (jobs orphaned by a restart).
 func (r *ImageJobsRepo) FailStale(ctx context.Context, msg string) (int, error) {
-	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = ?, finished_at = ? WHERE status IN (?, ?)`)
-	res, err := r.db.sql.ExecContext(ctx, q, ImageJobFailed, msg, formatTime(r.now()), ImageJobQueued, ImageJobRunning)
+	q := r.db.rebind(`UPDATE image_jobs SET status = ?, error = ?, finished_at = ?, expires_at = ? WHERE status IN (?, ?)`)
+	now := r.now()
+	res, err := r.db.sql.ExecContext(ctx, q, ImageJobFailed, msg, formatTime(now), formatTime(now.Add(imageRetention)), ImageJobQueued, ImageJobRunning)
 	if err != nil {
 		return 0, fmt.Errorf("store: fail stale image jobs: %w", err)
 	}
