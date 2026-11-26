@@ -1303,6 +1303,9 @@ func renderOAIUsage(u core.Usage) map[string]any {
 	if u.ReasoningTokens > 0 {
 		out["completion_tokens_details"] = map[string]int{"reasoning_tokens": u.ReasoningTokens}
 	}
+	if cost, ok := billedCostUSD(u); ok {
+		out["cost"] = cost
+	}
 	return out
 }
 

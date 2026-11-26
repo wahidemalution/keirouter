@@ -844,12 +844,12 @@ func (AnthropicCodec) RenderResponse(resp *core.ChatResponse) ([]byte, error) {
 // renderAntUsage renders canonical usage in Anthropic's shape, where
 // input_tokens excludes cache reads/writes and the cache counts are reported
 // separately. Canonical PromptTokens is the all-inclusive figure.
-func renderAntUsage(u core.Usage) map[string]int {
+func renderAntUsage(u core.Usage) map[string]any {
 	input := u.PromptTokens - u.CachedTokens - u.CacheWriteTokens
 	if input < 0 {
 		input = u.PromptTokens
 	}
-	out := map[string]int{
+	out := map[string]any{
 		"input_tokens":  input,
 		"output_tokens": u.CompletionTokens,
 	}
@@ -858,6 +858,9 @@ func renderAntUsage(u core.Usage) map[string]int {
 	}
 	if u.CacheWriteTokens > 0 {
 		out["cache_creation_input_tokens"] = u.CacheWriteTokens
+	}
+	if cost, ok := billedCostUSD(u); ok {
+		out["cost"] = cost
 	}
 	return out
 }

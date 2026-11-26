@@ -322,6 +322,7 @@ type oaiUsageOut struct {
 	TotalTokens             int                `json:"total_tokens"`
 	PromptTokensDetails     *oaiPromptDetails  `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *oaiCompletDetails `json:"completion_tokens_details,omitempty"`
+	Cost                    *float64           `json:"cost,omitempty"`
 }
 
 type oaiPromptDetails struct {
@@ -333,7 +334,8 @@ type oaiCompletDetails struct {
 }
 
 func oaiUsageFromCore(u core.Usage) *oaiUsageOut {
-	out := &oaiUsageOut{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
+	out := &oaiUsageOut{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens,
+		Cost: streamCostField(u)}
 	if u.CachedTokens > 0 {
 		out.PromptTokensDetails = &oaiPromptDetails{CachedTokens: u.CachedTokens}
 	}
@@ -384,17 +386,34 @@ func (OpenAICodec) RenderStreamChunk(chunk core.StreamChunk, state *StreamState)
 		finish := string(chunk.FinishReason)
 		return [][]byte{encodeOAIEvent(state, oaiChunkDelta{}, &finish)}, nil
 	case core.ChunkUsage:
+		if state.ShowBilledCost {
+			// Held for RenderStreamDone, where the billed cost joins it.
+			if chunk.Usage != nil {
+				holdStreamUsage(state, *chunk.Usage)
+			}
+			return nil, nil
+		}
 		// Emit a usage-only chunk (OpenAI sends this as a final empty-choices event).
 		return [][]byte{encodeOAIUsageEvent(state, chunk.Usage)}, nil
+	case core.ChunkBilledCost:
+		storeBilledCost(state, chunk)
+		return nil, nil
 	default:
 		return nil, nil
 	}
 	return [][]byte{encodeOAIEvent(state, delta, nil)}, nil
 }
 
-// RenderStreamDone returns the OpenAI terminal sentinel.
-func (OpenAICodec) RenderStreamDone(_ *StreamState) [][]byte {
-	return [][]byte{[]byte("data: [DONE]\n\n")}
+// RenderStreamDone returns the held usage chunk, if any, then the OpenAI
+// terminal sentinel.
+func (OpenAICodec) RenderStreamDone(state *StreamState) [][]byte {
+	done := []byte("data: [DONE]\n\n")
+	if state != nil && state.ShowBilledCost {
+		if u, ok := heldStreamUsage(state); ok {
+			return [][]byte{encodeOAIUsageEvent(state, &u), done}
+		}
+	}
+	return [][]byte{done}
 }
 
 func encodeOAIEvent(state *StreamState, delta oaiChunkDelta, finish *string) []byte {

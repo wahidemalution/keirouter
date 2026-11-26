@@ -76,6 +76,11 @@ type StreamState struct {
 	ToolIndex   int
 	// Custom lets a codec stash dialect-specific bookkeeping.
 	Custom map[string]any
+	// ShowBilledCost makes the codecs fold ChunkBilledCost into the final
+	// usage frame as usage.cost. When it is set, codecs that would emit usage
+	// as soon as it arrives (OpenAI, Responses) hold it until RenderStreamDone,
+	// after the cost is known. It survives ResetStreamState.
+	ShowBilledCost bool
 }
 
 // ResetStreamState resets a StreamState to its initial zero values.

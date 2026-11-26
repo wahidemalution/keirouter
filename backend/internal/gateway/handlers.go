@@ -306,7 +306,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 	if notice != "" {
 		appendNoticePart(result.Response, notice)
 	}
-	out, err := codec.RenderResponse(result.Response)
+	out, err := codec.RenderResponse(withBilledCost(result.Response, !opts.TokenMetered, result.CostNanos))
 	if err != nil {
 		tr.complete(outcome{provider: result.Provider, model: result.Model,
 			err: &core.ProviderError{Kind: core.ErrInternal, Message: "failed to render provider response", Cause: err}})
@@ -484,6 +484,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 
 	state := &transform.StreamState{Model: result.Model}
 	transform.ResetStreamState(state)
+	// Keys billed in USD get usage.cost in the final usage frame; token
+	// package keys never see USD.
+	state.ShowBilledCost = !opts.TokenMetered
 	var totalTokens int
 	var chunkCount int
 	// clientGone is set on the first failed write so the rest of the stream
@@ -590,6 +593,13 @@ streamLoop:
 				_ = bw.Flush()
 				flusher.Flush()
 				break streamLoop
+			}
+			if chunk.Type == core.ChunkBilledCost {
+				// Straight to the codec, which folds it into the held usage
+				// frame; it is not client content, so it skips the sanitizer
+				// and the chunk count.
+				_, _ = streamCodec.RenderStreamChunk(chunk, state)
+				continue
 			}
 			if chunk.Type == core.ChunkUsage && chunk.Usage != nil {
 				totalTokens = chunk.Usage.PromptTokens + chunk.Usage.CompletionTokens
@@ -996,7 +1006,7 @@ func copySanitizedNDJSON(dst io.Writer, reader *bufio.Reader, dialect core.Diale
 
 func writeSanitizedFrame(dst io.Writer, raw []byte, dialect core.Dialect, flush func()) (int64, error) {
 	providerErr := hasStreamErrorMarker(raw) && isProviderStreamError(raw)
-	out := raw
+	out := stripUpstreamCost(raw)
 	if providerErr {
 		out = streamErrorEvent(dialect, "upstream provider request failed")
 	}

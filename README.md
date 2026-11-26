@@ -349,6 +349,8 @@ Each model carries:
 - `discount_pct`: the current price against the official price, rounded down. The 7-day billed average sits in `avg_input_per_m` / `avg_output_per_m`.
 - `providers`: each route in chain order with its own price and `prices[]`, one entry per distinct price with the number of offers at it. The chain fallback comes last with `"final_fallback": true`. Provider IDs never appear: a route shows its display name, the label Surplus publishes, or `Provider N`.
 
+Replies to keys billed in USD carry `usage.cost`, the amount KeiRouter charged for that request in USD, so a reseller can add their own markup on top. Streams carry it on the final usage frame. Token package keys never see it. Details: [skills/keirouter-chat/SKILL.md](skills/keirouter-chat/SKILL.md#billed-cost-usagecost).
+
 `GET /healthz` is the liveness probe, and accidental `/v1/v1/...` paths are folded back to `/v1/...` so a misconfigured base URL still works.
 
 ---

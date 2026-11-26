@@ -253,9 +253,11 @@ type Result struct {
 	Model      string
 	AccountID  string
 	CostMicros int64
-	Latency    time.Duration
-	SlimStats  *slimmer.Stats
-	CacheHit   bool
+	// CostNanos is the unrounded charge the balance is debited.
+	CostNanos int64
+	Latency   time.Duration
+	SlimStats *slimmer.Stats
+	CacheHit  bool
 }
 
 // Chat runs a non-streaming request through the full pipeline with fallback.
@@ -323,7 +325,7 @@ func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options
 			0, time.Since(requestStarted), 0, nil)
 		return &Result{
 			Response: hit, Provider: attempt.Target.Provider, Model: attempt.Target.Model,
-			CostMicros: cost, CacheHit: true,
+			CostMicros: cost.Micros, CostNanos: cost.Nanos, CacheHit: true,
 		}, nil
 	}
 	if p.metrics != nil && p.cache != nil && p.cache.Enabled() {
@@ -601,9 +603,9 @@ func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options
 			pe.Message = "client disconnected before the response was delivered; the completed upstream usage was billed"
 			cost := p.recordOutcomeWithTTFT(upstreamCtx, req.Metadata, attempt, resp.Usage,
 				"cancelled", string(pe.Kind), false, latency, time.Since(requestStarted), 0, save)
-			p.recordSuccessTelemetry(req.Metadata, attempt, resp.Usage, latency, 0, fellBack, cost)
+			p.recordSuccessTelemetry(req.Metadata, attempt, resp.Usage, latency, 0, fellBack, cost.Micros)
 			p.cacheStore(upstreamCtx, vec, resp)
-			p.budgetConfirm(scope, cost)
+			p.budgetConfirm(scope, cost.Micros)
 			limitTokens = usageTokens(resp.Usage)
 			return nil, pe
 		}
@@ -621,8 +623,8 @@ func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options
 				"blocked", string(blockErr.Kind), false, latency, time.Since(requestStarted), 0, save)
 			// The policy blocked delivery, but the provider itself completed
 			// successfully and should remain healthy.
-			p.recordSuccessTelemetry(req.Metadata, attempt, resp.Usage, latency, 0, fellBack, cost)
-			p.budgetConfirm(scope, cost)
+			p.recordSuccessTelemetry(req.Metadata, attempt, resp.Usage, latency, 0, fellBack, cost.Micros)
+			p.budgetConfirm(scope, cost.Micros)
 			limitTokens = usageTokens(resp.Usage)
 			return nil, blockErr
 		}
@@ -631,7 +633,7 @@ func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options
 			latency, time.Since(requestStarted), save, fellBack)
 		p.cacheStore(upstreamCtx, vec, resp)
 		// Confirm budget reservation — usage is now recorded in DB.
-		p.budgetConfirm(scope, cost)
+		p.budgetConfirm(scope, cost.Micros)
 		limitTokens = usageTokens(resp.Usage)
 		p.log.Debug("attempt success", "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "latency_ms", latency.Milliseconds(),
@@ -641,7 +643,8 @@ func (p *Pipeline) chat(ctx context.Context, req *core.ChatRequest, opts Options
 			Provider:   attempt.Target.Provider,
 			Model:      attempt.Target.Model,
 			AccountID:  attempt.Account.ID,
-			CostMicros: cost,
+			CostMicros: cost.Micros,
+			CostNanos:  cost.Nanos,
 			Latency:    latency,
 			SlimStats:  slimStats,
 		}, nil
@@ -842,7 +845,7 @@ func (p *Pipeline) stream(ctx context.Context, req *core.ChatRequest, opts Optio
 			status, errorKind := terminalStatusAndKind(ctx.Err())
 			cost := p.recordOutcomeWithTTFT(context.WithoutCancel(ctx), req.Metadata, lastAttempt,
 				core.Usage{}, status, errorKind, false, lastLatency, time.Since(requestStarted), 0, nil)
-			p.budgetConfirm(scope, cost)
+			p.budgetConfirm(scope, cost.Micros)
 			return nil, ctx.Err()
 		}
 		// Re-reserve budget if it was released by streamExec (not-fallbackable path).
@@ -951,7 +954,12 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		// Outbound guardrails force it too: raw bytes never reach the
 		// StreamGuard, so output PII masking, toxicity, bias and canary checks
 		// would silently be skipped.
-		if len(attemptReq.Tools) == 0 && !req.IncludeUsage && req.Metadata.SourceDialect == attempt.Conn.Dialect() &&
+		//
+		// Other keys take the channel path so usage.cost can ride on the
+		// re-rendered final usage frame, unless they ask for something only
+		// the raw stream carries (several choices, logprobs); those keep
+		// the direct path and go without usage.cost.
+		if (req.Metadata.TokenMetered || needsRawStream(req)) && len(attemptReq.Tools) == 0 && !req.IncludeUsage && req.Metadata.SourceDialect == attempt.Conn.Dialect() &&
 			!requiresParsedStreamAdmission(attempt.Target.Provider) && !p.guardrails.ScansStreamOutput(ctx, req) &&
 			!attempt.Target.BillUpstreamCost {
 			if ds, ok := attempt.Conn.(core.DirectStreamable); ok {
@@ -1060,7 +1068,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 							status, errorKind := terminalStatusAndKind(streamErr)
 							cost := p.recordOutcomeWithTTFT(recordCtx, meta, acc, usage, status, errorKind, false,
 								time.Since(started), time.Since(requestStarted), ttft, saveCopy)
-							p.budgetConfirm(budgetScope, cost)
+							p.budgetConfirm(budgetScope, cost.Micros)
 							return
 						}
 						if streamErr != nil {
@@ -1075,8 +1083,8 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 						p.dispatcher.NoteSuccessAt(recordCtx, acc.Target.Provider, acc.Account.ID, acc.Target.Model, started)
 						cost := p.recordWithTTFT(recordCtx, meta, acc, usage, false,
 							totalLatency, time.Since(requestStarted), ttft, saveCopy, fellBack)
-						stats.CostMicros = cost
-						p.budgetConfirm(budgetScope, cost)
+						stats.CostMicros = cost.Micros
+						p.budgetConfirm(budgetScope, cost.Micros)
 					})
 				}
 				return &StreamResult{
@@ -1297,7 +1305,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 		status, errorKind := terminalStatusAndKind(context.Canceled)
 		cost := p.recordOutcomeWithTTFT(context.WithoutCancel(ctx), meta, attempt, usage,
 			status, errorKind, false, time.Since(attemptStarted), time.Since(requestStarted), *ttft, save)
-		p.budgetConfirm(scope, cost)
+		p.budgetConfirm(scope, cost.Micros)
 	}
 	settleStall := func() {
 		if ctx.Err() != nil {
@@ -1358,8 +1366,8 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 			"blocked", string(core.ErrPolicyBlocked), false, upstreamLatency,
 			time.Since(requestStarted), *ttft, save)
 		p.dispatcher.NoteSuccess(context.WithoutCancel(ctx), attempt.Target.Provider, attempt.Account.ID, attempt.Target.Model)
-		p.recordSuccessTelemetry(meta, attempt, blockedUsage, upstreamLatency, *ttft, fellBack, cost)
-		p.budgetConfirm(scope, cost)
+		p.recordSuccessTelemetry(meta, attempt, blockedUsage, upstreamLatency, *ttft, fellBack, cost.Micros)
+		p.budgetConfirm(scope, cost.Micros)
 	}
 
 	// flushGuard forwards the held-back text before a non-text event or the
@@ -1452,7 +1460,17 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 				p.dispatcher.NoteSuccessAt(context.WithoutCancel(ctx), attempt.Target.Provider, attempt.Account.ID, attempt.Target.Model, attemptStarted)
 				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, upstreamLatency,
 					time.Since(requestStarted), *ttft, save, fellBack)
-				p.budgetConfirm(scope, cost)
+				p.budgetConfirm(scope, cost.Micros)
+				// Hand the recorded charge, with the usage it was billed on, to
+				// the gateway, which renders it as usage.cost in the final usage
+				// frame. Token package keys pay in tokens and never see USD.
+				if !req.Metadata.TokenMetered {
+					billed := billedStreamUsage(usage, cost.Nanos)
+					select {
+					case out <- core.StreamChunk{Type: core.ChunkBilledCost, Usage: &billed}:
+					case <-ctx.Done():
+					}
+				}
 				return
 			}
 			resetStall()
@@ -2133,13 +2151,13 @@ func buildSaveState(stats *slimmer.Stats, hr *headroom.Stats, opts Options) *sav
 // record retains the original internal compatibility signature; callers that
 // know the full request duration use recordWithEndToEnd.
 func (p *Pipeline) record(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
-	usage core.Usage, cacheHit bool, upstreamLatency time.Duration, save *saveState, fellBack bool) int64 {
+	usage core.Usage, cacheHit bool, upstreamLatency time.Duration, save *saveState, fellBack bool) meter.Charge {
 	return p.recordWithTTFT(ctx, meta, attempt, usage, cacheHit, upstreamLatency, upstreamLatency, 0, save, fellBack)
 }
 
 func (p *Pipeline) recordWithEndToEnd(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
 	usage core.Usage, cacheHit bool, upstreamLatency, endToEndLatency time.Duration,
-	save *saveState, fellBack bool) int64 {
+	save *saveState, fellBack bool) meter.Charge {
 	return p.recordWithTTFT(ctx, meta, attempt, usage, cacheHit, upstreamLatency, endToEndLatency, 0, save, fellBack)
 }
 
@@ -2342,7 +2360,7 @@ func (p *Pipeline) recordAttemptTerminal(ctx context.Context, meta core.RequestM
 	if pe.Kind != core.ErrClientCanceled {
 		p.recordFinalFailureTelemetry(meta, attempt, pe, fellBack)
 	}
-	return pe, cost
+	return pe, cost.Micros
 }
 
 func partialStreamUsage(req *core.ChatRequest, usage core.Usage, completionChars int) core.Usage {
@@ -2631,13 +2649,13 @@ func capabilityOf(provider, model string) string {
 // upstreamLatency covers only the winning provider attempt.
 func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
 	usage core.Usage, cacheHit bool, upstreamLatency, endToEndLatency, ttft time.Duration,
-	save *saveState, fellBack bool) int64 {
-	cost := p.recordOutcomeWithTTFT(ctx, meta, attempt, usage, "success", "", cacheHit,
+	save *saveState, fellBack bool) meter.Charge {
+	charge := p.recordOutcomeWithTTFT(ctx, meta, attempt, usage, "success", "", cacheHit,
 		upstreamLatency, endToEndLatency, ttft, save)
 	if !cacheHit {
-		p.recordSuccessTelemetry(meta, attempt, usage, upstreamLatency, ttft, fellBack, cost)
+		p.recordSuccessTelemetry(meta, attempt, usage, upstreamLatency, ttft, fellBack, charge.Micros)
 	}
-	return cost
+	return charge
 }
 
 // recordOutcomeWithTTFT is the single persistence path for every terminal
@@ -2645,7 +2663,7 @@ func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata
 // callers know whether a blocked/failed request reflects provider behavior.
 func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
 	usage core.Usage, status, errorKind string, cacheHit bool,
-	upstreamLatency, endToEndLatency, ttft time.Duration, save *saveState) int64 {
+	upstreamLatency, endToEndLatency, ttft time.Duration, save *saveState) meter.Charge {
 	if status == "" {
 		status = "success"
 	}
@@ -2685,10 +2703,10 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 		ev.PonytailActive = save.ponytail
 	}
 
-	var cost int64
+	var charge meter.Charge
 	if p.meter != nil {
 		var err error
-		cost, err = p.meter.Record(ctx, ev)
+		charge, err = p.meter.RecordCharge(ctx, ev)
 		if err != nil {
 			p.log.Error("failed to record usage", "status", status, "err", err)
 		}
@@ -2698,7 +2716,7 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 		p.metrics.RecordRequest(
 			attempt.Target.Provider, attempt.Target.Model, status,
 			upstreamLatency.Seconds(),
-			usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens, cost,
+			usage.PromptTokens, usage.CompletionTokens, usage.CachedTokens, charge.Micros,
 			ttft.Seconds(),
 		)
 		if cacheHit {
@@ -2718,7 +2736,7 @@ func (p *Pipeline) recordOutcomeWithTTFT(ctx context.Context, meta core.RequestM
 			}
 		}
 	}
-	return cost
+	return charge
 }
 
 // embedPrompt computes a cache key vector for the request, or nil when caching
@@ -3462,4 +3480,38 @@ func withTargetHeaders(attempt dispatch.Attempt) core.Credentials {
 	}
 	creds.Headers = headers
 	return creds
+}
+
+// billedStreamUsage is the ChunkBilledCost payload: the token counts a stream
+// was billed on and the charge, without the router-internal cost fields.
+func billedStreamUsage(u core.Usage, costNanos int64) core.Usage {
+	out := core.Usage{
+		PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens,
+		CachedTokens: u.CachedTokens, CacheWriteTokens: u.CacheWriteTokens, ReasoningTokens: u.ReasoningTokens,
+		BilledCostNanos: costNanos,
+	}
+	if sum := out.PromptTokens + out.CompletionTokens; out.TotalTokens < sum {
+		out.TotalTokens = sum
+	}
+	return out
+}
+
+// needsRawStream reports whether a stream asks for output the channel path
+// cannot render: more than one choice (n > 1), or logprobs. The codecs model
+// one choice and no logprobs, so those requests keep the raw byte stream.
+func needsRawStream(req *core.ChatRequest) bool {
+	if raw, ok := req.Extra["n"]; ok {
+		var n float64
+		if json.Unmarshal(raw, &n) == nil && n > 1 {
+			return true
+		}
+	}
+	if raw, ok := req.Extra["logprobs"]; ok {
+		var on bool
+		if json.Unmarshal(raw, &on) == nil && on {
+			return true
+		}
+	}
+	_, top := req.Extra["top_logprobs"]
+	return top
 }
