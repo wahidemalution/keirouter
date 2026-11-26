@@ -356,19 +356,25 @@ func (OpenAIResponsesCodec) RenderStreamChunk(chunk core.StreamChunk, state *Str
 			return nil, nil
 		}
 		ensureStarted()
+		if state.ShowBilledCost {
+			// response.completed waits for RenderStreamDone, where the billed
+			// cost joins the usage.
+			holdStreamUsage(state, *chunk.Usage)
+			break
+		}
 		if !s.completed {
 			s.completed = true
 			emit("response.completed", map[string]any{
 				"response": map[string]any{
 					"id": s.responseID, "object": "response", "status": "completed",
-					"usage": map[string]int{
-						"input_tokens":  chunk.Usage.PromptTokens,
-						"output_tokens": chunk.Usage.CompletionTokens,
-						"total_tokens":  chunk.Usage.TotalTokens,
-					},
+					"usage": renderResponsesUsage(*chunk.Usage),
 				},
 			})
 		}
+
+	case core.ChunkBilledCost:
+		storeBilledCost(state, chunk)
+		return nil, nil
 
 	default:
 		return nil, nil
@@ -384,12 +390,16 @@ func (OpenAIResponsesCodec) RenderStreamDone(state *StreamState) [][]byte {
 	}
 	s.completed = true
 	s.seq++
+	response := map[string]any{
+		"id": s.responseID, "object": "response", "status": "completed",
+	}
+	if u, ok := heldStreamUsage(state); ok {
+		response["usage"] = renderResponsesUsage(u)
+	}
 	return [][]byte{respEvent("response.completed", map[string]any{
 		"type":            "response.completed",
 		"sequence_number": s.seq,
-		"response": map[string]any{
-			"id": s.responseID, "object": "response", "status": "completed",
-		},
+		"response":        response,
 	})}
 }
 

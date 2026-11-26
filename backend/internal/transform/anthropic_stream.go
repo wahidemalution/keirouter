@@ -181,6 +181,8 @@ type antUsageOut struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	// Cost is set only on the terminal message_delta.
+	Cost *float64 `json:"cost,omitempty"`
 }
 
 func antUsageFromCore(u core.Usage) antUsageOut {
@@ -327,14 +329,13 @@ func (AnthropicCodec) RenderStreamChunk(chunk core.StreamChunk, state *StreamSta
 		// message_start (input) and message_delta (output).
 		merged := *chunk.Usage
 		if prev, ok := state.Custom["usage"].(core.Usage); ok {
-			if merged.PromptTokens == 0 {
-				merged.PromptTokens, merged.CachedTokens, merged.CacheWriteTokens = prev.PromptTokens, prev.CachedTokens, prev.CacheWriteTokens
-			}
-			if merged.CompletionTokens == 0 {
-				merged.CompletionTokens = prev.CompletionTokens
-			}
+			merged = mergeStreamUsage(prev, merged)
 		}
 		state.Custom["usage"] = merged
+
+	case core.ChunkBilledCost:
+		storeBilledCost(state, chunk)
+		return nil, nil
 
 	case core.ChunkToolCall:
 		ensureOpen()
@@ -431,6 +432,7 @@ func (AnthropicCodec) RenderStreamDone(state *StreamState) [][]byte {
 			usage := antUsageOut{}
 			if u, ok := state.Custom["usage"].(core.Usage); ok {
 				usage = antUsageFromCore(u)
+				usage.Cost = streamCostField(withStreamCost(state, u))
 			}
 			events = append(events, sseNamed("message_delta", &antEventOut{
 				Type:  "message_delta",

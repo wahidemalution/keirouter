@@ -24,3 +24,85 @@ func renderResponsesUsage(u core.Usage) map[string]any {
 	}
 	return out
 }
+
+// mergeStreamUsage folds a later usage chunk into an earlier one. An
+// Anthropic upstream splits usage across message_start (input) and
+// message_delta (output), so a zero count in next keeps prev's, and the total
+// is raised to cover both halves.
+func mergeStreamUsage(prev, next core.Usage) core.Usage {
+	if next.PromptTokens == 0 {
+		next.PromptTokens, next.CachedTokens, next.CacheWriteTokens = prev.PromptTokens, prev.CachedTokens, prev.CacheWriteTokens
+	}
+	if next.CompletionTokens == 0 {
+		next.CompletionTokens = prev.CompletionTokens
+	}
+	if next.ReasoningTokens == 0 {
+		next.ReasoningTokens = prev.ReasoningTokens
+	}
+	if sum := next.PromptTokens + next.CompletionTokens; next.TotalTokens < sum {
+		next.TotalTokens = sum
+	}
+	return next
+}
+
+// Keys under StreamState.Custom for the held usage frame and the billed cost.
+const (
+	heldUsageKey  = "billed_held_usage"
+	billedCostKey = "billed_cost_micros"
+)
+
+// holdStreamUsage merges a usage chunk into the frame held until
+// RenderStreamDone.
+func holdStreamUsage(state *StreamState, u core.Usage) {
+	if state.Custom == nil {
+		state.Custom = map[string]any{}
+	}
+	if prev, ok := state.Custom[heldUsageKey].(core.Usage); ok {
+		u = mergeStreamUsage(prev, u)
+	}
+	state.Custom[heldUsageKey] = u
+}
+
+// heldStreamUsage returns the held usage frame with the billed cost attached
+// when one arrived. ok is false when no usage was held.
+func heldStreamUsage(state *StreamState) (core.Usage, bool) {
+	u, ok := state.Custom[heldUsageKey].(core.Usage)
+	if !ok {
+		return core.Usage{}, false
+	}
+	return withStreamCost(state, u), true
+}
+
+// storeBilledCost records a ChunkBilledCost on the stream state.
+func storeBilledCost(state *StreamState, chunk core.StreamChunk) {
+	if chunk.Usage == nil {
+		return
+	}
+	if state.Custom == nil {
+		state.Custom = map[string]any{}
+	}
+	state.Custom[billedCostKey] = chunk.Usage.BilledCostMicros
+}
+
+// withStreamCost marks u for usage.cost rendering when the stream shows cost
+// and the cost has arrived. A stream that ended before its cost was recorded
+// renders usage without it rather than a wrong 0.
+func withStreamCost(state *StreamState, u core.Usage) core.Usage {
+	u.ShowBilledCost, u.BilledCostMicros = false, 0
+	if !state.ShowBilledCost {
+		return u
+	}
+	if cost, ok := state.Custom[billedCostKey].(int64); ok {
+		u.ShowBilledCost, u.BilledCostMicros = true, cost
+	}
+	return u
+}
+
+// streamCostField is usage.cost for a streamed usage struct: nil when the
+// cost must not be shown.
+func streamCostField(u core.Usage) *float64 {
+	if cost, ok := billedCostUSD(u); ok {
+		return &cost
+	}
+	return nil
+}
