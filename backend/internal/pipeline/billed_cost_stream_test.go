@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -117,4 +118,36 @@ func TestStream_TokenMeteredKeepsDirectPath(t *testing.T) {
 	_, _ = io.Copy(io.Discard, res.DirectBody)
 	_ = res.DirectBody.Close()
 	res.DirectCompleteFunc(nil)
+}
+
+// The channel path renders one choice and no logprobs, so a PAYG stream that
+// asks for several choices or for logprobs keeps the direct path (and goes
+// without usage.cost) rather than come back garbled.
+func TestStream_PAYGRawOnlyParamsKeepDirectPath(t *testing.T) {
+	for name, extra := range map[string]map[string]json.RawMessage{
+		"n=2":          {"n": json.RawMessage(`2`)},
+		"logprobs":     {"logprobs": json.RawMessage(`true`)},
+		"top_logprobs": {"top_logprobs": json.RawMessage(`3`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, _ := newBilledCostPipeline(t)
+			req := guardrailStreamRequest("hello")
+			req.Extra = extra
+			res, err := p.Stream(context.Background(), req, billedCostOpts(false))
+			require.NoError(t, err)
+			require.NotNil(t, res.DirectBody)
+			_, _ = io.Copy(io.Discard, res.DirectBody)
+			_ = res.DirectBody.Close()
+			res.DirectCompleteFunc(nil)
+		})
+	}
+	t.Run("n=1 and logprobs=false stay on the channel path", func(t *testing.T) {
+		p, _ := newBilledCostPipeline(t)
+		req := guardrailStreamRequest("hello")
+		req.Extra = map[string]json.RawMessage{"n": json.RawMessage(`1`), "logprobs": json.RawMessage(`false`)}
+		res, err := p.Stream(context.Background(), req, billedCostOpts(false))
+		require.NoError(t, err)
+		require.Nil(t, res.DirectBody)
+		drain(t, res)
+	})
 }

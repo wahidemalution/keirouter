@@ -952,11 +952,11 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		// StreamGuard, so output PII masking, toxicity, bias and canary checks
 		// would silently be skipped.
 		//
-		// Only token package streams take the direct path. Every other key
-		// gets usage.cost in its final usage frame, which needs the re-rendered
-		// stream; it also keeps an upstream's own usage.cost out of the
-		// client's bytes.
-		if req.Metadata.TokenMetered && len(attemptReq.Tools) == 0 && !req.IncludeUsage && req.Metadata.SourceDialect == attempt.Conn.Dialect() &&
+		// Other keys take the channel path so usage.cost can ride on the
+		// re-rendered final usage frame, unless they ask for something only
+		// the raw stream carries (several choices, logprobs); those keep
+		// the direct path and go without usage.cost.
+		if (req.Metadata.TokenMetered || needsRawStream(req)) && len(attemptReq.Tools) == 0 && !req.IncludeUsage && req.Metadata.SourceDialect == attempt.Conn.Dialect() &&
 			!requiresParsedStreamAdmission(attempt.Target.Provider) && !p.guardrails.ScansStreamOutput(ctx, req) &&
 			!attempt.Target.BillUpstreamCost {
 			if ds, ok := attempt.Conn.(core.DirectStreamable); ok {
@@ -3491,4 +3491,24 @@ func billedStreamUsage(u core.Usage, costMicros int64) core.Usage {
 		out.TotalTokens = sum
 	}
 	return out
+}
+
+// needsRawStream reports whether a stream asks for output the channel path
+// cannot render: more than one choice (n > 1), or logprobs. The codecs model
+// one choice and no logprobs, so those requests keep the raw byte stream.
+func needsRawStream(req *core.ChatRequest) bool {
+	if raw, ok := req.Extra["n"]; ok {
+		var n float64
+		if json.Unmarshal(raw, &n) == nil && n > 1 {
+			return true
+		}
+	}
+	if raw, ok := req.Extra["logprobs"]; ok {
+		var on bool
+		if json.Unmarshal(raw, &on) == nil && on {
+			return true
+		}
+	}
+	_, top := req.Extra["top_logprobs"]
+	return top
 }
