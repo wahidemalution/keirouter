@@ -252,6 +252,10 @@ export interface PublicPricingModel {
   output_per_m: number | null;
   max_input_per_m: number | null;
   max_output_per_m: number | null;
+  /** True only when billing can never exceed the max_* rates. */
+  max_guaranteed: boolean;
+  /** "fixed": a static price that never moves; "variable": follows the upstream. */
+  price_type: "fixed" | "variable";
   discount_pct: number | null;
 }
 

@@ -333,6 +333,21 @@ Chat is just the start. KeiRouter proxies the whole buffet behind one key:
 | Web fetch | `POST /v1/web/fetch` | — |
 | Model discovery | `GET /v1/models` · `/v1/models/info` · `/v1/models/{kind}` | OpenAI |
 | Your own key's usage | `GET /v1/keys/me/usage` | — |
+| Public live prices (no key) | `GET /v1/public/pricing[?model=a,b]` | — |
+
+### Public pricing
+
+`GET /v1/public/pricing` lists the live price of every model an admin publishes under **Settings → Public pricing**, whatever upstream serves it. It needs no key, allows 30 requests a minute per IP, sends `Access-Control-Allow-Origin: *` and `Cache-Control: public, max-age=5`. Prices are USD per 1M tokens, markup included. Per-key minimum discounts are not applied.
+
+Each model carries:
+
+- `input_per_m` / `output_per_m`: the price of the first available route.
+- `max_input_per_m` / `max_output_per_m`: the highest rate any route, the chain fallback included, bills. `null` when a route has no known rate.
+- `max_guaranteed`: `true` only when every route bills a rate fixed before the request. Routes billed from the upstream's own reported cost (Surplus, inferhub, Subrouter, a6api) set it to `false`, and a request on them can cost more than the max.
+- `min_request_cost`: the highest per-request minimum charge of any route, in USD, or `null`.
+- `price_type`: `fixed` for a static price that never moves, `variable` otherwise.
+- `discount_pct`: the current price against the official price, rounded down. The 7-day billed average sits in `avg_input_per_m` / `avg_output_per_m`.
+- `providers`: each route in chain order with its own price and `prices[]`, one entry per distinct price with the number of offers at it. The chain fallback comes last with `"final_fallback": true`. Provider IDs never appear: a route shows its display name, the label Surplus publishes, or `Provider N`.
 
 `GET /healthz` is the liveness probe, and accidental `/v1/v1/...` paths are folded back to `/v1/...` so a misconfigured base URL still works.
 
