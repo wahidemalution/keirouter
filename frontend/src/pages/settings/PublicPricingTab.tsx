@@ -17,15 +17,25 @@ function money(v: number | null): string {
 function PriceCell({ m }: { m: PublicPricingModel }) {
   if (!m.available) return <Badge tone="warning">Sold out</Badge>;
   return (
-    <span className="tabular-nums text-[12.5px] text-fg-muted">
-      <span className="text-fg">{money(m.input_per_m)}</span> in · <span className="text-fg">{money(m.output_per_m)}</span> out
-      <span className="hidden sm:inline"> per 1M</span>
+    <span className="flex flex-col gap-0.5 tabular-nums text-[12.5px] text-fg-muted sm:items-end">
+      <span>
+        <span className="text-fg">{money(m.input_per_m)}</span> in · <span className="text-fg">{money(m.output_per_m)}</span> out
+        <span className="hidden sm:inline"> per 1M</span>
+      </span>
+      {m.price_type === "fixed" ? (
+        <span className="text-[11.5px]">Fixed price</span>
+      ) : (
+        <span className="text-[11.5px]">
+          Up to {money(m.max_input_per_m)} / {money(m.max_output_per_m)}
+          {!m.max_guaranteed && " · not guaranteed"}
+        </span>
+      )}
     </span>
   );
 }
 
-// PublicPricingTab picks which Surplus-priced chains GET /v1/public/pricing
-// shows without an API key. Off with nothing picked by default.
+// PublicPricingTab picks which chains GET /v1/public/pricing shows without an
+// API key. Off with nothing picked by default.
 export function PublicPricingTab() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -75,7 +85,7 @@ export function PublicPricingTab() {
       <SettingsCard
         icon={Globe}
         title="Public pricing"
-        description="Show live Surplus prices for the models you pick, without an API key. Prices include your markup; upstream cost and margin stay private."
+        description="Show live prices for the models you pick, without an API key. Prices include your markup. Provider IDs, upstream cost and margin stay private."
         action={data.enabled ? <Badge tone="success">On · {data.chain_ids.length} published</Badge> : <Badge>Off</Badge>}
         footer={
           <div className="flex flex-col gap-3 border-t border-line bg-subtle px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
@@ -102,9 +112,7 @@ export function PublicPricingTab() {
         <div className="px-4 py-4">
           <p className="mb-2 text-[12.5px] font-medium text-fg">Published models</p>
           {data.models.length === 0 ? (
-            <p className="text-[12.5px] text-fg-muted">
-              No chain is priced by Surplus yet. Add a surplus-trusted or surplus-fast market slug to a chain to publish it here.
-            </p>
+            <p className="text-[12.5px] text-fg-muted">No chains yet. Create a chain to publish it here.</p>
           ) : (
             <ul className="divide-y divide-line rounded-lg border border-line">
               {data.models.map((m) => (
@@ -127,7 +135,9 @@ export function PublicPricingTab() {
               ))}
             </ul>
           )}
-          <p className="mt-2 text-[12px] text-fg-muted">Only chains priced by Surplus are listed. Unchecked models are hidden from the public URL.</p>
+          <p className="mt-2 text-[12px] text-fg-muted">
+            Unchecked models are hidden from the public URL. "Not guaranteed" means the upstream bills its own reported cost, so a request can cost more than the max shown.
+          </p>
         </div>
         <div className="space-y-2 px-4 py-4">
           <p className="text-[12.5px] font-medium text-fg">Public URL</p>
