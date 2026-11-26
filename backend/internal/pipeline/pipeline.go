@@ -951,7 +951,12 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		// Outbound guardrails force it too: raw bytes never reach the
 		// StreamGuard, so output PII masking, toxicity, bias and canary checks
 		// would silently be skipped.
-		if len(attemptReq.Tools) == 0 && !req.IncludeUsage && req.Metadata.SourceDialect == attempt.Conn.Dialect() &&
+		//
+		// Only token package streams take the direct path. Every other key
+		// gets usage.cost in its final usage frame, which needs the re-rendered
+		// stream; it also keeps an upstream's own usage.cost out of the
+		// client's bytes.
+		if req.Metadata.TokenMetered && len(attemptReq.Tools) == 0 && !req.IncludeUsage && req.Metadata.SourceDialect == attempt.Conn.Dialect() &&
 			!requiresParsedStreamAdmission(attempt.Target.Provider) && !p.guardrails.ScansStreamOutput(ctx, req) &&
 			!attempt.Target.BillUpstreamCost {
 			if ds, ok := attempt.Conn.(core.DirectStreamable); ok {
@@ -1453,6 +1458,15 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, upstreamLatency,
 					time.Since(requestStarted), *ttft, save, fellBack)
 				p.budgetConfirm(scope, cost)
+				// Hand the recorded charge to the gateway, which renders it as
+				// usage.cost in the final usage frame. Token package keys pay
+				// in tokens and never see USD.
+				if !req.Metadata.TokenMetered {
+					select {
+					case out <- core.StreamChunk{Type: core.ChunkBilledCost, Usage: &core.Usage{BilledCostMicros: cost}}:
+					case <-ctx.Done():
+					}
+				}
 				return
 			}
 			resetStall()
