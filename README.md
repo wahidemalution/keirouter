@@ -342,7 +342,7 @@ Chat is just the start. KeiRouter proxies the whole buffet behind one key:
 Each model carries:
 
 - `input_per_m` / `output_per_m`: the price of the first available route.
-- `max_input_per_m` / `max_output_per_m`: the highest rate any route, the chain fallback included, bills. `null` when a route has no known rate.
+- `max_input_per_m` / `max_output_per_m`: the highest rate any route, the chain fallback included, bills for input and for output (reasoning included). `null` when a route has no known rate. Cache reads and writes bill at their own rates (`cached_input_per_m`, `cache_write_per_m`), which this max does not cover.
 - `max_guaranteed`: `true` only when every route bills a rate fixed before the request. Routes billed from the upstream's own reported cost (Surplus, inferhub, Subrouter, a6api) set it to `false`, and a request on them can cost more than the max.
 - `min_request_cost`: the highest per-request minimum charge of any route, in USD, or `null`.
 - `price_type`: `fixed` for a static price that never moves, `variable` otherwise.

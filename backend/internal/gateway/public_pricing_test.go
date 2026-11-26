@@ -113,7 +113,7 @@ func TestPublicPricingHiddenChainLooksMissing(t *testing.T) {
 	hidden, _ := getPublicPricing(t, h, "203.0.113.2", "?model=secret-model")
 	missing, _ := getPublicPricing(t, h, "203.0.113.2", "?model=no-such-model")
 	require.Equal(t, missing.Code, hidden.Code)
-	require.Equal(t, missing.Body.String(), hidden.Body.String())
+	require.JSONEq(t, missing.Body.String(), hidden.Body.String())
 	rec, out := getPublicPricing(t, h, "203.0.113.2", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, out.Models, 1)

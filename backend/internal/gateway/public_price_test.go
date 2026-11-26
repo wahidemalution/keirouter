@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +52,12 @@ func publicPriceFixture(t *testing.T) *Server {
 		{ID: "c-fb", Name: "fbk", InputPerM: 2, OutputPerM: 8,
 			FallbackProvider: "openai", FallbackModel: "gpt-4o-mini", FallbackInputPerM: 10, FallbackOutputPerM: 30,
 			Steps: []store.ChainStep{{Provider: "openai", Model: "gpt-4o"}}},
+		{ID: "c-clchain", Name: "clchain", InputPerM: 1, OutputPerM: 1,
+			Steps: []store.ChainStep{{Provider: "custom-openai-subtest", Model: "ds"}}},
+		{ID: "c-plain", Name: "plain", MarkupPercent: &m0,
+			Steps: []store.ChainStep{{Provider: "custom-openai-plainx", Model: "r1", MarketSlug: "surplus:r1"}}},
+		{ID: "c-pinned", Name: "pinned", MarkupPercent: &m0,
+			Steps: []store.ChainStep{{Provider: "custom-openai-surplus", Model: "glm-5.3", MarketSlug: "surplus-trusted@zai:glm-5.3"}}},
 		{ID: "c-named", Name: "named", InputPerM: 1, OutputPerM: 1,
 			Steps: []store.ChainStep{{Provider: "openai", Model: "a", DisplayName: "Anthropic"}, {Provider: "deepseek", Model: "b"}}},
 	} {
@@ -62,6 +71,8 @@ func publicPriceFixture(t *testing.T) *Server {
 	cache.Replace([]market.Model{
 		market.TrustedQuote{Found: true, BestIn: 0.2, BestOut: 0.8, CapIn: 0.4, CapOut: 1.6, MinDiscountPct: 50, Providers: []string{"zai"},
 			Offers: []market.OfferPrice{{In: 0.2, Out: 0.8}, {In: 0.3, Out: 1.2}, {In: 0.3, Out: 1.2}}}.Model("glm-5.3"),
+		market.TrustedQuote{Found: true, BestIn: 0.2, BestOut: 0.8, CapIn: 0.4, CapOut: 1.6, Providers: []string{"zai"}}.ProviderModel("zai", "glm-5.3"),
+		{Slug: "surplus:r1", MinAskIn: 1, MinAskOut: 2, Reasoning: 5},
 	})
 	gw.marketCache = cache
 	return gw
@@ -190,4 +201,46 @@ func TestPublicChainPrice_ProviderNames(t *testing.T) {
 		require.False(t, strings.Contains(string(raw), "custom-openai"), name+": "+string(raw))
 		require.NotContains(t, string(raw), "surplus-trusted")
 	}
+}
+
+// A cost-lookup step billed at the chain price is still re-billed from the
+// upstream log by the sweeper, so its max is no promise.
+func TestPublicChainPrice_CostLookupOnChainPrice(t *testing.T) {
+	m := publicPriceOf(t, publicPriceFixture(t), "clchain")
+	require.Equal(t, false, m["max_guaranteed"])
+	require.Equal(t, "variable", m["price_type"])
+}
+
+// Reasoning tokens bill at their own rate, which can exceed the output rate;
+// the guaranteed output max must cover it.
+func TestPublicChainPrice_MaxCoversReasoningRate(t *testing.T) {
+	m := publicPriceOf(t, publicPriceFixture(t), "plain")
+	require.Equal(t, 2.0, m["output_per_m"])
+	require.Equal(t, 5.0, m["max_output_per_m"])
+	require.Equal(t, true, m["max_guaranteed"], "a plain surplus stamp is billed as stamped")
+	require.Equal(t, "variable", m["price_type"])
+}
+
+// The public build fetches Surplus latency only for published chains, and
+// not at all while public pricing is off.
+func TestAllChainPrices_LatencyOnlyForPublished(t *testing.T) {
+	gw := publicPriceFixture(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	gw.surplusURL = srv.URL
+
+	_, err := gw.allChainPrices(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, hits.Load(), "nothing is published")
+
+	require.NoError(t, gw.settings.Set(context.Background(), publicPricingSettingsKey, `{"enabled":true,"chain_ids":["c-pinned"]}`))
+	gw.publicPrices = publicPriceCache{}
+	_, err = gw.allChainPrices(context.Background())
+	require.NoError(t, err)
+	require.Positive(t, hits.Load(), "the published pinned chain's latency is fetched")
 }

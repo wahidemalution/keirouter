@@ -105,13 +105,19 @@ func boundOf(t dispatch.Target, markup float64) routeBound {
 	var b routeBound
 	switch {
 	case t.MarketRateIn > 0 || t.MarketRateOut > 0:
-		b = routeBound{In: t.MarketRateIn, Out: t.MarketRateOut, Known: true, Guaranteed: true}
+		// Reasoning tokens bill at their own rate, which can exceed output.
+		b = routeBound{In: t.MarketRateIn, Out: max(t.MarketRateOut, t.MarketReasoningRate), Known: true, Guaranteed: true}
 		b.Fixed = isStaticStep(t)
-		if market.IsUpstreamCostSlug(t.MarketSlug) || t.BillUpstreamCost || t.CostLookup {
+		if market.IsUpstreamCostSlug(t.MarketSlug) || t.BillUpstreamCost {
 			b.Guaranteed, b.Fixed = false, false
 		}
 	case t.InputPerM > 0 || t.OutputPerM > 0:
 		b = routeBound{In: t.InputPerM, Out: t.OutputPerM, Known: true, Guaranteed: true, Fixed: true}
+	}
+	// The sweeper re-bills a cost-lookup step from the upstream log, whatever
+	// price it was provisionally billed at.
+	if t.CostLookup {
+		b.Guaranteed, b.Fixed = false, false
 	}
 	if t.MinChargeMicro > 0 {
 		mult := 1.0
@@ -310,14 +316,48 @@ type publicPriceCache struct {
 }
 
 // allChainPrices prices every chain of the operator, whatever serves it, with
-// its 7-day billed average.
+// its 7-day billed average. The build runs outside the cache lock: it may wait
+// on Surplus latency, and a reader must never queue behind that.
 func (s *Server) allChainPrices(ctx context.Context) (publicPriceList, error) {
 	c := &s.publicPrices
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.list.byName != nil && time.Since(c.builtAt) < pricingCacheTTL {
-		return c.list, nil
+		list := c.list
+		c.mu.Unlock()
+		return list, nil
 	}
+	c.mu.Unlock()
+	list, err := s.buildPublicPrices(ctx)
+	if err != nil {
+		return publicPriceList{}, err
+	}
+	c.mu.Lock()
+	c.list, c.builtAt = list, time.Now()
+	c.mu.Unlock()
+	return list, nil
+}
+
+// publishedChains is the subset of chains public pricing shows; none while
+// it is off.
+func (s *Server) publishedChains(ctx context.Context, chains []store.Chain) []store.Chain {
+	cfg := s.loadPublicPricingSettings(ctx)
+	if !cfg.Enabled {
+		return nil
+	}
+	ids := make(map[string]bool, len(cfg.ChainIDs))
+	for _, id := range cfg.ChainIDs {
+		ids[id] = true
+	}
+	var out []store.Chain
+	for _, ch := range chains {
+		if ids[ch.ID] {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+func (s *Server) buildPublicPrices(ctx context.Context) (publicPriceList, error) {
 	chains, err := s.chains.ListByTenant(ctx, adminTenant)
 	if err != nil {
 		return publicPriceList{}, err
@@ -330,7 +370,8 @@ func (s *Server) allChainPrices(ctx context.Context) (publicPriceList, error) {
 	if err != nil {
 		return publicPriceList{}, err
 	}
-	latency := s.modelSettingsLatency(ctx, chains)
+	// Latency is fetched from Surplus, so only for what the public can see.
+	latency := s.modelSettingsLatency(ctx, s.publishedChains(ctx, chains))
 	list := publicPriceList{
 		byName:   make(map[string]publicModelPrice, len(chains)),
 		idToName: make(map[string]string, len(chains)),
@@ -352,7 +393,6 @@ func (s *Server) allChainPrices(ctx context.Context) (publicPriceList, error) {
 	if s.marketCache != nil {
 		list.asOf = s.marketCache.FetchedAt()
 	}
-	c.list, c.builtAt = list, time.Now()
 	return list, nil
 }
 
