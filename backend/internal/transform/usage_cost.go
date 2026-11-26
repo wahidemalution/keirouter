@@ -8,7 +8,7 @@ func billedCostUSD(u core.Usage) (cost float64, ok bool) {
 	if !u.ShowBilledCost {
 		return 0, false
 	}
-	return float64(u.BilledCostMicros) / 1e6, true
+	return float64(u.BilledCostNanos) / 1e9, true
 }
 
 // renderResponsesUsage renders usage in the Responses API shape, shared by the
@@ -82,7 +82,7 @@ func storeBilledCost(state *StreamState, chunk core.StreamChunk) {
 	if state.Custom == nil {
 		state.Custom = map[string]any{}
 	}
-	state.Custom[billedCostKey] = chunk.Usage.BilledCostMicros
+	state.Custom[billedCostKey] = chunk.Usage.BilledCostNanos
 	state.Custom[billedUsageKey] = *chunk.Usage
 }
 
@@ -102,12 +102,12 @@ func billedOrHeld(state *StreamState, held core.Usage, ok bool) (core.Usage, boo
 // and the cost has arrived. A stream that ended before its cost was recorded
 // renders usage without it rather than a wrong 0.
 func withStreamCost(state *StreamState, u core.Usage) core.Usage {
-	u.ShowBilledCost, u.BilledCostMicros = false, 0
+	u.ShowBilledCost, u.BilledCostNanos = false, 0
 	if !state.ShowBilledCost {
 		return u
 	}
 	if cost, ok := state.Custom[billedCostKey].(int64); ok {
-		u.ShowBilledCost, u.BilledCostMicros = true, cost
+		u.ShowBilledCost, u.BilledCostNanos = true, cost
 	}
 	return u
 }

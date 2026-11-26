@@ -81,6 +81,7 @@ A key billed in USD gets `usage.cost` in OpenAI, Anthropic and Responses replies
 "usage": { "prompt_tokens": 1200, "completion_tokens": 85, "total_tokens": 1285, "cost": 0.001234 }
 ```
 
+- The figure is exact, up to 9 decimals (nano-USD), and matches what was debited from the balance. Sum it as is; it is not rounded to 6 decimals.
 - Streaming puts it on the last usage frame: the usage-only chunk before `data: [DONE]`, the final `message_delta`, or `response.completed`. On `/v1/chat/completions`, send `"stream_options": {"include_usage": true}` to always get that frame.
 - A reply served from KeiRouter's response cache costs nothing, so it carries `"cost": 0`.
 - For models routed through Subrouter the number is the ceiling price charged at request time. KeiRouter settles the final amount from Subrouter's usage log afterwards. It can differ from the reply's figure, usually downward, and the portal shows the settled one.

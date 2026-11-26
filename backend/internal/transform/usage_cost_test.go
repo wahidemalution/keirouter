@@ -33,15 +33,15 @@ func TestRenderResponseCost(t *testing.T) {
 	} {
 		t.Run(tc.name+"/payg", func(t *testing.T) {
 			r := costTestResponse()
-			r.Usage.ShowBilledCost, r.Usage.BilledCostMicros = true, 1234
+			r.Usage.ShowBilledCost, r.Usage.BilledCostNanos = true, 1234500
 			out, err := tc.codec.RenderResponse(&r)
 			require.NoError(t, err)
 			usage := decodeObj(t, out)["usage"].(map[string]any)
-			require.Equal(t, 0.001234, usage["cost"])
+			require.Equal(t, 0.0012345, usage["cost"])
 		})
 		t.Run(tc.name+"/token package hides cost", func(t *testing.T) {
 			r := costTestResponse()
-			r.Usage.BilledCostMicros = 1234
+			r.Usage.BilledCostNanos = 1234500
 			out, err := tc.codec.RenderResponse(&r)
 			require.NoError(t, err)
 			_, has := decodeObj(t, out)["usage"].(map[string]any)["cost"]
@@ -61,7 +61,7 @@ func TestRenderResponseCost(t *testing.T) {
 
 func TestRenderResponseCostKeepsTokenFields(t *testing.T) {
 	r := costTestResponse()
-	r.Usage.ShowBilledCost, r.Usage.BilledCostMicros = true, 1234
+	r.Usage.ShowBilledCost, r.Usage.BilledCostNanos = true, 1234500
 	out, err := AnthropicCodec{}.RenderResponse(&r)
 	require.NoError(t, err)
 	usage := decodeObj(t, out)["usage"].(map[string]any)
@@ -71,9 +71,21 @@ func TestRenderResponseCostKeepsTokenFields(t *testing.T) {
 }
 
 func TestBilledCostUSD(t *testing.T) {
-	v, ok := billedCostUSD(core.Usage{ShowBilledCost: true, BilledCostMicros: 15900})
+	v, ok := billedCostUSD(core.Usage{ShowBilledCost: true, BilledCostNanos: 2850})
 	require.True(t, ok)
-	require.Equal(t, 0.0159, v)
-	_, ok = billedCostUSD(core.Usage{BilledCostMicros: 15900})
+	require.Equal(t, 0.00000285, v)
+	_, ok = billedCostUSD(core.Usage{BilledCostNanos: 15900})
 	require.False(t, ok)
+}
+
+// The balance is debited in nanos, so usage.cost must not round to micros, and
+// a tiny charge must read as a plain decimal.
+func TestRenderResponseCostKeepsNanos(t *testing.T) {
+	for _, codec := range []Codec{OpenAICodec{}, AnthropicCodec{}, OpenAIResponsesCodec{}} {
+		r := costTestResponse()
+		r.Usage.ShowBilledCost, r.Usage.BilledCostNanos = true, 2850
+		out, err := codec.RenderResponse(&r)
+		require.NoError(t, err)
+		require.Contains(t, string(out), `"cost":0.00000285`)
+	}
 }

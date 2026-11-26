@@ -64,7 +64,7 @@ func TestStreamCost_EndToEnd_OpenAI(t *testing.T) {
 	body := readAllString(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	billed := lastCostMicros(t, h, keyID)
+	billed := lastCostNanos(t, h, keyID)
 	require.Positive(t, billed)
 	var usages []map[string]any
 	for _, obj := range sseDataObjects(t, body) {
@@ -73,7 +73,7 @@ func TestStreamCost_EndToEnd_OpenAI(t *testing.T) {
 		}
 	}
 	require.Len(t, usages, 1, body)
-	require.Equal(t, float64(billed)/1e6, usages[0]["cost"])
+	require.Equal(t, float64(billed)/1e9, usages[0]["cost"])
 	require.Equal(t, 1285.0, usages[0]["total_tokens"])
 	require.True(t, strings.HasSuffix(strings.TrimSpace(body), "data: [DONE]"), body)
 }
@@ -87,7 +87,7 @@ func TestStreamCost_EndToEnd_Anthropic(t *testing.T) {
 	body := readAllString(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	billed := lastCostMicros(t, h, keyID)
+	billed := lastCostNanos(t, h, keyID)
 	var delta map[string]any
 	for _, obj := range sseDataObjects(t, body) {
 		if obj["type"] == "message_delta" {
@@ -96,7 +96,7 @@ func TestStreamCost_EndToEnd_Anthropic(t *testing.T) {
 	}
 	require.NotNil(t, delta, body)
 	usage := delta["usage"].(map[string]any)
-	require.Equal(t, float64(billed)/1e6, usage["cost"])
+	require.Equal(t, float64(billed)/1e9, usage["cost"])
 	require.Equal(t, 85.0, usage["output_tokens"])
 }
 
@@ -109,7 +109,7 @@ func TestStreamCost_EndToEnd_Responses(t *testing.T) {
 	body := readAllString(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	billed := lastCostMicros(t, h, keyID)
+	billed := lastCostNanos(t, h, keyID)
 	var completed []map[string]any
 	for _, obj := range sseDataObjects(t, body) {
 		if obj["type"] == "response.completed" {
@@ -118,7 +118,7 @@ func TestStreamCost_EndToEnd_Responses(t *testing.T) {
 	}
 	require.Len(t, completed, 1, body)
 	usage := completed[0]["response"].(map[string]any)["usage"].(map[string]any)
-	require.Equal(t, float64(billed)/1e6, usage["cost"])
+	require.Equal(t, float64(billed)/1e9, usage["cost"])
 }
 
 func TestStreamCost_EndToEnd_TokenPackage(t *testing.T) {
@@ -196,8 +196,8 @@ func TestCost_UpstreamCostNeverLeaks(t *testing.T) {
 				resp := h.post(t, c.path, c.body, h.apiKey)
 				body := readAllString(t, resp)
 				require.Equal(t, http.StatusOK, resp.StatusCode, body)
-				billed := lastCostMicros(t, h, keyID)
-				require.Equal(t, int64(4875), billed, "the chain price sets the bill")
+				billed := lastCostNanos(t, h, keyID)
+				require.Equal(t, int64(4875000), billed, "the chain price sets the bill")
 				require.NotContains(t, body, "9.99")
 			})
 		}
@@ -212,7 +212,7 @@ func TestCost_UpstreamCostNeverLeaks(t *testing.T) {
 		body := readAllString(t, resp)
 		require.Equal(t, http.StatusOK, resp.StatusCode, body)
 		require.NotContains(t, body, "9.99")
-		require.Equal(t, int64(4875), lastCostMicros(t, h, keyID))
+		require.Equal(t, int64(4875000), lastCostNanos(t, h, keyID))
 		require.Equal(t, 0.004875, usageObject(t, body)["cost"])
 	})
 }
@@ -271,7 +271,7 @@ func TestStreamCost_EndToEnd_AnthropicNoUpstreamUsage(t *testing.T) {
 	body := readAllString(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	billed := lastCostMicros(t, h, keyID)
+	billed := lastCostNanos(t, h, keyID)
 	require.Positive(t, billed, "the estimate is billed")
 	var delta map[string]any
 	for _, obj := range sseDataObjects(t, body) {
@@ -281,6 +281,6 @@ func TestStreamCost_EndToEnd_AnthropicNoUpstreamUsage(t *testing.T) {
 	}
 	require.NotNil(t, delta, body)
 	usage := delta["usage"].(map[string]any)
-	require.Equal(t, float64(billed)/1e6, usage["cost"])
+	require.Equal(t, float64(billed)/1e9, usage["cost"])
 	require.Positive(t, usage["output_tokens"])
 }

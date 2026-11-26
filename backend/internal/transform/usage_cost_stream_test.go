@@ -34,15 +34,15 @@ func finishChunk() core.StreamChunk {
 func usageChunk(u core.Usage) core.StreamChunk {
 	return core.StreamChunk{Type: core.ChunkUsage, Usage: &u}
 }
-func costChunk(micros int64) core.StreamChunk {
-	return core.StreamChunk{Type: core.ChunkBilledCost, Usage: &core.Usage{BilledCostMicros: micros}}
+func costChunk(nanos int64) core.StreamChunk {
+	return core.StreamChunk{Type: core.ChunkBilledCost, Usage: &core.Usage{BilledCostNanos: nanos}}
 }
 
 var streamUsage = core.Usage{PromptTokens: 1200, CompletionTokens: 85, TotalTokens: 1285}
 
 func TestStreamCost_OpenAI(t *testing.T) {
 	out := runStream(t, OpenAICodec{}, true,
-		textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234))
+		textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234500))
 
 	finishAt := strings.Index(out, `"finish_reason":"stop"`)
 	usageAt := strings.Index(out, `"usage":`)
@@ -52,11 +52,11 @@ func TestStreamCost_OpenAI(t *testing.T) {
 	require.Greater(t, doneAt, usageAt, "[DONE] closes the stream after usage")
 	require.Equal(t, 1, strings.Count(out, `"usage":`))
 	require.Contains(t, out, `"prompt_tokens":1200,"completion_tokens":85,"total_tokens":1285`)
-	require.Contains(t, out, `"cost":0.001234`)
+	require.Contains(t, out, `"cost":0.0012345`)
 }
 
 func TestStreamCost_OpenAI_Off(t *testing.T) {
-	chunks := []core.StreamChunk{textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234)}
+	chunks := []core.StreamChunk{textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234500)}
 	out := runStream(t, OpenAICodec{}, false, chunks...)
 	require.NotContains(t, out, `"cost"`)
 
@@ -79,13 +79,13 @@ func TestStreamCost_OpenAI_TwoUsageChunks(t *testing.T) {
 		usageChunk(core.Usage{PromptTokens: 1200, CachedTokens: 1000, OutputPending: true}),
 		finishChunk(),
 		usageChunk(core.Usage{CompletionTokens: 85}),
-		costChunk(1234))
+		costChunk(1234500))
 	require.Equal(t, 1, strings.Count(out, `"usage":`))
 	require.Contains(t, out, `"prompt_tokens":1200`)
 	require.Contains(t, out, `"completion_tokens":85`)
 	require.Contains(t, out, `"total_tokens":1285`)
 	require.Contains(t, out, `"cached_tokens":1000`)
-	require.Contains(t, out, `"cost":0.001234`)
+	require.Contains(t, out, `"cost":0.0012345`)
 }
 
 func TestStreamCost_OpenAI_NoCostArrived(t *testing.T) {
@@ -101,18 +101,18 @@ func TestStreamCost_OpenAI_ZeroCost(t *testing.T) {
 
 func TestStreamCost_Responses(t *testing.T) {
 	out := runStream(t, OpenAIResponsesCodec{}, true,
-		textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234))
+		textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234500))
 	require.Equal(t, 1, strings.Count(out, "event: response.completed"))
 	require.Greater(t, strings.Index(out, "event: response.completed"), strings.Index(out, "response.output_text.delta"))
 	completed := out[strings.Index(out, "event: response.completed"):]
 	require.Contains(t, completed, `"input_tokens":1200`)
 	require.Contains(t, completed, `"output_tokens":85`)
-	require.Contains(t, completed, `"cost":0.001234`)
+	require.Contains(t, completed, `"cost":0.0012345`)
 }
 
 func TestStreamCost_Responses_Off(t *testing.T) {
 	out := runStream(t, OpenAIResponsesCodec{}, false,
-		textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234))
+		textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234500))
 	require.Equal(t, 1, strings.Count(out, "event: response.completed"))
 	require.Contains(t, out, `"input_tokens":1200`)
 	require.NotContains(t, out, `"cost"`)
@@ -121,7 +121,7 @@ func TestStreamCost_Responses_Off(t *testing.T) {
 func TestStreamCost_Anthropic(t *testing.T) {
 	out := runStream(t, AnthropicCodec{}, true, textChunk("hi"), finishChunk(),
 		usageChunk(core.Usage{PromptTokens: 10500, CachedTokens: 8000, CacheWriteTokens: 2000, CompletionTokens: 300}),
-		costChunk(15900))
+		costChunk(15900000))
 	delta := out[strings.Index(out, "event: message_delta"):]
 	require.Contains(t, delta, `"input_tokens":500`)
 	require.Contains(t, delta, `"cache_read_input_tokens":8000`)
@@ -132,14 +132,14 @@ func TestStreamCost_Anthropic(t *testing.T) {
 }
 
 func TestStreamCost_Anthropic_Off(t *testing.T) {
-	out := runStream(t, AnthropicCodec{}, false, textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234))
+	out := runStream(t, AnthropicCodec{}, false, textChunk("hi"), finishChunk(), usageChunk(streamUsage), costChunk(1234500))
 	require.NotContains(t, out, `"cost"`)
 }
 
 func TestStreamCost_OtherCodecsIgnoreChunk(t *testing.T) {
 	for _, codec := range []StreamCodec{GeminiCodec{}, OllamaCodec{}} {
 		for _, show := range []bool{true, false} {
-			events, err := codec.RenderStreamChunk(costChunk(1234), &StreamState{Model: "m", ShowBilledCost: show})
+			events, err := codec.RenderStreamChunk(costChunk(1234500), &StreamState{Model: "m", ShowBilledCost: show})
 			require.NoError(t, err)
 			require.Empty(t, events)
 		}
@@ -157,8 +157,8 @@ func TestMergeStreamUsage(t *testing.T) {
 
 // billedChunk is the cost chunk as pumpStream sends it: the recorded usage
 // with the charge attached.
-func billedChunk(u core.Usage, micros int64) core.StreamChunk {
-	u.BilledCostMicros = micros
+func billedChunk(u core.Usage, nanos int64) core.StreamChunk {
+	u.BilledCostNanos = nanos
 	return core.StreamChunk{Type: core.ChunkBilledCost, Usage: &u}
 }
 
@@ -166,7 +166,7 @@ func billedChunk(u core.Usage, micros int64) core.StreamChunk {
 // estimate); Anthropic and Responses show that recorded usage and its cost.
 func TestStreamCost_Anthropic_NoUpstreamUsage(t *testing.T) {
 	out := runStream(t, AnthropicCodec{}, true, textChunk("hi"), finishChunk(),
-		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15}, 50))
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15}, 50000))
 	delta := out[strings.Index(out, "event: message_delta"):]
 	require.Contains(t, delta, `"input_tokens":12`)
 	require.Contains(t, delta, `"output_tokens":3`)
@@ -175,16 +175,16 @@ func TestStreamCost_Anthropic_NoUpstreamUsage(t *testing.T) {
 
 func TestStreamCost_Anthropic_UpstreamUsageWins(t *testing.T) {
 	out := runStream(t, AnthropicCodec{}, true, textChunk("hi"), finishChunk(), usageChunk(streamUsage),
-		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 1234))
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 1234500))
 	delta := out[strings.Index(out, "event: message_delta"):]
 	require.Contains(t, delta, `"input_tokens":1200`)
 	require.Contains(t, delta, `"output_tokens":85`)
-	require.Contains(t, delta, `"cost":0.001234`)
+	require.Contains(t, delta, `"cost":0.0012345`)
 }
 
 func TestStreamCost_Responses_NoUpstreamUsage(t *testing.T) {
 	out := runStream(t, OpenAIResponsesCodec{}, true, textChunk("hi"), finishChunk(),
-		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15}, 50))
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15}, 50000))
 	completed := out[strings.Index(out, "event: response.completed"):]
 	require.Contains(t, completed, `"input_tokens":12`)
 	require.Contains(t, completed, `"cost":0.00005`)
@@ -192,14 +192,14 @@ func TestStreamCost_Responses_NoUpstreamUsage(t *testing.T) {
 
 func TestStreamCost_OpenAI_NoUpstreamUsageInventsNothing(t *testing.T) {
 	out := runStream(t, OpenAICodec{}, true, textChunk("hi"), finishChunk(),
-		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 50))
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 50000))
 	require.NotContains(t, out, `"usage"`)
 	require.Equal(t, 1, strings.Count(out, "data: [DONE]"))
 }
 
 func TestStreamCost_TokenStateIgnoresBilledUsage(t *testing.T) {
 	out := runStream(t, AnthropicCodec{}, false, textChunk("hi"), finishChunk(),
-		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 50))
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 50000))
 	require.NotContains(t, out, `"cost"`)
 	require.NotContains(t, out, `"input_tokens":12`, "without the flag the codec behaves as before")
 }

@@ -12,12 +12,12 @@ import (
 // the pipeline may hand out the same pointer the response cache stores, and a
 // cost written through it would replay to later requests, including token
 // package keys. show is false for token package keys.
-func withBilledCost(resp *core.ChatResponse, show bool, costMicros int64) *core.ChatResponse {
+func withBilledCost(resp *core.ChatResponse, show bool, costNanos int64) *core.ChatResponse {
 	out := *resp
 	out.Usage.ShowBilledCost = show
-	out.Usage.BilledCostMicros = 0
+	out.Usage.BilledCostNanos = 0
 	if show {
-		out.Usage.BilledCostMicros = costMicros
+		out.Usage.BilledCostNanos = costNanos
 	}
 	return &out
 }

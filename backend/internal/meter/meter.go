@@ -294,9 +294,22 @@ func (m *Meter) QuoteMicros(ev Event) int64 {
 	return m.costForEvent(ev).CostMicros
 }
 
+// Charge is the customer cost of one recorded request. Nanos is what the
+// balance is debited; Micros is the rounded figure the budget interface uses.
+type Charge struct {
+	Micros int64
+	Nanos  int64
+}
+
 // Record persists a canonical terminal request row and returns its actual cost
 // in micro-USD for the existing budget interface.
 func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
+	c, err := m.RecordCharge(ctx, ev)
+	return c.Micros, err
+}
+
+// RecordCharge is Record returning the charge in both units.
+func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
 	u := clampUsage(ev.Usage)
 	status := ev.Status
 	if status == "" {
@@ -397,7 +410,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	}
 	if err := m.recordUsage(ctx, rec); err != nil {
 		m.notifyDiscarded(rec)
-		return cost.CostMicros, err
+		return Charge{Micros: cost.CostMicros, Nanos: cost.CostNanos}, err
 	}
 	if m.async == nil {
 		m.notifyPersisted(rec)
@@ -409,7 +422,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		m.hub.Publish(usagehub.Event{Provider: ev.Provider, Model: ev.Model, AccountID: ev.AccountID,
 			Tokens: u.PromptTokens + u.CompletionTokens})
 	}
-	return cost.CostMicros, nil
+	return Charge{Micros: cost.CostMicros, Nanos: cost.CostNanos}, nil
 }
 
 // costForEvent resolves the terminal cost for an event, preferring the winning

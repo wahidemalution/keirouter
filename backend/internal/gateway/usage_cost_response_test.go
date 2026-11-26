@@ -20,14 +20,14 @@ func pricedE2E(o *e2eOptions) {
 	o.modelPrices = map[string]meter.Price{"openai/gpt-4o": {InputPerM: 10, OutputPerM: 30}}
 }
 
-// lastCostMicros waits for the key's latest usage row and returns what it was
+// lastCostNanos waits for the key's latest usage row and returns what it was
 // billed.
-func lastCostMicros(t *testing.T, h *e2eHarness, keyID string) int64 {
+func lastCostNanos(t *testing.T, h *e2eHarness, keyID string) int64 {
 	t.Helper()
 	var cost int64
 	require.Eventually(t, func() bool {
 		err := h.gateway.db.SQL().QueryRowContext(context.Background(),
-			`SELECT cost_micros FROM usage_records WHERE api_key_id = ? ORDER BY created_at DESC LIMIT 1`, keyID).
+			`SELECT cost_nanos FROM usage_records WHERE api_key_id = ? ORDER BY created_at DESC LIMIT 1`, keyID).
 			Scan(&cost)
 		return err == nil
 	}, 5*time.Second, 20*time.Millisecond, "a usage row is recorded")
@@ -54,9 +54,9 @@ func TestUnaryCost_PAYG(t *testing.T) {
 	body := readAllString(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	billed := lastCostMicros(t, h, keyID)
+	billed := lastCostNanos(t, h, keyID)
 	require.Positive(t, billed)
-	require.Equal(t, float64(billed)/1e6, usageObject(t, body)["cost"])
+	require.Equal(t, float64(billed)/1e9, usageObject(t, body)["cost"])
 }
 
 func TestUnaryCost_PAYGAnthropic(t *testing.T) {
@@ -68,9 +68,9 @@ func TestUnaryCost_PAYGAnthropic(t *testing.T) {
 	body := readAllString(t, resp)
 	require.Equal(t, http.StatusOK, resp.StatusCode, body)
 
-	billed := lastCostMicros(t, h, keyID)
+	billed := lastCostNanos(t, h, keyID)
 	require.Positive(t, billed)
-	require.Equal(t, float64(billed)/1e6, usageObject(t, body)["cost"])
+	require.Equal(t, float64(billed)/1e9, usageObject(t, body)["cost"])
 }
 
 func TestUnaryCost_TokenPackage(t *testing.T) {
@@ -103,14 +103,14 @@ func TestUnaryCost_NoHeader(t *testing.T) {
 func TestWithBilledCostLeavesSourceUntouched(t *testing.T) {
 	src := &core.ChatResponse{Usage: core.Usage{PromptTokens: 10}}
 
-	out := withBilledCost(src, true, 1234)
+	out := withBilledCost(src, true, 1234500)
 	require.True(t, out.Usage.ShowBilledCost)
-	require.Equal(t, int64(1234), out.Usage.BilledCostMicros)
+	require.Equal(t, int64(1234500), out.Usage.BilledCostNanos)
 	require.Equal(t, 10, out.Usage.PromptTokens)
 
 	require.False(t, src.Usage.ShowBilledCost)
-	require.Zero(t, src.Usage.BilledCostMicros)
+	require.Zero(t, src.Usage.BilledCostNanos)
 
-	hidden := withBilledCost(&core.ChatResponse{Usage: core.Usage{ShowBilledCost: true, BilledCostMicros: 9}}, false, 1234)
+	hidden := withBilledCost(&core.ChatResponse{Usage: core.Usage{ShowBilledCost: true, BilledCostNanos: 9}}, false, 1234)
 	require.False(t, hidden.Usage.ShowBilledCost, "a token package key never shows cost, whatever the source carried")
 }

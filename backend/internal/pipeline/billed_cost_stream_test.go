@@ -73,13 +73,13 @@ func TestPumpStream_EmitsBilledCost(t *testing.T) {
 	chunks := drain(t, res)
 
 	require.Len(t, *recs, 1)
-	billed := (*recs)[0].CostMicros
+	billed := (*recs)[0].CostNanos
 	require.Positive(t, billed)
 
 	last := chunks[len(chunks)-1]
 	require.Equal(t, core.ChunkBilledCost, last.Type, "the cost is the last chunk before close")
 	require.NotNil(t, last.Usage)
-	require.Equal(t, billed, last.Usage.BilledCostMicros)
+	require.Equal(t, billed, last.Usage.BilledCostNanos)
 	require.Equal(t, (*recs)[0].PromptTokens, last.Usage.PromptTokens, "the chunk carries the recorded usage")
 	require.Equal(t, (*recs)[0].CompletionTokens, last.Usage.CompletionTokens)
 	for _, c := range chunks[:len(chunks)-1] {
