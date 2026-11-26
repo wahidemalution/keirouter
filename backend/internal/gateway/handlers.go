@@ -306,7 +306,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 	if notice != "" {
 		appendNoticePart(result.Response, notice)
 	}
-	out, err := codec.RenderResponse(result.Response)
+	out, err := codec.RenderResponse(withBilledCost(result.Response, !opts.TokenMetered, result.CostMicros))
 	if err != nil {
 		tr.complete(outcome{provider: result.Provider, model: result.Model,
 			err: &core.ProviderError{Kind: core.ErrInternal, Message: "failed to render provider response", Cause: err}})
