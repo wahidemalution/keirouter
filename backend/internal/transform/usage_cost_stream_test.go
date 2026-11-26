@@ -154,3 +154,52 @@ func TestMergeStreamUsage(t *testing.T) {
 	require.Equal(t, 50, got.CacheWriteTokens)
 	require.Equal(t, 85, got.CompletionTokens)
 }
+
+// billedChunk is the cost chunk as pumpStream sends it: the recorded usage
+// with the charge attached.
+func billedChunk(u core.Usage, micros int64) core.StreamChunk {
+	u.BilledCostMicros = micros
+	return core.StreamChunk{Type: core.ChunkBilledCost, Usage: &u}
+}
+
+// When the upstream sent no usage the request is still billed (on an
+// estimate); Anthropic and Responses show that recorded usage and its cost.
+func TestStreamCost_Anthropic_NoUpstreamUsage(t *testing.T) {
+	out := runStream(t, AnthropicCodec{}, true, textChunk("hi"), finishChunk(),
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15}, 50))
+	delta := out[strings.Index(out, "event: message_delta"):]
+	require.Contains(t, delta, `"input_tokens":12`)
+	require.Contains(t, delta, `"output_tokens":3`)
+	require.Contains(t, delta, `"cost":0.00005`)
+}
+
+func TestStreamCost_Anthropic_UpstreamUsageWins(t *testing.T) {
+	out := runStream(t, AnthropicCodec{}, true, textChunk("hi"), finishChunk(), usageChunk(streamUsage),
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 1234))
+	delta := out[strings.Index(out, "event: message_delta"):]
+	require.Contains(t, delta, `"input_tokens":1200`)
+	require.Contains(t, delta, `"output_tokens":85`)
+	require.Contains(t, delta, `"cost":0.001234`)
+}
+
+func TestStreamCost_Responses_NoUpstreamUsage(t *testing.T) {
+	out := runStream(t, OpenAIResponsesCodec{}, true, textChunk("hi"), finishChunk(),
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3, TotalTokens: 15}, 50))
+	completed := out[strings.Index(out, "event: response.completed"):]
+	require.Contains(t, completed, `"input_tokens":12`)
+	require.Contains(t, completed, `"cost":0.00005`)
+}
+
+func TestStreamCost_OpenAI_NoUpstreamUsageInventsNothing(t *testing.T) {
+	out := runStream(t, OpenAICodec{}, true, textChunk("hi"), finishChunk(),
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 50))
+	require.NotContains(t, out, `"usage"`)
+	require.Equal(t, 1, strings.Count(out, "data: [DONE]"))
+}
+
+func TestStreamCost_TokenStateIgnoresBilledUsage(t *testing.T) {
+	out := runStream(t, AnthropicCodec{}, false, textChunk("hi"), finishChunk(),
+		billedChunk(core.Usage{PromptTokens: 12, CompletionTokens: 3}, 50))
+	require.NotContains(t, out, `"cost"`)
+	require.NotContains(t, out, `"input_tokens":12`, "without the flag the codec behaves as before")
+}

@@ -393,8 +393,9 @@ func (OpenAIResponsesCodec) RenderStreamDone(state *StreamState) [][]byte {
 	response := map[string]any{
 		"id": s.responseID, "object": "response", "status": "completed",
 	}
-	if u, ok := heldStreamUsage(state); ok {
-		response["usage"] = renderResponsesUsage(u)
+	held, ok := state.Custom[heldUsageKey].(core.Usage)
+	if u, ok := billedOrHeld(state, held, ok); ok {
+		response["usage"] = renderResponsesUsage(withStreamCost(state, u))
 	}
 	return [][]byte{respEvent("response.completed", map[string]any{
 		"type":            "response.completed",

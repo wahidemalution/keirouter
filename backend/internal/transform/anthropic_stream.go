@@ -430,7 +430,8 @@ func (AnthropicCodec) RenderStreamDone(state *StreamState) [][]byte {
 				finish = core.FinishStop
 			}
 			usage := antUsageOut{}
-			if u, ok := state.Custom["usage"].(core.Usage); ok {
+			held, ok := state.Custom["usage"].(core.Usage)
+			if u, ok := billedOrHeld(state, held, ok); ok {
 				usage = antUsageFromCore(u)
 				usage.Cost = streamCostField(withStreamCost(state, u))
 			}

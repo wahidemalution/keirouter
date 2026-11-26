@@ -248,3 +248,39 @@ func TestStripUpstreamCost(t *testing.T) {
 	require.NotContains(t, out, `"cost"`)
 	require.Contains(t, out, `"input_tokens":5`)
 }
+
+// noUsageSSEUpstream answers without any usage frame, as many
+// OpenAI-compatible providers do unless asked.
+func noUsageSSEUpstream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	for _, l := range []string{
+		`data: {"id":"s1","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"hello there"}}]}`,
+		`data: {"id":"s1","model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	} {
+		fmt.Fprintf(w, "%s\n\n", l)
+	}
+}
+
+func TestStreamCost_EndToEnd_AnthropicNoUpstreamUsage(t *testing.T) {
+	h := newE2E(t, noUsageSSEUpstream, pricedE2E)
+	_, _ = e2eTokenKey(t, h)
+	keyID := paygKeyID(t, h)
+
+	resp := h.post(t, "/v1/messages", costMessagesStreamBody, h.apiKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+
+	billed := lastCostMicros(t, h, keyID)
+	require.Positive(t, billed, "the estimate is billed")
+	var delta map[string]any
+	for _, obj := range sseDataObjects(t, body) {
+		if obj["type"] == "message_delta" {
+			delta = obj
+		}
+	}
+	require.NotNil(t, delta, body)
+	usage := delta["usage"].(map[string]any)
+	require.Equal(t, float64(billed)/1e6, usage["cost"])
+	require.Positive(t, usage["output_tokens"])
+}

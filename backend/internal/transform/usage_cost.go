@@ -47,8 +47,9 @@ func mergeStreamUsage(prev, next core.Usage) core.Usage {
 
 // Keys under StreamState.Custom for the held usage frame and the billed cost.
 const (
-	heldUsageKey  = "billed_held_usage"
-	billedCostKey = "billed_cost_micros"
+	heldUsageKey   = "billed_held_usage"
+	billedCostKey  = "billed_cost_micros"
+	billedUsageKey = "billed_usage"
 )
 
 // holdStreamUsage merges a usage chunk into the frame held until
@@ -82,6 +83,19 @@ func storeBilledCost(state *StreamState, chunk core.StreamChunk) {
 		state.Custom = map[string]any{}
 	}
 	state.Custom[billedCostKey] = chunk.Usage.BilledCostMicros
+	state.Custom[billedUsageKey] = *chunk.Usage
+}
+
+// billedOrHeld returns held when present; otherwise, for a stream that shows
+// cost, the usage the request was billed on (an estimate when the upstream
+// reported none), so the client still sees what it was charged. OpenAI does
+// not use it: it never invents a usage frame the upstream did not send.
+func billedOrHeld(state *StreamState, held core.Usage, ok bool) (core.Usage, bool) {
+	if ok || !state.ShowBilledCost {
+		return held, ok
+	}
+	billed, ok := state.Custom[billedUsageKey].(core.Usage)
+	return billed, ok
 }
 
 // withStreamCost marks u for usage.cost rendering when the stream shows cost

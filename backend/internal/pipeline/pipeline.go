@@ -1458,12 +1458,13 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, upstreamLatency,
 					time.Since(requestStarted), *ttft, save, fellBack)
 				p.budgetConfirm(scope, cost)
-				// Hand the recorded charge to the gateway, which renders it as
-				// usage.cost in the final usage frame. Token package keys pay
-				// in tokens and never see USD.
+				// Hand the recorded charge, with the usage it was billed on, to
+				// the gateway, which renders it as usage.cost in the final usage
+				// frame. Token package keys pay in tokens and never see USD.
 				if !req.Metadata.TokenMetered {
+					billed := billedStreamUsage(usage, cost)
 					select {
-					case out <- core.StreamChunk{Type: core.ChunkBilledCost, Usage: &core.Usage{BilledCostMicros: cost}}:
+					case out <- core.StreamChunk{Type: core.ChunkBilledCost, Usage: &billed}:
 					case <-ctx.Done():
 					}
 				}
@@ -3476,4 +3477,18 @@ func withTargetHeaders(attempt dispatch.Attempt) core.Credentials {
 	}
 	creds.Headers = headers
 	return creds
+}
+
+// billedStreamUsage is the ChunkBilledCost payload: the token counts a stream
+// was billed on and the charge, without the router-internal cost fields.
+func billedStreamUsage(u core.Usage, costMicros int64) core.Usage {
+	out := core.Usage{
+		PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens,
+		CachedTokens: u.CachedTokens, CacheWriteTokens: u.CacheWriteTokens, ReasoningTokens: u.ReasoningTokens,
+		BilledCostMicros: costMicros,
+	}
+	if sum := out.PromptTokens + out.CompletionTokens; out.TotalTokens < sum {
+		out.TotalTokens = sum
+	}
+	return out
 }
