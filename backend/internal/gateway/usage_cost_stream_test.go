@@ -216,3 +216,35 @@ func TestCost_UpstreamCostNeverLeaks(t *testing.T) {
 		require.Equal(t, 0.004875, usageObject(t, body)["cost"])
 	})
 }
+
+// A token package stream takes the direct path, where upstream frames are
+// copied through; OpenRouter's own usage.cost must still never reach it.
+func TestCost_TokenKeyDirectStreamHidesUpstreamCost(t *testing.T) {
+	h := newE2E(t, costSSEUpstream, pricedE2E)
+	tokenKey, _ := e2eTokenKey(t, h)
+
+	resp := h.post(t, "/v1/chat/completions", `{"model":"gpt-6-sol","stream":true,"messages":[{"role":"user","content":"hi"}]}`, tokenKey)
+	body := readAllString(t, resp)
+	require.Equal(t, http.StatusOK, resp.StatusCode, body)
+	require.Contains(t, body, `"completion_tokens":85`, "the usage frame itself is kept")
+	require.NotContains(t, body, `"cost"`)
+	require.NotContains(t, body, "9.99")
+}
+
+func TestStripUpstreamCost(t *testing.T) {
+	plain := []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"cost of living\"}}]}\n\n")
+	require.Equal(t, plain, stripUpstreamCost(plain), "frames without a usage cost stay byte-for-byte")
+
+	frame := []byte("data: {\"id\":\"s1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"cost\":0.0123,\"cost_details\":{\"upstream_inference_cost\":0.01},\"buyer_cost_micro\":7}}\n\n")
+	out := string(stripUpstreamCost(frame))
+	require.NotContains(t, out, "cost")
+	require.Contains(t, out, `"prompt_tokens":5`)
+	require.True(t, strings.HasPrefix(out, "data: {"))
+	require.True(t, strings.HasSuffix(out, "}\n\n"))
+
+	responses := []byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":5,\"cost\":0.5}}}\n\n")
+	out = string(stripUpstreamCost(responses))
+	require.True(t, strings.HasPrefix(out, "event: response.completed\ndata: {"))
+	require.NotContains(t, out, `"cost"`)
+	require.Contains(t, out, `"input_tokens":5`)
+}

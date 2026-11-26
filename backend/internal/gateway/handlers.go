@@ -1006,7 +1006,7 @@ func copySanitizedNDJSON(dst io.Writer, reader *bufio.Reader, dialect core.Diale
 
 func writeSanitizedFrame(dst io.Writer, raw []byte, dialect core.Dialect, flush func()) (int64, error) {
 	providerErr := hasStreamErrorMarker(raw) && isProviderStreamError(raw)
-	out := raw
+	out := stripUpstreamCost(raw)
 	if providerErr {
 		out = streamErrorEvent(dialect, "upstream provider request failed")
 	}
