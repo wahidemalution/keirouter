@@ -113,6 +113,8 @@ type Server struct {
 	insightsCache    *ttlCache
 	// pricing caches the live Surplus price list behind /v1/pricing.
 	pricing pricingCache
+	// publicPrices caches the all-chain list behind /v1/public/pricing.
+	publicPrices publicPriceCache
 	// detail caches the Surplus reads behind /v1/public/model-detail.
 	detail detailCache
 	// surplusLabels caches the provider names behind the chain editor's

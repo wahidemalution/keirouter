@@ -1,8 +1,11 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -288,4 +291,86 @@ func (s *Server) publicFallback(c store.Chain, n int, discount func(in, out *flo
 		},
 		bound: boundOf(t, 0),
 	}, true
+}
+
+// publicPriceList is one build of the public price list over every chain.
+type publicPriceList struct {
+	byName   map[string]publicModelPrice // lower-cased chain name -> price
+	idToName map[string]string           // chain ID -> lower-cased chain name
+	unlisted map[string]bool             // chain ID -> hidden, maintenance or disabled
+	asOf     time.Time
+}
+
+// publicPriceCache holds the last list for pricingCacheTTL. One entry only,
+// so arbitrary ?model= values cannot grow it.
+type publicPriceCache struct {
+	mu      sync.Mutex
+	builtAt time.Time
+	list    publicPriceList
+}
+
+// allChainPrices prices every chain of the operator, whatever serves it, with
+// its 7-day billed average.
+func (s *Server) allChainPrices(ctx context.Context) (publicPriceList, error) {
+	c := &s.publicPrices
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.list.byName != nil && time.Since(c.builtAt) < pricingCacheTTL {
+		return c.list, nil
+	}
+	chains, err := s.chains.ListByTenant(ctx, adminTenant)
+	if err != nil {
+		return publicPriceList{}, err
+	}
+	settings := market.DefaultSettings()
+	if s.settings != nil {
+		settings = market.LoadSettings(ctx, s.settings.Get)
+	}
+	billed, err := s.chainBilled(ctx)
+	if err != nil {
+		return publicPriceList{}, err
+	}
+	latency := s.modelSettingsLatency(ctx, chains)
+	list := publicPriceList{
+		byName:   make(map[string]publicModelPrice, len(chains)),
+		idToName: make(map[string]string, len(chains)),
+		unlisted: map[string]bool{},
+	}
+	for _, ch := range chains {
+		if len(ch.Steps) == 0 {
+			continue
+		}
+		name := strings.ToLower(ch.Name)
+		p := s.publicChainPrice(ch, market.EffectiveMarkup(ch.MarkupPercent, settings.MarkupPercent), latency)
+		s.applyPublicRealized(&p, ch, billed[ch.ID])
+		list.byName[name] = p
+		list.idToName[ch.ID] = name
+		if !ch.Listed() || ch.Disabled {
+			list.unlisted[ch.ID] = true
+		}
+	}
+	if s.marketCache != nil {
+		list.asOf = s.marketCache.FetchedAt()
+	}
+	c.list, c.builtAt = list, time.Now()
+	return list, nil
+}
+
+// applyPublicRealized adds the chain's 7-day billed average to an available
+// price. It leaves discount_pct alone: that is the live headline's discount.
+func (s *Server) applyPublicRealized(p *publicModelPrice, c store.Chain, b store.ChainBilledUsage) {
+	if !p.Available {
+		return
+	}
+	var official *officialPrice
+	if ref, ok := s.chainOfficialPrice(c); ok {
+		official = &ref
+	}
+	rp, ok := realizedFrom(b, official)
+	if !ok {
+		return
+	}
+	days, tokens := realizedWindowDays, rp.Tokens
+	p.AvgInputPerM, p.AvgOutputPerM = price(rp.InputPerM), price(rp.OutputPerM)
+	p.AvgWindowDays, p.AvgSampleTokens = &days, &tokens
 }
