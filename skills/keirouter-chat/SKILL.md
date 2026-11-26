@@ -73,6 +73,19 @@ Anthropic (`/v1/messages`):
   "stop_reason": "end_turn", "usage": { "input_tokens": 8, "output_tokens": 2 } }
 ```
 
+## Billed cost (`usage.cost`)
+
+A key billed in USD gets `usage.cost` in every OpenAI, Anthropic and Responses reply: the amount KeiRouter charged for that request, in USD, after KeiRouter's own markup. Resellers can apply their own markup to this number. Token package keys never get the field.
+
+```json
+"usage": { "prompt_tokens": 1200, "completion_tokens": 85, "total_tokens": 1285, "cost": 0.001234 }
+```
+
+- Streaming puts it on the last usage frame: the usage-only chunk before `data: [DONE]`, the final `message_delta`, or `response.completed`. On `/v1/chat/completions`, send `"stream_options": {"include_usage": true}` to always get that frame.
+- A reply served from KeiRouter's response cache costs nothing, so it carries `"cost": 0`.
+- For models routed through Subrouter the number is the ceiling price charged at request time. KeiRouter settles the final amount from Subrouter's usage log afterwards. It can differ from the reply's figure, usually downward, and the portal shows the settled one.
+- There is no cost header. The figure lives only in the body.
+
 ## Provider quick reference
 
 | Provider | `model` format | Examples |

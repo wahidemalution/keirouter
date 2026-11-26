@@ -334,6 +334,8 @@ Chat is just the start. KeiRouter proxies the whole buffet behind one key:
 | Model discovery | `GET /v1/models` · `/v1/models/info` · `/v1/models/{kind}` | OpenAI |
 | Your own key's usage | `GET /v1/keys/me/usage` | — |
 
+Replies to keys billed in USD carry `usage.cost`, the amount KeiRouter charged for that request in USD, so a reseller can add their own markup on top. Streams carry it on the final usage frame. Token package keys never see it. Details: [skills/keirouter-chat/SKILL.md](skills/keirouter-chat/SKILL.md#billed-cost-usagecost).
+
 `GET /healthz` is the liveness probe, and accidental `/v1/v1/...` paths are folded back to `/v1/...` so a misconfigured base URL still works.
 
 ---
