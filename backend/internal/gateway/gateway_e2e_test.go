@@ -194,7 +194,7 @@ func TestE2E_OpenAIChat_DirectProviderModel(t *testing.T) {
 	defer resp.Body.Close()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, "openai", resp.Header.Get("X-KeiRouter-Provider"))
+	require.Equal(t, "OpenAI", resp.Header.Get("X-KeiRouter-Provider"), "the display name, not the provider id")
 
 	var out struct {
 		Choices []struct {

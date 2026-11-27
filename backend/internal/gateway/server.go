@@ -97,6 +97,7 @@ type Server struct {
 	tsManager        *tailscale.Manager
 	usageHub         *usagehub.Hub
 	tokenSubs        tokenSubCache
+	publicNameCache  publicNameCache
 	timeoutNotifier  *TimeoutNotifier
 	proxyNotifier    *ProxyNotifier
 	rateLimiter      RateLimitController
