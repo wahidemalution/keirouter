@@ -1546,6 +1546,13 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	balance, err := s.keyBalance(ctx, key, now)
+	if err != nil {
+		s.log.Error("key usage: balance failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load balance")
+		return
+	}
+
 	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
 	var modelOut []map[string]any
@@ -1570,8 +1577,9 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 			"total_requests":    summary.TotalRequests,
 			"cost_usd":          float64(summary.CostMicros) / 1_000_000,
 		},
-		"daily":  dailyOut,
-		"models": modelOut,
+		"daily":   dailyOut,
+		"models":  modelOut,
+		"balance": balance,
 	}
 	tokenState, err := s.tokenKeyState(ctx, key)
 	if err != nil {

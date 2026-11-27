@@ -101,7 +101,9 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, tr *reqTra
 		writeError(w, http.StatusInternalServerError, "authentication error")
 		return
 	}
-	if tokenState.expired() {
+	// An expired key may still read its own usage, so its owner can see the
+	// package lapsed instead of a bare 403.
+	if tokenState.expired() && !(r.Method == http.MethodGet && r.URL.Path == "/v1/keys/me/usage") {
 		tr.reject(http.StatusForbidden, "Rejected · token package expired",
 			fmt.Sprintf("Key: %s\nIP: %s", key.Name, extractIP(r)),
 			"The token package behind this key has expired. Buy a new package to reactivate it.")
