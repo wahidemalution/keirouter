@@ -296,6 +296,7 @@ func ownOr(own *int64, plan int64) int64 {
 func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, notice string) {
 	tr := s.traceOf(r)
 	tr.setRequest(req.Model, false)
+	requested := req.Model
 	result, err := s.pipeline.Chat(r.Context(), req, opts)
 	if err != nil {
 		tr.complete(outcome{fallbacks: req.Metadata.FallbackCount, err: err})
@@ -323,8 +324,8 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 		fallbacks:  req.Metadata.FallbackCount,
 	})
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-KeiRouter-Provider", result.Provider)
-	w.Header().Set("X-KeiRouter-Model", result.Model)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), req.Metadata.TenantID, result.Provider, req.Metadata.ChainID))
+	w.Header().Set("X-KeiRouter-Model", requested)
 	if result.CacheHit {
 		w.Header().Set("X-KeiRouter-Cache", "hit")
 	}
@@ -337,6 +338,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, notice string) {
 	tr := s.traceOf(r)
 	tr.setRequest(req.Model, true)
+	requested := req.Model
 	streamCodec, ok := codec.(transform.StreamCodec)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "dialect does not support streaming")
@@ -390,8 +392,8 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 		} else {
 			setStreamHeaders(w, "text/event-stream")
 		}
-		w.Header().Set("X-KeiRouter-Provider", result.Provider)
-		w.Header().Set("X-KeiRouter-Model", result.Model)
+		w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), req.Metadata.TenantID, result.Provider, req.Metadata.ChainID))
+		w.Header().Set("X-KeiRouter-Model", requested)
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 	}
@@ -1732,8 +1734,8 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	for _, rec := range recent {
 		entry := map[string]any{
 			"id":                rec.ID,
-			"provider":          rec.Provider,
-			"provider_name":     logInfo.providerName(rec),
+			"provider":          logInfo.publicProviderName(rec.Provider, rec.ChainID),
+			"provider_name":     logInfo.publicProviderName(rec.Provider, rec.ChainID),
 			"discount_pct":      logInfo.discountPct(rec),
 			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,

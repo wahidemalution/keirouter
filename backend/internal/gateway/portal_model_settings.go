@@ -37,8 +37,12 @@ func (s *Server) handlePortalModelSettings(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to load model settings")
 		return
 	}
+	byName := make(map[string]store.Chain, len(chains))
+	for _, c := range chains {
+		byName[c.Name] = c
+	}
 	for i := range resp.Models {
-		redactModelSettingsRow(&resp.Models[i])
+		redactModelSettingsRow(&resp.Models[i], byName[resp.Models[i].Model])
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -133,7 +137,7 @@ func (s *Server) writeModelSettingsRow(w http.ResponseWriter, r *http.Request, k
 	}
 	row := resp.Models[0]
 	if portal {
-		redactModelSettingsRow(&row)
+		redactModelSettingsRow(&row, chain)
 	}
 	writeJSON(w, http.StatusOK, row)
 }

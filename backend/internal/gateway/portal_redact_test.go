@@ -92,6 +92,6 @@ func TestPortalResponsesHideMarketplace(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	body := rec.Body.String()
 	require.NotContains(t, strings.ToLower(body), "surplus")
-	require.Contains(t, body, `"provider_name":"Otomatis"`)
-	require.Contains(t, body, `"provider":"openrouter"`)
+	require.Contains(t, body, `"provider_name":"Provider 4"`, "the unnamed marketplace step shows its position")
+	require.Contains(t, body, `"provider":"OpenRouter"`)
 }

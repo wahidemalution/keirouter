@@ -43,6 +43,7 @@ func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOpti
 	}
 	return pipeline.MediaOptions{
 		Targets:   resolved.Targets,
+		ChainID:   resolved.PlanOpts.ChainID,
 		TenantID:  tenantID,
 		ProjectID: key.ProjectID,
 		APIKeyID:  key.ID,
@@ -118,7 +119,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	for i, v := range resp.Vectors {
 		data = append(data, map[string]any{"object": "embedding", "index": i, "embedding": v})
 	}
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list", "model": resp.Model, "data": data,
 		"usage": map[string]any{
@@ -167,7 +168,7 @@ func (s *Server) handleImageGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.traceOf(r).complete(outcome{provider: provider, model: req.Model})
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	writeJSON(w, http.StatusOK, map[string]any{"created": resp.Created, "data": resp.Data})
 }
 
@@ -215,7 +216,7 @@ func (s *Server) handleAudioTranscription(w http.ResponseWriter, r *http.Request
 		s.writeMediaError(w, perr)
 		return
 	}
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	if req.ResponseFormat == "text" {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, resp.Text)
@@ -253,7 +254,7 @@ func (s *Server) handleAudioSpeech(w http.ResponseWriter, r *http.Request) {
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(resp.Audio)
 }
@@ -289,7 +290,7 @@ func (s *Server) handleWebSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.traceOf(r).complete(outcome{provider: provider, model: req.Model})
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	writeJSON(w, http.StatusOK, map[string]any{"query": resp.Query, "results": resp.Results})
 }
 
@@ -330,7 +331,7 @@ func (s *Server) handleWebFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.traceOf(r).complete(outcome{provider: provider, model: req.Model})
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"url": resp.URL, "title": resp.Title, "content": resp.Content, "format": resp.Format,
 	})
@@ -382,7 +383,7 @@ func (s *Server) handleVideoGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.traceOf(r).complete(outcome{provider: provider, model: req.Model})
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	w.Header().Set("X-KeiRouter-Account", resp.AccountID)
 	writeVideoResponse(w, resp)
 }
@@ -423,7 +424,7 @@ func (s *Server) handleVideoPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.traceOf(r).complete(outcome{provider: provider, model: req.Model})
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	w.Header().Set("X-KeiRouter-Account", resp.AccountID)
 	writeVideoResponse(w, resp)
 }
@@ -479,7 +480,7 @@ func (s *Server) handleImageUnderstanding(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.traceOf(r).complete(outcome{provider: provider, model: req.Model, tokens: resp.Usage.TotalTokens})
-	w.Header().Set("X-KeiRouter-Provider", provider)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), opts.TenantID, provider, opts.ChainID))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"model": resp.Model, "text": resp.Text,
 		"usage": map[string]any{

@@ -105,7 +105,7 @@ func TestEarlyCommit_FastAnswerUnchanged(t *testing.T) {
 	resp := h.post(t, "/v1/chat/completions", streamBody, h.apiKey)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, "openai", resp.Header.Get("X-KeiRouter-Provider"))
+	require.Equal(t, "OpenAI", resp.Header.Get("X-KeiRouter-Provider"), "the display name, not the provider id")
 	raw, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(string(raw), "data: "), "got %q", raw)
