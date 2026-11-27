@@ -174,8 +174,10 @@ func TestStreamWithoutOutputGuardrailsKeepsZeroCopy(t *testing.T) {
 	m := meter.New(newPipelineTestDB(t).Usage(), nil, nil)
 	d := newPlannerDispatcherWithConnector(t, rawForbiddenConnector{}, "acc-1")
 	p := New(Deps{Dispatcher: d, Meter: m})
+	// Only token package streams are direct-eligible; PAYG needs usage.cost.
 	result, err := p.Stream(context.Background(), guardrailStreamRequest("hello"), Options{
-		Targets: []dispatch.Target{{Provider: "openai", Model: "gpt-4o"}},
+		Targets:      []dispatch.Target{{Provider: "openai", Model: "gpt-4o"}},
+		TokenMetered: true,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result.DirectBody, "no output detector is enabled, so the fast path stays on")

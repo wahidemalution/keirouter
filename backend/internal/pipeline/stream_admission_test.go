@@ -228,8 +228,8 @@ func TestPipelineSynthesizesFinishForTruncatedStream(t *testing.T) {
 		}
 	}
 	require.Equal(t, "partial answer", text)
-	require.Equal(t, []core.ChunkType{core.ChunkText, core.ChunkText, core.ChunkFinish, core.ChunkUsage}, types,
-		"a finish event is synthesized before the usage event so clients see a well-formed end")
+	require.Equal(t, []core.ChunkType{core.ChunkText, core.ChunkText, core.ChunkFinish, core.ChunkUsage, core.ChunkBilledCost}, types,
+		"a finish event is synthesized before the usage event so clients see a well-formed end; the billed cost follows")
 }
 
 // pingingConnector emits keep-alives then text; pings must reset the stall
@@ -263,7 +263,7 @@ func TestPipelineDropsPingsFromClientStream(t *testing.T) {
 	for chunk := range result.Chunks {
 		types = append(types, chunk.Type)
 	}
-	require.Equal(t, []core.ChunkType{core.ChunkText, core.ChunkFinish}, types)
+	require.Equal(t, []core.ChunkType{core.ChunkText, core.ChunkFinish, core.ChunkBilledCost}, types)
 }
 
 // silentFirstConnector streams nothing on acc-1 (an upstream stuck before its

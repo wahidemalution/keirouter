@@ -60,6 +60,15 @@ type Usage struct {
 	// OutputPending marks CompletionTokens as a placeholder sent before the
 	// output (Anthropic message_start); the real count comes later.
 	OutputPending bool `json:"-"`
+	// ShowBilledCost makes the codecs render BilledCostNanos as usage.cost
+	// (USD). The gateway sets it for keys billed in USD and never for token
+	// package keys, which must not see USD figures.
+	ShowBilledCost bool `json:"-"`
+	// BilledCostNanos is what KeiRouter charged the customer for the request
+	// (usage_records.cost_nanos, after markup), never the upstream cost. Nanos,
+	// not micros: the balance is debited in nanos, so a rounded figure would
+	// drift from the debit.
+	BilledCostNanos int64 `json:"-"`
 }
 
 // ChatResponse is the canonical non-streaming completion result.
@@ -79,9 +88,13 @@ const (
 	ChunkThinking ChunkType = "thinking"  // incremental reasoning text
 	ChunkToolCall ChunkType = "tool_call" // (partial) tool invocation
 	ChunkUsage    ChunkType = "usage"     // usage update (often final)
-	ChunkFinish   ChunkType = "finish"    // terminal event with finish reason
-	ChunkError    ChunkType = "error"     // mid-stream error
-	ChunkPing     ChunkType = "ping"      // keep-alive / no-op
+	// ChunkBilledCost carries the recorded customer charge in
+	// Usage.BilledCostNanos once the stream's cost is known. Codecs fold it
+	// into the final usage frame; it renders nothing on its own.
+	ChunkBilledCost ChunkType = "billed_cost"
+	ChunkFinish     ChunkType = "finish" // terminal event with finish reason
+	ChunkError      ChunkType = "error"  // mid-stream error
+	ChunkPing       ChunkType = "ping"   // keep-alive / no-op
 	// ChunkRedactedThinking carries an Anthropic redacted_thinking block
 	// (opaque data in Delta). Only the Anthropic renderer emits it.
 	ChunkRedactedThinking ChunkType = "redacted_thinking"

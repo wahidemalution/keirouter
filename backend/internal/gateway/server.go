@@ -98,6 +98,7 @@ type Server struct {
 	tsManager        *tailscale.Manager
 	usageHub         *usagehub.Hub
 	tokenSubs        tokenSubCache
+	publicNameCache  publicNameCache
 	timeoutNotifier  *TimeoutNotifier
 	proxyNotifier    *ProxyNotifier
 	rateLimiter      RateLimitController
@@ -114,6 +115,8 @@ type Server struct {
 	insightsCache    *ttlCache
 	// pricing caches the live Surplus price list behind /v1/pricing.
 	pricing pricingCache
+	// publicPrices caches the all-chain list behind /v1/public/pricing.
+	publicPrices publicPriceCache
 	// detail caches the Surplus reads behind /v1/public/model-detail.
 	detail detailCache
 	// surplusLabels caches the provider names behind the chain editor's

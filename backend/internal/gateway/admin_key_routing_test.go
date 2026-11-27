@@ -74,7 +74,7 @@ func TestAdminKeyRoutingAllowedProviders(t *testing.T) {
 	_, _, rows := f.list(t)
 	require.Len(t, rows, 1)
 	for _, p := range rows[0].Providers {
-		require.Equal(t, p.ID != "deepseek", p.Locked, p.ID)
+		require.Equal(t, p.ID != "ms1c", p.Locked, p.ID) // ms1c is the deepseek step
 	}
 
 	rec = adminDo(mux, http.MethodPut, path, `{"providers":["deepseek","no-such-provider"]}`)
@@ -105,12 +105,13 @@ func TestAdminKeyRoutingModelSettings(t *testing.T) {
 	_, _, rows := f.list(t)
 	require.Len(t, rows, 1)
 	require.True(t, rows[0].FinalFallback)
-	// The portal sees the same rows with marketplace ids and names redacted.
+	// The portal sees the same rows keyed by step id and named as the step shows.
 	adminRows := getAdminSettings(t, mux, f.keyID).Models
+	chain := twoProviderChain()
 	for i := range adminRows {
 		for j := range adminRows[i].Providers {
 			p := &adminRows[i].Providers[j]
-			p.Name, p.ID = portalProviderName(p.Name, p.ID), portalProviderID(p.ID)
+			p.Name, p.ID = publicProviderLabel(p.Name, p.ID, chain, true), publicStepID(chain, p.ID)
 		}
 	}
 	require.Equal(t, adminRows, rows)
@@ -119,7 +120,7 @@ func TestAdminKeyRoutingModelSettings(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	_, _, rows = f.list(t)
 	for _, p := range rows[0].Providers {
-		require.Equal(t, p.ID != "deepseek", p.Enabled, p.ID)
+		require.Equal(t, p.ID != "ms1c", p.Enabled, p.ID) // ms1c is the deepseek step
 	}
 
 	rec = adminDo(mux, http.MethodPut, base+"/providers/nope", `{"enabled":true}`)

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -63,9 +64,15 @@ func portalProviderName(name, id string) string {
 }
 
 // resolvePortalProvider maps an id the portal sent back to the chain step's
-// real provider alias. It accepts either form; an id two steps share after
-// mapping is ambiguous and refused.
+// real provider alias. It accepts the step id the portal now shows, and the
+// older alias or redacted forms; an id two steps share after mapping is
+// ambiguous and refused.
 func resolvePortalProvider(c store.Chain, id string) (string, bool) {
+	for _, st := range c.Steps {
+		if st.ID == id || (st.ID == "" && fmt.Sprintf("step-%d", st.Position+1) == id) {
+			return st.Provider, true
+		}
+	}
 	if chainHasStepProvider(c, id) {
 		return id, true
 	}
@@ -82,12 +89,13 @@ func resolvePortalProvider(c store.Chain, id string) (string, bool) {
 	return match, match != ""
 }
 
-// redactModelSettingsRow rewrites one Model Settings row for the portal.
-func redactModelSettingsRow(row *modelSettingsRow) {
+// redactModelSettingsRow rewrites one Model Settings row of chain c for the
+// portal: each provider is named as its step shows it and keyed by step id.
+func redactModelSettingsRow(row *modelSettingsRow, c store.Chain) {
 	for i := range row.Providers {
 		p := &row.Providers[i]
-		p.Name = portalProviderName(p.Name, p.ID)
-		p.ID = portalProviderID(p.ID)
+		p.Name = publicProviderLabel(p.Name, p.ID, c, true)
+		p.ID = publicStepID(c, p.ID)
 	}
 }
 

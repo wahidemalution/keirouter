@@ -296,6 +296,7 @@ func ownOr(own *int64, plan int64) int64 {
 func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, notice string) {
 	tr := s.traceOf(r)
 	tr.setRequest(req.Model, false)
+	requested := req.Model
 	result, err := s.pipeline.Chat(r.Context(), req, opts)
 	if err != nil {
 		tr.complete(outcome{fallbacks: req.Metadata.FallbackCount, err: err})
@@ -306,7 +307,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 	if notice != "" {
 		appendNoticePart(result.Response, notice)
 	}
-	out, err := codec.RenderResponse(result.Response)
+	out, err := codec.RenderResponse(withBilledCost(result.Response, !opts.TokenMetered, result.CostNanos))
 	if err != nil {
 		tr.complete(outcome{provider: result.Provider, model: result.Model,
 			err: &core.ProviderError{Kind: core.ErrInternal, Message: "failed to render provider response", Cause: err}})
@@ -323,8 +324,8 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 		fallbacks:  req.Metadata.FallbackCount,
 	})
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-KeiRouter-Provider", result.Provider)
-	w.Header().Set("X-KeiRouter-Model", result.Model)
+	w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), req.Metadata.TenantID, result.Provider, req.Metadata.ChainID))
+	w.Header().Set("X-KeiRouter-Model", requested)
 	if result.CacheHit {
 		w.Header().Set("X-KeiRouter-Cache", "hit")
 	}
@@ -337,6 +338,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, notice string) {
 	tr := s.traceOf(r)
 	tr.setRequest(req.Model, true)
+	requested := req.Model
 	streamCodec, ok := codec.(transform.StreamCodec)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "dialect does not support streaming")
@@ -390,8 +392,8 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 		} else {
 			setStreamHeaders(w, "text/event-stream")
 		}
-		w.Header().Set("X-KeiRouter-Provider", result.Provider)
-		w.Header().Set("X-KeiRouter-Model", result.Model)
+		w.Header().Set("X-KeiRouter-Provider", s.publicProviderHeader(r.Context(), req.Metadata.TenantID, result.Provider, req.Metadata.ChainID))
+		w.Header().Set("X-KeiRouter-Model", requested)
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 	}
@@ -484,6 +486,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 
 	state := &transform.StreamState{Model: result.Model}
 	transform.ResetStreamState(state)
+	// Keys billed in USD get usage.cost in the final usage frame; token
+	// package keys never see USD.
+	state.ShowBilledCost = !opts.TokenMetered
 	var totalTokens int
 	var chunkCount int
 	// clientGone is set on the first failed write so the rest of the stream
@@ -590,6 +595,13 @@ streamLoop:
 				_ = bw.Flush()
 				flusher.Flush()
 				break streamLoop
+			}
+			if chunk.Type == core.ChunkBilledCost {
+				// Straight to the codec, which folds it into the held usage
+				// frame; it is not client content, so it skips the sanitizer
+				// and the chunk count.
+				_, _ = streamCodec.RenderStreamChunk(chunk, state)
+				continue
 			}
 			if chunk.Type == core.ChunkUsage && chunk.Usage != nil {
 				totalTokens = chunk.Usage.PromptTokens + chunk.Usage.CompletionTokens
@@ -996,7 +1008,7 @@ func copySanitizedNDJSON(dst io.Writer, reader *bufio.Reader, dialect core.Diale
 
 func writeSanitizedFrame(dst io.Writer, raw []byte, dialect core.Dialect, flush func()) (int64, error) {
 	providerErr := hasStreamErrorMarker(raw) && isProviderStreamError(raw)
-	out := raw
+	out := stripUpstreamCost(raw)
 	if providerErr {
 		out = streamErrorEvent(dialect, "upstream provider request failed")
 	}
@@ -1536,12 +1548,20 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	balance, err := s.keyBalance(ctx, key, now)
+	if err != nil {
+		s.log.Error("key usage: balance failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load balance")
+		return
+	}
+
 	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
+	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
-			"provider": m.Provider, "model": displayModel(m.Model, m.ChainID, chainNames),
+			"provider": logInfo.publicProviderName(m.Provider, m.ChainID), "model": displayModel(m.Model, m.ChainID, chainNames),
 			"total_requests": m.TotalRequests,
 			"prompt_tokens":  m.PromptTokens, "completion_tokens": m.CompletionTokens,
 			"cost_usd": float64(m.CostMicros) / 1_000_000,
@@ -1560,8 +1580,9 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 			"total_requests":    summary.TotalRequests,
 			"cost_usd":          float64(summary.CostMicros) / 1_000_000,
 		},
-		"daily":  dailyOut,
-		"models": modelOut,
+		"daily":   dailyOut,
+		"models":  modelOut,
+		"balance": balance,
 	}
 	tokenState, err := s.tokenKeyState(ctx, key)
 	if err != nil {
@@ -1690,11 +1711,12 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// Per-model breakdown for this key. Chain-routed requests are shown under
 	// the user-facing chain name, not the upstream sub-model that served them.
 	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
+	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -days))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
-			"provider":          m.Provider,
+			"provider":          logInfo.publicProviderName(m.Provider, m.ChainID),
 			"model":             displayModel(m.Model, m.ChainID, chainNames),
 			"total_requests":    m.TotalRequests,
 			"prompt_tokens":     m.PromptTokens,
@@ -1709,12 +1731,11 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// missing/unknown chain id falls back to the recorded model.
 	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
 	recentOut := make([]map[string]any, 0, len(recent))
-	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	for _, rec := range recent {
 		entry := map[string]any{
 			"id":                rec.ID,
-			"provider":          rec.Provider,
-			"provider_name":     logInfo.providerName(rec),
+			"provider":          logInfo.publicProviderName(rec.Provider, rec.ChainID),
+			"provider_name":     logInfo.publicProviderName(rec.Provider, rec.ChainID),
 			"discount_pct":      logInfo.discountPct(rec),
 			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,

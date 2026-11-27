@@ -28,7 +28,10 @@ type MediaOptions struct {
 	TenantID  string
 	ProjectID string
 	APIKeyID  string
-	Limits    limits.EffectiveLimits
+	// ChainID is the chain that resolved Targets; the gateway names the
+	// provider in response headers from it. The pipeline does not read it.
+	ChainID string
+	Limits  limits.EffectiveLimits
 	// AccountID pins operations tied to upstream state, such as polling an
 	// asynchronous video job, to the credential that created that state.
 	AccountID string

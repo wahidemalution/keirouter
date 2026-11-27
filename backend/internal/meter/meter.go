@@ -301,11 +301,24 @@ func (m *Meter) QuoteMicros(ev Event) int64 {
 	return m.costForEvent(ev).CostMicros
 }
 
+// Charge is the customer cost of one recorded request. Nanos is what the
+// balance is debited; Micros is the rounded figure the budget interface uses.
+type Charge struct {
+	Micros int64
+	Nanos  int64
+}
+
 // Record persists a canonical terminal request row and returns its actual cost
 // in micro-USD for the existing budget interface.
 func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
+	c, err := m.RecordCharge(ctx, ev)
+	return c.Micros, err
+}
+
+// RecordCharge is Record returning the charge in both units.
+func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
 	if err := checkImageEvent(ev); err != nil {
-		return 0, err
+		return Charge{}, err
 	}
 	rec := m.buildRecord(ev)
 	for _, t := range m.trackers {
@@ -313,13 +326,17 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	}
 	if err := m.recordUsage(ctx, rec); err != nil {
 		m.notifyDiscarded(rec)
-		return rec.CostMicros, err
+		return chargeOf(rec), err
 	}
 	if m.async == nil {
 		m.notifyPersisted(rec)
 	}
 	m.notifyObservers(rec)
-	return rec.CostMicros, nil
+	return chargeOf(rec), nil
+}
+
+func chargeOf(rec store.UsageRecord) Charge {
+	return Charge{Micros: rec.CostMicros, Nanos: rec.CostNanos}
 }
 
 // BuildRecord computes the usage row and its cost in micro-USD exactly as

@@ -736,11 +736,7 @@ func (OpenAIResponsesCodec) RenderResponse(resp *core.ChatResponse) ([]byte, err
 		"object": "response",
 		"status": "completed",
 		"output": output,
-		"usage": map[string]int{
-			"input_tokens":  resp.Usage.PromptTokens,
-			"output_tokens": resp.Usage.CompletionTokens,
-			"total_tokens":  resp.Usage.TotalTokens,
-		},
+		"usage":  renderResponsesUsage(resp.Usage),
 	}
 	return json.Marshal(out)
 }

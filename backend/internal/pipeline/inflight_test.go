@@ -100,7 +100,10 @@ func TestStream_InflightReleased(t *testing.T) {
 		d := newPlannerDispatcherWithConnector(t, rawForbiddenConnector{}, "acc-1")
 		p := New(Deps{Dispatcher: d, Inflight: tr})
 
-		result, err := p.Stream(context.Background(), guardrailStreamRequest("hello"), inflightTargets)
+		// Only token package streams are direct-eligible; PAYG needs usage.cost.
+		directOpts := inflightTargets
+		directOpts.TokenMetered = true
+		result, err := p.Stream(context.Background(), guardrailStreamRequest("hello"), directOpts)
 		require.NoError(t, err)
 		require.NotNil(t, result.DirectBody)
 		require.Equal(t, map[string]int64{"openai": 1}, tr.Snapshot())

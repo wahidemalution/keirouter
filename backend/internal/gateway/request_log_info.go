@@ -93,3 +93,10 @@ func requestDiscountPct(rec store.RecentRecord, official officialPrice) *int {
 	pct := max(int(math.Floor((1-cost/list)*100+1e-9)), 0)
 	return &pct
 }
+
+// publicProviderName is providerName for a customer-facing payload; see
+// publicProviderLabel.
+func (i requestLogInfo) publicProviderName(provider, chainID string) string {
+	c, ok := i.chains[chainID]
+	return publicProviderLabel(i.providerName(store.RecentRecord{Provider: provider, ChainID: chainID}), provider, c, ok)
+}
