@@ -335,6 +335,47 @@ Chat is just the start. KeiRouter proxies the whole buffet behind one key:
 | Your own key's usage | `GET /v1/keys/me/usage` | — |
 | Public live prices (no key) | `GET /v1/public/pricing[?model=a,b]` | — |
 
+### Key balance
+
+`GET /v1/keys/me/usage` takes the key itself as the bearer (`Authorization: Bearer <key>`) and works for both PAYG and token package keys. Its `balance` object says what the key has left.
+
+Token package key:
+
+```json
+"balance": {
+  "type": "token_package",
+  "active": true,
+  "expires_at": "2026-12-12T00:00:00Z",
+  "days_remaining": 15,
+  "tokens_limit": 20000000,
+  "tokens_used": 1800000,
+  "tokens_remaining": 18200000,
+  "rpm_limit": 60,
+  "concurrency_limit": 3
+}
+```
+
+- `active` is `false` once the package expires, and `tokens_remaining` drops to `0`: unused tokens do not carry over to a renewal.
+- An expired key can still call this endpoint. Every other endpoint answers `403` with code `token_package_expired`.
+- `days_remaining` counts started days, so 14 days and 1 hour reads `15`.
+- `rpm_limit` / `concurrency_limit` of `0` mean unlimited.
+- Token package responses never carry USD fields.
+
+PAYG key:
+
+```json
+"balance": {
+  "type": "payg",
+  "usd_limit": 10.0,
+  "usd_spent": 5.88,
+  "usd_remaining": 4.12,
+  "alert": false
+}
+```
+
+- Figures come from the key's own budget for its current period. A key with no budget returns zeros.
+- `alert` turns `true` once spend crosses the budget's alert percentage.
+
 ### Public pricing
 
 `GET /v1/public/pricing` lists the live price of every model an admin publishes under **Settings → Public pricing**, whatever upstream serves it. It needs no key, allows 30 requests a minute per IP, sends `Access-Control-Allow-Origin: *` and `Cache-Control: public, max-age=5`. Prices are USD per 1M tokens, markup included. Per-key minimum discounts are not applied.
