@@ -1554,11 +1554,12 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
+	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
-			"provider": m.Provider, "model": displayModel(m.Model, m.ChainID, chainNames),
+			"provider": logInfo.publicProviderName(m.Provider, m.ChainID), "model": displayModel(m.Model, m.ChainID, chainNames),
 			"total_requests": m.TotalRequests,
 			"prompt_tokens":  m.PromptTokens, "completion_tokens": m.CompletionTokens,
 			"cost_usd": float64(m.CostMicros) / 1_000_000,
@@ -1708,11 +1709,12 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// Per-model breakdown for this key. Chain-routed requests are shown under
 	// the user-facing chain name, not the upstream sub-model that served them.
 	chainNames := s.chainNamesByTenant(ctx, key.TenantID)
+	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -days))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
-			"provider":          m.Provider,
+			"provider":          logInfo.publicProviderName(m.Provider, m.ChainID),
 			"model":             displayModel(m.Model, m.ChainID, chainNames),
 			"total_requests":    m.TotalRequests,
 			"prompt_tokens":     m.PromptTokens,
@@ -1727,7 +1729,6 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 	// missing/unknown chain id falls back to the recorded model.
 	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
 	recentOut := make([]map[string]any, 0, len(recent))
-	logInfo := s.newRequestLogInfo(ctx, key.TenantID)
 	for _, rec := range recent {
 		entry := map[string]any{
 			"id":                rec.ID,

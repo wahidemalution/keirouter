@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"strings"
 
 	"github.com/mydisha/keirouter/backend/internal/market"
 	"github.com/mydisha/keirouter/backend/internal/store"
@@ -92,4 +94,28 @@ func requestDiscountPct(rec store.RecentRecord, official officialPrice) *int {
 	}
 	pct := max(int(math.Floor((1-cost/list)*100+1e-9)), 0)
 	return &pct
+}
+
+// publicProviderName is providerName for a customer-facing payload: it never
+// returns a provider id. A name that is only the id, or that is nothing but
+// the marketplace word, becomes "Provider N" after the step's position in the
+// chain, or "Provider" when the chain has no step on the provider.
+func (i requestLogInfo) publicProviderName(provider, chainID string) string {
+	name := i.providerName(store.RecentRecord{Provider: provider, ChainID: chainID})
+	if name != "" && !strings.EqualFold(name, provider) {
+		if !mentionsSurplus(name) {
+			return name
+		}
+		if rest := strings.Trim(surplusWord.ReplaceAllString(name, ""), " -_:·—–|/"); rest != "" {
+			return strings.Join(strings.Fields(rest), " ")
+		}
+	}
+	if c, ok := i.chains[chainID]; ok {
+		for _, st := range c.Steps {
+			if st.Provider == provider {
+				return fmt.Sprintf("Provider %d", st.Position+1)
+			}
+		}
+	}
+	return "Provider"
 }
