@@ -149,7 +149,7 @@ func resolveTargetsUnstamped(ctx context.Context, chains ChainSource, aliases Al
 		}
 	}
 
-	return resolveResult{}, errBadModel("model must be 'provider/model', a chain name, or an alias: " + model)
+	return resolveResult{}, errUnknownModel(model)
 }
 
 // chainResult resolves a chain by name and extracts its strategy metadata.
@@ -203,6 +203,7 @@ func chainResultWith(ctx context.Context, chains ChainSource, latency LatencyRea
 			// step whose slug has no live quote is dropped.
 			steps = priceMarketSteps(steps, cache, markupPercent)
 			steps = priceStaticSteps(steps, markupPercent)
+			steps = priceImageSteps(steps, markupPercent)
 			steps = stampSurplusTrusted(steps, c.MarketSlugs, cache, markupPercent)
 			if len(steps) == 0 && !useFallback {
 				if hasFallback {
@@ -592,6 +593,11 @@ func (e badModelError) HTTPStatus() int {
 }
 
 func errBadModel(msg string) error { return badModelError{msg: msg} }
+
+// errUnknownModel is the answer for a model string nothing can route.
+func errUnknownModel(model string) error {
+	return errBadModel("model must be 'provider/model', a chain name, or an alias: " + model)
+}
 
 // errSoldOut reports a chain whose every market-bound step has no live quote
 // (e.g. no trusted Surplus offer clears the price floor). It is temporary, so

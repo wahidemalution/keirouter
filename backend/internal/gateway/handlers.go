@@ -170,7 +170,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		fmt.Sprintf("Client: %s\nAPI format: %s\nMessages: %d\nTools: %d\nBody: %s\nTenant: %s",
 			client, dialect, len(req.Messages), len(req.Tools), humanBytes(bodySize), tenantID))
 
-	resolved, err := s.resolveTargets(r.Context(), tenantID, req.Model)
+	resolved, err := s.resolveChatTargets(r.Context(), tenantID, req.Model)
 	if err != nil {
 		var bad badModelError
 		if errors.As(err, &bad) {
@@ -1740,6 +1740,7 @@ func (s *Server) buildKeyUsageMap(ctx context.Context, key store.APIKey, days in
 			"model":             displayModel(rec.Model, rec.ChainID, chainNames),
 			"prompt_tokens":     rec.PromptTokens,
 			"completion_tokens": rec.CompletionTokens,
+			"image_count":       rec.ImageCount,
 			"cost_usd":          recordCostUSD(rec),
 			"cache_hit":         rec.CacheHit,
 			"latency_ms":        rec.LatencyMS,

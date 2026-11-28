@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { Field, Input } from "../ui";
 import { DiscountPriceFields } from "./DiscountPriceFields";
 import { FieldMessage } from "./FieldMessage";
-import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, type DraftChainStep, type StepPriceSource as Source, staticStepPreview } from "./chainUtils";
+import { CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, checkImageCost, formatImagePrice, imageFamily, imageSellPrice, imageStepProblem, showsImagePrice, type DraftChainStep, type StepPriceSource as Source, staticStepPreview } from "./chainUtils";
 
 const focusRing = "peer-focus-visible:ring-2 peer-focus-visible:ring-accent-500";
 
@@ -49,6 +49,13 @@ export function StepPriceSource({
   const markupPending = inheritedMarkup === null && step.stepMarkup.trim() === "";
   const preview = staticStepPreview(step, inheritedMarkup ?? 0);
   const invalid = step.priceSource === "static" && !preview.ok;
+  const imagePreviewId = `${uid}-image-preview`;
+  const image = checkImageCost(step);
+  const imageOn = image.ok && (image.cost ?? 0) > 0;
+  const imageProblem = imageStepProblem(step);
+  const grok = imageFamily(step.model) === "grok-imagine";
+  const stepMarkup = step.stepMarkup.trim() === "" ? undefined : Number(step.stepMarkup);
+  const sell = imageOn ? imageSellPrice(image.cost ?? 0, stepMarkup ?? null, inheritedMarkup ?? 0) : 0;
 
   return (
     <div className="space-y-2">
@@ -139,6 +146,44 @@ export function StepPriceSource({
                 </p>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {step.priceSource !== "discount" && showsImagePrice(step) && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Field label="Modal per gambar (USD)" optional hint="Isi hanya untuk step model gambar.">
+              <Input inputMode="decimal" value={step.imageCost} onChange={(event) => onChange({ imageCost: event.target.value })} placeholder="0.0042" aria-invalid={!image.ok || undefined} aria-describedby={imagePreviewId} />
+            </Field>
+            <Field label="Modal 2K (USD)" optional={!grok} hint={grok ? "Wajib untuk model Grok." : undefined}>
+              <Input inputMode="decimal" value={step.imageCost2k} onChange={(event) => onChange({ imageCost2k: event.target.value })} placeholder={grok ? "0.05" : "sama dengan modal per gambar"} aria-invalid={imageProblem !== "" || undefined} aria-describedby={imagePreviewId} />
+            </Field>
+            {step.priceSource === "market" && imageOn && (
+              <Field label="Markup %" optional>
+                <Input
+                  inputMode="decimal"
+                  value={step.stepMarkup}
+                  onChange={(event) => onChange({ stepMarkup: event.target.value })}
+                  placeholder={inheritedMarkup === null ? `${inheritedLabel}` : `${inheritedMarkup}% (${inheritedLabel})`}
+                  aria-describedby={imagePreviewId}
+                />
+              </Field>
+            )}
+          </div>
+          <div id={imagePreviewId} aria-live="polite">
+            {imageProblem !== "" ? (
+              <FieldMessage>{imageProblem}</FieldMessage>
+            ) : imageOn && markupPending ? (
+              <FieldMessage tone="muted">{`Memuat ${inheritedLabel} untuk harga jual.`}</FieldMessage>
+            ) : imageOn ? (
+              <p className="rounded-lg border border-line bg-subtle px-3 py-2 text-[13px] text-fg">
+                Harga jual: <span className="font-medium tabular-nums">{formatImagePrice(sell)}</span> / gambar
+                {image.cost2k !== null && (
+                  <> · 2K: <span className="font-medium tabular-nums">{formatImagePrice(imageSellPrice(image.cost2k, stepMarkup ?? null, inheritedMarkup ?? 0))}</span> / gambar</>
+                )}
+              </p>
+            ) : null}
           </div>
         </div>
       )}

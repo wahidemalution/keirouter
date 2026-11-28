@@ -46,6 +46,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/hosting"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
+	"github.com/mydisha/keirouter/backend/internal/imagegen"
 	"github.com/mydisha/keirouter/backend/internal/inflight"
 	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/market"
@@ -68,6 +69,8 @@ type App struct {
 	cfg config.Config
 	// costLookup reconciles provider bills from their usage logs (Subrouter).
 	costLookup *costlookup.Sweeper
+	// imageGen runs portal image jobs and sweeps expired ones.
+	imageGen *imagegen.Service
 	// financeBox seals hosting secrets (the master-key sealer).
 	financeBox         hosting.SecretBox
 	log                *slog.Logger
@@ -440,6 +443,11 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		SlugSkips:          marketCache.Skips(),
 	})
 
+	imageGen := newImageGen(ctx, imagegen.Deps{
+		Jobs: db.ImageJobs(), Generator: pipe, Budget: bud, Meter: mtr,
+		DataDir: dataDir, Log: sysLog("images"),
+	}, log)
+
 	// Resolve frontend dist directory. Check common install locations, then cwd.
 	frontendDir := resolveFrontendDir()
 	if frontendDir == "" {
@@ -543,6 +551,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		ProviderHealth:         healthSvc,
 		ProbeRunner:            probeRunner,
 		Inflight:               inflightTracker,
+		ImageGen:               imageGen,
 	})
 
 	srv := &http.Server{
@@ -567,6 +576,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
 	app = &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner, reloadPricing: reloadPricing, marketURL: "", surplusURL: "", marketCache: marketCache, references: references, inflight: inflightTracker, financeBox: sealer, audit: auditRec, auditSweeper: auditSweeper, sharedState: sharedState, backupJob: backupJob}
+	app.imageGen = imageGen
 	app.costLookup = costlookup.New(costlookup.Deps{
 		Usage: db.Usage(), Providers: db.CustomProviders(), DB: db,
 		Open:   func(stored string) (string, error) { return costlookup.OpenToken(sealer, stored) },
@@ -787,6 +797,36 @@ func (a *App) Run(ctx context.Context) error {
 			a.costLookup.Run(ctx)
 		}()
 	}
+	// The image service has its own lifecycle: shutdown stops it and waits
+	// for its workers to fail and release their jobs before the meter and
+	// the store close.
+	stopImageGen := func() {}
+	if a.imageGen != nil {
+		imgCtx, cancelImages := context.WithCancel(ctx)
+		imagesDone := make(chan struct{})
+		var images sync.WaitGroup
+		images.Add(2)
+		go func() {
+			defer images.Done()
+			a.imageGen.Run(imgCtx)
+		}()
+		go func() {
+			defer images.Done()
+			a.imageGen.RunSweeper(imgCtx, 10*time.Minute)
+		}()
+		go func() {
+			images.Wait()
+			close(imagesDone)
+		}()
+		stopImageGen = func() {
+			cancelImages()
+			select {
+			case <-imagesDone:
+			case <-time.After(imageShutdownTimeout):
+				a.log.Warn("image workers did not stop within timeout; proceeding with shutdown")
+			}
+		}
+	}
 	if a.db != nil {
 		a.bg.Add(1)
 		go func() {
@@ -855,6 +895,7 @@ func (a *App) Run(ctx context.Context) error {
 		// use-after-close window against db.Close() (a pure-Go SQLite handle can
 		// crash if a query races a Close).
 		a.waitForBackground(5 * time.Second)
+		stopImageGen()
 		// Drain pending guardrail audit and usage rows before closing the DB.
 		if a.guardrailRetention != nil {
 			a.guardrailRetention.Stop(2 * time.Second)
@@ -929,6 +970,39 @@ func backupOwner() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
 	return host + "-" + hex.EncodeToString(b)
+}
+
+// recoverAttempts and recoverBackoff bound the startup retry of image job
+// recovery.
+const recoverAttempts = 3
+
+// imageShutdownTimeout bounds the wait for image workers at shutdown.
+const imageShutdownTimeout = 15 * time.Second
+
+var recoverBackoff = 500 * time.Millisecond
+
+// newImageGen builds the portal image service and fails the jobs a previous
+// process left queued or running, before any worker or request can touch
+// them. When recovery keeps failing it returns nil: portal images are then
+// off (the routes answer 503) rather than running beside stale jobs.
+func newImageGen(ctx context.Context, d imagegen.Deps, log *slog.Logger) *imagegen.Service {
+	svc := imagegen.New(d)
+	var err error
+	for attempt := 1; attempt <= recoverAttempts; attempt++ {
+		if err = svc.Recover(ctx); err == nil {
+			return svc
+		}
+		log.Warn("recover image jobs failed", "attempt", attempt, "err", err)
+		if attempt < recoverAttempts {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Duration(attempt) * recoverBackoff):
+			}
+		}
+	}
+	log.Error("portal image generation disabled: could not recover image jobs", "err", err)
+	return nil
 }
 
 // resolveDataDir returns the configured data directory, creating it if needed.

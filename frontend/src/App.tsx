@@ -42,6 +42,7 @@ const PortalTokenBuyRoute = lazy(routeLoaders["/portal-token-buy"]);
 const PortalTokenUsageRoute = lazy(routeLoaders["/portal-token-usage"]);
 const PortalHostingRoute = lazy(routeLoaders["/portal-hosting"]);
 const PortalDocsRoute = lazy(routeLoaders["/portal-docs"]);
+const PortalImagesRoute = lazy(routeLoaders["/portal-images"]);
 const KeyDetailPage = lazy(routeLoaders["/key-detail"]);
 const GuardrailsPage = lazy(routeLoaders["/guardrails"]);
 const AuditPage = lazy(routeLoaders["/audit"]);
@@ -95,6 +96,7 @@ export function App() {
             <Route path="models" element={<PortalModelsRoute />} />
             <Route path="model-settings" element={<PortalModelSettingsRoute />} />
             <Route path="discounts" element={<Navigate to="../model-settings" replace />} />
+            <Route path="images" element={<PortalImagesRoute />} />
             <Route path="topup" element={<PortalTopupRoute />} />
             <Route path="token" element={<PortalTokensRoute />} />
             <Route path="token/buy" element={<PortalTokenBuyRoute />} />

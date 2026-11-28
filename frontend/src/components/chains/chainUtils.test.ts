@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { autoMarketSlug, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
+import { autoMarketSlug, imageSellPrice, formatImagePrice, checkImageCost, imageMarkupProblem, imageStepProblem, imageFamily, showsImagePrice, deriveCacheRates, resolveSurplusProvider, discountStepPreview, EMPTY_FALLBACK_PRICE, fallbackPriceDraft, fallbackPricePayload, fallbackPricePreview, makeDraftStep, staticStepPreview, stepKey, stepPayload, surplusProviderOf, toDraftSteps } from "./chainUtils.ts";
 
 test("deriveCacheRates derives write 1.25x and read 0.1x from input", () => {
   assert.deepEqual(deriveCacheRates(2, { cacheWritePerM: 0, cacheReadPerM: 0 }), {
@@ -286,4 +286,82 @@ test("makeDraftStep reads a discount step from the API", () => {
   assert.equal(d.discountPercent, "90");
   assert.equal(d.costMultiplier, "");
   assert.equal(stepKey(d), stepKey(staticDraft({})).replace("gpt-4o", "m"));
+});
+
+test("imageSellPrice applies the step markup, else the chain markup", () => {
+  assert.equal(imageSellPrice(0.0042, 100, 0), 0.0084);
+  assert.equal(imageSellPrice(0.0042, null, 50), 0.0063);
+  assert.equal(imageSellPrice(0.0042, 0, 50), 0.0042);
+});
+
+test("formatImagePrice shows the exact billed micro-dollar with a decimal comma", () => {
+  assert.equal(formatImagePrice(0.0084), "$0,0084");
+  assert.equal(formatImagePrice(0.008432), "$0,008432");
+  assert.equal(formatImagePrice(0.04), "$0,04");
+  assert.equal(formatImagePrice(1.5), "$1,50");
+  // Never rounded down: the gateway bills 12,345 micro-dollars here.
+  assert.equal(formatImagePrice(0.012345), "$0,012345");
+  assert.equal(formatImagePrice(0.123456), "$0,123456");
+  // A fraction of a micro-dollar is billed as the next one up.
+  assert.equal(formatImagePrice(0.0123451), "$0,012346");
+  assert.equal(formatImagePrice(0.0000015), "$0,000002");
+  // Float noise (0.0042 × 1.5) is not a fraction.
+  assert.equal(formatImagePrice(0.0042 * 1.5), "$0,0063");
+});
+
+test("checkImageCost rejects a 2K cost without a base cost", () => {
+  assert.equal(checkImageCost({ imageCost: "", imageCost2k: "0.01" }).ok, false);
+  assert.equal(checkImageCost({ imageCost: "0.004", imageCost2k: "" }).ok, true);
+  assert.equal(checkImageCost({ imageCost: "-1", imageCost2k: "" }).ok, false);
+});
+
+test("imageMarkupProblem blocks a bad step markup only when an image cost is set", () => {
+  for (const bad of ["abc", "-5", "1001"]) {
+    assert.notEqual(imageMarkupProblem({ imageCost: "0.004", stepMarkup: bad }), "", bad);
+    assert.notEqual(imageStepProblem({ imageCost: "0.004", imageCost2k: "", stepMarkup: bad }), "", bad);
+  }
+  assert.equal(imageMarkupProblem({ imageCost: "0.004", stepMarkup: "" }), "");
+  assert.equal(imageMarkupProblem({ imageCost: "0.004", stepMarkup: "0" }), "");
+  assert.equal(imageMarkupProblem({ imageCost: "0.004", stepMarkup: "1000" }), "");
+  assert.equal(imageMarkupProblem({ imageCost: "", stepMarkup: "abc" }), "");
+});
+
+test("imageStepProblem mirrors the gateway's image step rules", () => {
+  const base = { imageCost: "0.02", imageCost2k: "", stepMarkup: "", priceSource: "market" as const, marketSlug: "" };
+  assert.equal(imageStepProblem({ ...base, model: "gpt-image-1" }), "");
+  assert.equal(imageStepProblem({ ...base, model: "grok-imagine-image" }), "Model Grok wajib diisi modal 2K.");
+  assert.equal(imageStepProblem({ ...base, model: "grok-imagine-image", imageCost2k: "0.05" }), "");
+  assert.equal(imageStepProblem({ ...base, model: "gpt-image-1", imageCost: "100.01" }), "Modal per gambar maksimal $100.");
+  assert.equal(imageStepProblem({ ...base, model: "gpt-image-1", imageCost: "100" }), "");
+  assert.equal(imageStepProblem({ ...base, model: "grok-imagine-image", imageCost: "1", imageCost2k: "101" }), "Modal per gambar maksimal $100.");
+  assert.match(imageStepProblem({ ...base, model: "gpt-image-1", marketSlug: "openai/gpt-image-1" }), /tidak boleh punya harga token atau market slug/);
+  assert.match(imageStepProblem({ ...base, model: "gpt-image-1", priceSource: "static" }), /tidak boleh punya harga token atau market slug/);
+  // A chat step (no image cost) is never flagged.
+  assert.equal(imageStepProblem({ ...base, imageCost: "", model: "grok-imagine-image", priceSource: "static" }), "");
+});
+
+test("imageFamily mirrors the gateway rule", () => {
+  assert.equal(imageFamily("gpt-image-1"), "gpt-image");
+  assert.equal(imageFamily("openai/GPT-Image-2"), "gpt-image");
+  assert.equal(imageFamily("xai/grok-imagine-image"), "grok-imagine");
+  assert.equal(imageFamily("google/gemini-2.5-flash-image"), "gemini-image");
+  assert.equal(imageFamily("gemini-2.5-pro"), "");
+  assert.equal(imageFamily("gpt-image/other"), "");
+  assert.equal(imageFamily("gpt-4o"), "");
+});
+
+test("showsImagePrice shows for image models or a saved price", () => {
+  assert.equal(showsImagePrice({ model: "gpt-image-1", imageCost: "", imageCost2k: "" }), true);
+  assert.equal(showsImagePrice({ model: "gpt-4o", imageCost: "", imageCost2k: "" }), false);
+  assert.equal(showsImagePrice({ model: "gpt-4o", imageCost: "0.004", imageCost2k: "" }), true);
+});
+
+test("stepPayload carries image costs and makeDraftStep reads them back", () => {
+  const draft = makeDraftStep({ provider: "p", model: "m", static_per_image: 0.004, static_per_image_2k: 0.008 });
+  assert.equal(draft.imageCost, "0.004");
+  assert.equal(draft.imageCost2k, "0.008");
+  const payload = stepPayload(draft);
+  assert.equal(payload.static_per_image, 0.004);
+  assert.equal(payload.static_per_image_2k, 0.008);
+  assert.equal("static_per_image" in stepPayload(makeDraftStep({ provider: "p", model: "m" })), false);
 });

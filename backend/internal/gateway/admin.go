@@ -2214,6 +2214,10 @@ func (s *Server) adminCreateChain(w http.ResponseWriter, r *http.Request) {
 		}
 		chain.Steps = append(chain.Steps, step)
 	}
+	if msg := imageFamilyProblem(chain.Steps); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	if err := s.chains.Create(r.Context(), chain); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
@@ -2388,6 +2392,10 @@ func (s *Server) adminUpdateChain(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			existing.Steps[i] = step
+		}
+		if msg := imageFamilyProblem(existing.Steps); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
 		}
 	}
 

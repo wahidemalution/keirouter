@@ -209,6 +209,13 @@ type Event struct {
 	// at it and the user bill at it × UpstreamCostMult.
 	MinChargeMicro float64
 
+	// ImageCount images generated, billed ImageBillMicro each (micro-USD,
+	// after markup) and costing the operator ImageCostMicro each. Image
+	// events carry no tokens and skip every token billing path.
+	ImageCount     int
+	ImageBillMicro float64
+	ImageCostMicro float64
+
 	Provider  string
 	Model     string
 	AccountID string
@@ -310,6 +317,60 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 
 // RecordCharge is Record returning the charge in both units.
 func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
+	if err := checkImageEvent(ev); err != nil {
+		return Charge{}, err
+	}
+	rec := m.buildRecord(ev)
+	for _, t := range m.trackers {
+		t.UsagePending(rec)
+	}
+	if err := m.recordUsage(ctx, rec); err != nil {
+		m.notifyDiscarded(rec)
+		return chargeOf(rec), err
+	}
+	if m.async == nil {
+		m.notifyPersisted(rec)
+	}
+	m.notifyObservers(rec)
+	return chargeOf(rec), nil
+}
+
+func chargeOf(rec store.UsageRecord) Charge {
+	return Charge{Micros: rec.CostMicros, Nanos: rec.CostNanos}
+}
+
+// BuildRecord computes the usage row and its cost in micro-USD exactly as
+// Record would write it, without persisting anything. A caller that inserts
+// the row in its own transaction calls Persisted once that commits.
+func (m *Meter) BuildRecord(ev Event) (store.UsageRecord, int64, error) {
+	if err := checkImageEvent(ev); err != nil {
+		return store.UsageRecord{}, 0, err
+	}
+	rec := m.buildRecord(ev)
+	return rec, rec.CostMicros, nil
+}
+
+// Persisted tells trackers and observers that a row from BuildRecord is now
+// in the usage table, as Record does after a synchronous write.
+func (m *Meter) Persisted(rec store.UsageRecord) {
+	for _, t := range m.trackers {
+		t.UsagePending(rec)
+	}
+	m.notifyPersisted(rec)
+	m.notifyObservers(rec)
+}
+
+func (m *Meter) notifyObservers(rec store.UsageRecord) {
+	for _, fn := range m.observers {
+		fn(rec)
+	}
+	if m.hub != nil {
+		m.hub.Publish(usagehub.Event{Provider: rec.Provider, Model: rec.Model, AccountID: rec.AccountID,
+			Tokens: rec.PromptTokens + rec.CompletionTokens})
+	}
+}
+
+func (m *Meter) buildRecord(ev Event) store.UsageRecord {
 	u := clampUsage(ev.Usage)
 	status := ev.Status
 	if status == "" {
@@ -324,7 +385,7 @@ func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
 		switch {
 		case ev.CacheHit:
 			usageSource = "cache"
-		case u.PromptTokens+u.CompletionTokens > 0:
+		case u.PromptTokens+u.CompletionTokens > 0, isImageEvent(ev):
 			usageSource = "provider"
 		default:
 			usageSource = "none"
@@ -338,7 +399,7 @@ func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
 		savedTokens += ev.HeadroomStats.TokensSaved
 	}
 	var cost CostBreakdown
-	if u.PromptTokens+u.CompletionTokens == 0 && !ev.CacheHit && !reportedUpstreamCost(ev) {
+	if _, image := imageCost(ev); !image && u.PromptTokens+u.CompletionTokens == 0 && !ev.CacheHit && !reportedUpstreamCost(ev) {
 		// A terminal request without upstream usage has no applicable price,
 		// including a nominally successful response whose provider omitted usage.
 		// Do not inflate coverage merely because the target exists in the catalog.
@@ -386,13 +447,14 @@ func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
 		GuardrailDirection: ev.Guardrail.Direction, GuardrailMidStream: ev.Guardrail.MidStream,
 		GuardrailMS:     int(ev.Guardrail.Elapsed.Milliseconds()),
 		EstPromptTokens: ev.EstPromptTokens, EstCostMicros: ev.EstCostMicros,
-		CreatedAt: recordedAt,
+		ImageCount: ev.ImageCount,
+		CreatedAt:  recordedAt,
 	}
 	streamedID := ""
 	if ev.Streamed {
 		streamedID = ev.UpstreamRequestID
 	}
-	if ev.CostLookup && !ev.CacheHit && (u.PromptTokens+u.CompletionTokens > 0 || streamedID != "") {
+	if ev.CostLookup && !ev.CacheHit && !isImageEvent(ev) && (u.PromptTokens+u.CompletionTokens > 0 || streamedID != "") {
 		// Billed now at the step's ceiling price; the cost-lookup sweeper later
 		// rewrites the cost from the provider's usage log. Failed and
 		// cancelled streams count too: the provider may still have charged.
@@ -405,29 +467,15 @@ func (m *Meter) RecordCharge(ctx context.Context, ev Event) (Charge, error) {
 	if ev.HeadroomStats != nil {
 		rec.HeadroomTokensSaved, rec.HeadroomBytesSaved, rec.HeadroomActive = ev.HeadroomStats.TokensSaved, ev.HeadroomStats.BytesSaved, ev.HeadroomStats.Active
 	}
-	for _, t := range m.trackers {
-		t.UsagePending(rec)
-	}
-	if err := m.recordUsage(ctx, rec); err != nil {
-		m.notifyDiscarded(rec)
-		return Charge{Micros: cost.CostMicros, Nanos: cost.CostNanos}, err
-	}
-	if m.async == nil {
-		m.notifyPersisted(rec)
-	}
-	for _, fn := range m.observers {
-		fn(rec)
-	}
-	if m.hub != nil {
-		m.hub.Publish(usagehub.Event{Provider: ev.Provider, Model: ev.Model, AccountID: ev.AccountID,
-			Tokens: u.PromptTokens + u.CompletionTokens})
-	}
-	return Charge{Micros: cost.CostMicros, Nanos: cost.CostNanos}, nil
+	return rec
 }
 
 // costForEvent resolves the terminal cost for an event, preferring the winning
 // step's market slug, then the chain aggregate, then the catalog.
 func (m *Meter) costForEvent(ev Event) CostBreakdown {
+	if out, ok := imageCost(ev); ok {
+		return out
+	}
 	u := clampUsage(ev.Usage)
 	savedTokens := 0
 	if ev.SlimStats != nil {

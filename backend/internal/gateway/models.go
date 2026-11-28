@@ -76,7 +76,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 			if restricted && !allowed[strings.ToLower(strings.TrimSpace(c.Name))] {
 				continue
 			}
-			if c.Maintenance {
+			if c.Maintenance || imageOnlyChain(c) {
 				continue
 			}
 			data = appendModelEntry(data, seen, modelEntry{

@@ -21,6 +21,9 @@ type ImageRequest struct {
 	Style   string `json:"style,omitempty"`
 	// ResponseFormat is "url" or "b64_json".
 	ResponseFormat string `json:"response_format,omitempty"`
+	// AspectRatio ("16:9") and Resolution ("2k") are used by Grok image models.
+	AspectRatio string `json:"aspect_ratio,omitempty"`
+	Resolution  string `json:"resolution,omitempty"`
 }
 
 // ImageData is a single generated image, carrying either a URL or base64 data.

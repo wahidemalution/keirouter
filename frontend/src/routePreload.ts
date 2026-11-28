@@ -40,6 +40,7 @@ export const routeLoaders = {
   "/portal-token-usage": () => named(import("./pages/portal/PortalUsage"), "PortalTokenUsagePage"),
   "/portal-hosting": () => named(import("./pages/portal/PortalHosting"), "PortalHostingPage"),
   "/portal-docs": () => named(import("./pages/portal/PortalDocs"), "PortalDocsPage"),
+  "/portal-images": () => named(import("./pages/portal/PortalImages"), "PortalImagesPage"),
   "/guardrails": () => named(import("./pages/Guardrails"), "GuardrailsPage"),
   "/audit": () => named(import("./pages/Audit"), "AuditPage"),
   "/provider-health": () => named(import("./pages/ProviderHealth"), "ProviderHealthPage"),

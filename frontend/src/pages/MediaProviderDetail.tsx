@@ -838,7 +838,7 @@ function Playground({ provider, initial, models }: { provider: Provider; initial
         <p className="text-[12.5px] text-fg-muted">Requests count toward usage.</p>
       </div>
       {cap === "embedding" && <EmbeddingPlayground key={cap} provider={provider} models={models} />}
-      {cap === "image" && <ImagePlayground key={cap} provider={provider} models={models} />}
+      {cap === "image" && <ImagePlaygroundNote key={cap} />}
       {cap === "tts" && <TtsPlayground key={cap} provider={provider} models={models} />}
       {cap === "stt" && <SttPlayground key={cap} provider={provider} models={models} />}
       {cap === "search" && <SearchPlayground key={cap} provider={provider} />}
@@ -1068,70 +1068,16 @@ function EmbeddingPlayground({ provider, models }: { provider: Provider; models:
 
 // ── Image
 
-function ImagePlayground({ provider, models }: { provider: Provider; models: ModelOption[] }) {
-  const [model, setModel] = useState(models[0]?.id ?? "");
-  const [prompt, setPrompt] = useState("A cute cat wearing a hat");
-  const [size, setSize] = useState("1024x1024");
-  const [state, run] = useRunner<string>();
-
-  const submit = () =>
-    run(async () => {
-      const resp = await fetch("/v1/images/generations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: `${provider.id}/${model}`, prompt, size }),
-      });
-      const contentType = resp.headers.get("content-type") || "";
-      if (contentType.includes("image")) {
-        const blob = await resp.blob();
-        return URL.createObjectURL(blob);
-      }
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error?.message || JSON.stringify(data));
-      if (data.data?.[0]?.b64_json) return `data:image/png;base64,${data.data[0].b64_json}`;
-      if (data.data?.[0]?.url) return data.data[0].url as string;
-      return null;
-    });
-
+// Image generation is billed per image and runs only from the customer
+// portal's Buat Gambar page; /v1/images/generations answers 403.
+function ImagePlaygroundNote() {
   return (
-    <PlaygroundLayout
-      title="Image generation"
-      icon={Image}
-      idleHint="Generated images appear here."
-      state={state}
-      form={
-        <>
-          <div className="grid gap-3.5 sm:grid-cols-2">
-            <ModelField models={models} value={model} onChange={setModel} />
-            <FormField label="Size">
-              <Select value={size} onChange={(e) => setSize(e.target.value)} className="tabular-nums">
-                <option value="256x256">256×256</option>
-                <option value="512x512">512×512</option>
-                <option value="1024x1024">1024×1024</option>
-                <option value="1792x1024">1792×1024</option>
-                <option value="1024x1792">1024×1792</option>
-              </Select>
-            </FormField>
-          </div>
-          <FormField label="Prompt">
-            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the image" rows={4} className={textareaClass} />
-          </FormField>
-        </>
-      }
-      action={<RunButton onClick={submit} disabled={state.loading || !model} loading={state.loading} idle="Generate" busy="Generating…" />}
-    >
-      {state.result ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3">
-          <img src={state.result} alt="Generated image" className="max-h-[420px] max-w-full rounded-lg border border-line object-contain" />
-          <a href={state.result} download="image.png" className="inline-flex min-h-6 items-center gap-1.5 rounded-md text-[12.5px] font-medium text-link hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
-            <Download className="h-3.5 w-3.5" aria-hidden="true" />
-            Download image
-          </a>
-        </div>
-      ) : (
-        <p className="text-[12.5px] text-fg-muted">The response didn't include an image.</p>
-      )}
-    </PlaygroundLayout>
+    <div className="flex items-start gap-3 rounded-2xl border border-line bg-surface px-4 py-3.5">
+      <Image className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" strokeWidth={1.75} aria-hidden="true" />
+      <p className="text-[13px] text-fg">
+        Image generation hanya tersedia lewat halaman Buat Gambar di portal pelanggan.
+      </p>
+    </div>
   );
 }
 

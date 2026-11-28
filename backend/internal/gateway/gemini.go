@@ -79,7 +79,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		RequestID:     chimiddleware.GetReqID(r.Context()),
 	}
 
-	resolved, err := s.resolveTargets(r.Context(), tenantID, req.Model)
+	resolved, err := s.resolveChatTargets(r.Context(), tenantID, req.Model)
 	if err != nil {
 		var bad badModelError
 		if errors.As(err, &bad) {

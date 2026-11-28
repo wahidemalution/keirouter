@@ -74,7 +74,7 @@ const usageColumns = `id, request_id, tenant_id, project_id, api_key_id, provide
 	slim_rules, slim_active, caveman_active, terse_active, headroom_tokens_saved,
 	headroom_bytes_saved, headroom_active, ponytail_active, chain_id, fallback_count, created_at,
 	cache_write_1h_tokens, web_search_requests, tool_cost_nanos, guardrail_action, guardrail_detector,
-	guardrail_direction, guardrail_mid_stream, guardrail_ms, upstream_request_id, reconcile_status, est_prompt_tokens, est_cost_micros`
+	guardrail_direction, guardrail_mid_stream, guardrail_ms, upstream_request_id, reconcile_status, est_prompt_tokens, est_cost_micros, image_count`
 
 func insertUsageBatch(ctx context.Context, tx *sql.Tx, rebind func(string) string, records []UsageRecord) error {
 	argsPerRow := len(usageArgs(UsageRecord{}))
@@ -141,7 +141,7 @@ func usageArgs(u UsageRecord) []any {
 		u.CacheWrite1hTokens, u.WebSearchRequests, u.ToolCostNanos,
 		u.GuardrailAction, u.GuardrailDetector, u.GuardrailDirection, boolToInt(u.GuardrailMidStream), u.GuardrailMS,
 		u.UpstreamRequestID, u.ReconcileStatus,
-		u.EstPromptTokens, u.EstCostMicros,
+		u.EstPromptTokens, u.EstCostMicros, u.ImageCount,
 	}
 }
 
@@ -420,6 +420,8 @@ type RecentRecord struct {
 	HeadroomBytesSaved  int  // bytes saved by Headroom
 	HeadroomActive      bool // Headroom produced non-phantom savings
 	PonytailActive      bool // Ponytail injection was active
+
+	ImageCount int // images generated; 0 for token requests
 
 	CreatedAt time.Time
 }
@@ -823,7 +825,7 @@ func (r *UsageRepo) RecentByKey(ctx context.Context, keyID string, since time.Ti
 		       cache_write_tokens, cost_micros, cost_nanos, cache_hit, latency_ms, ttft_ms,
 		       slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
 		       headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
-		       created_at
+		       image_count, created_at
 		FROM usage_records
 		WHERE api_key_id = ? AND created_at >= ?
 		ORDER BY created_at DESC
@@ -847,7 +849,7 @@ func (r *UsageRepo) RecentByKey(ctx context.Context, keyID string, since time.Ti
 			&rec.CostMicros, &rec.CostNanos, &cacheHit, &rec.LatencyMS, &rec.TTFTMS,
 			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &slimActive, &caveman, &terse,
 			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroomActive, &ponytailActive,
-			&createdAt); err != nil {
+			&rec.ImageCount, &createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0

@@ -10,7 +10,7 @@ Drop-in skills for any AI agent (Claude, Cursor, ChatGPT, custom SDK). Just **co
 |---|---|
 | **Entry / Setup** (start here) | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter/SKILL.md |
 | Chat / code-gen | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-chat/SKILL.md |
-| Image generation | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-image/SKILL.md |
+| Image generation (portal page "Buat Gambar" only, not the API) | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-image/SKILL.md |
 | Text-to-speech | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-tts/SKILL.md |
 | Speech-to-text | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-stt/SKILL.md |
 | Embeddings | https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter-embeddings/SKILL.md |
@@ -25,7 +25,7 @@ Paste to your AI (Claude, Cursor, ChatGPT, …):
 Read this skill and use it: https://raw.githubusercontent.com/mydisha/keirouter/main/skills/keirouter/SKILL.md
 ```
 
-Then ask normally — *"generate an image of a cat"*, *"transcribe this URL"*, etc.
+Then ask normally: *"transcribe this URL"*, *"search the web for ..."*, etc.
 
 ## Configure your shell once
 
